@@ -1951,7 +1951,7 @@ optimise this without a reproduction that matters.
 
 ```ts
 import { expect, test } from "vitest";
-import { buildTree, type PageRow } from "./tree";
+import { buildTree, type PageRow, type TreeNode } from "./tree";
 
 function row(over: Partial<PageRow> & { id: string }): PageRow {
   return {
@@ -2003,17 +2003,26 @@ test("an empty input produces an empty tree", () => {
   expect(buildTree([])).toEqual([]);
 });
 
-/** Walks the whole tree. Loops forever if buildTree ever returns a cyclic structure. */
-function collectIds(tree: ReturnType<typeof buildTree>): string[] {
-  const seen = new Set<string>();
-  const stack = [...tree];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || seen.has(node.id)) continue;
-    seen.add(node.id);
-    for (const child of node.children) stack.push(child);
-  }
-  return [...seen].sort();
+/**
+ * Collects every occurrence. Throws if a node repeats on its own ancestor path (a live
+ * cycle) or is reached twice by different paths (a duplicate) — either would hang or
+ * double-count a recursive consumer such as Task 13's summariseModules.
+ *
+ * An earlier version used a `seen` set and `continue`, which is the same guard buildTree
+ * uses internally — so it terminated on any structure and could not detect the very thing
+ * its docstring claimed. A mutant with one line removed from buildTree returned a
+ * genuinely circular tree and still passed both cycle tests.
+ */
+function collectIds(tree: TreeNode[]): string[] {
+  const ids: string[] = [];
+  const visit = (node: TreeNode, path: Set<string>) => {
+    if (path.has(node.id)) throw new Error(`cycle: ${node.id} is its own ancestor`);
+    ids.push(node.id);
+    const next = new Set(path).add(node.id);
+    for (const child of node.children) visit(child, next);
+  };
+  for (const root of tree) visit(root, new Set());
+  return ids.sort();
 }
 
 test("a parentId cycle still yields every row, reachable and finite", () => {
@@ -2046,6 +2055,18 @@ test("a page that is its own parent becomes a childless root", () => {
   expect(tree.map((n) => n.id)).toEqual(["self"]);
   expect(tree[0]?.children).toEqual([]);
 });
+
+test("a subtree hanging below a cycle keeps its shape", () => {
+  const tree = buildTree([
+    row({ id: "a", parentId: "b" }),
+    row({ id: "b", parentId: "a" }),
+    row({ id: "c", parentId: "a" }),
+    row({ id: "d", parentId: "c" }),
+  ]);
+
+  expect(collectIds(tree)).toEqual(["a", "b", "c", "d"]);
+  expect(tree).toHaveLength(1);
+});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -2070,17 +2091,17 @@ export type PageRow = {
 export type TreeNode = PageRow & { children: TreeNode[] };
 
 export function buildTree(rows: PageRow[]): TreeNode[] {
+  // Keyed by id, so duplicate rows collapse to one node. Iterating this map rather than
+  // `rows` below is what makes that safe: pushing the same node object twice would build
+  // a structure a recursive consumer cannot walk.
   const nodes = new Map<string, TreeNode>();
   for (const row of rows) {
     nodes.set(row.id, { ...row, children: [] });
   }
 
   const roots: TreeNode[] = [];
-  for (const row of rows) {
-    const node = nodes.get(row.id);
-    if (!node) continue;
-
-    const parent = row.parentId === null ? undefined : nodes.get(row.parentId);
+  for (const node of nodes.values()) {
+    const parent = node.parentId === null ? undefined : nodes.get(node.parentId);
     if (parent) {
       parent.children.push(node);
     } else {
@@ -2105,20 +2126,31 @@ export function buildTree(rows: PageRow[]): TreeNode[] {
 
   // A parentId cycle leaves every member attached to a parent and none reachable from a
   // root, so without this the function would return an empty tree and the navigation rail
-  // would silently disappear. Detach one member per cycle and surface it as a root, so the
-  // result is always finite and always contains every input row.
+  // would silently disappear.
   let reachable = walkFromRoots();
-  for (const row of rows) {
-    if (reachable.has(row.id)) continue;
+  for (const node of nodes.values()) {
+    if (reachable.has(node.id)) continue;
 
-    const node = nodes.get(row.id);
-    if (!node) continue;
-
-    const parent = row.parentId === null ? undefined : nodes.get(row.parentId);
-    if (parent) {
-      parent.children = parent.children.filter((child) => child.id !== node.id);
+    // Climb to the cycle blocking this node and cut a member of *that*, rather than
+    // promoting this node. Promoting the first unreachable row instead would flatten any
+    // healthy subtree hanging below the cycle into extra top-level entries, and which
+    // rows got flattened would depend on the query's ordering — the same logical tree
+    // gave 1 root or 3 roots depending on input order.
+    const climbed = new Set<string>();
+    let onCycle = node;
+    while (!climbed.has(onCycle.id)) {
+      climbed.add(onCycle.id);
+      const next = onCycle.parentId === null ? undefined : nodes.get(onCycle.parentId);
+      if (!next) break;
+      onCycle = next;
     }
-    roots.push(node);
+
+    const parent =
+      onCycle.parentId === null ? undefined : nodes.get(onCycle.parentId);
+    if (parent) {
+      parent.children = parent.children.filter((child) => child.id !== onCycle.id);
+    }
+    roots.push(onCycle);
     reachable = walkFromRoots();
   }
 
@@ -2129,7 +2161,7 @@ export function buildTree(rows: PageRow[]): TreeNode[] {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- src/lib/pages/tree.test.ts`
-Expected: **8 passed.**
+Expected: **9 passed.**
 
 - [ ] **Step 5: Commit**
 
@@ -2817,6 +2849,9 @@ Every colour comes from the tokens defined in Task 1.
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Nested groups: each level indents via its own .navlist border. */
+.navlist .navgroup > summary { padding-left: 9px; text-transform: none; letter-spacing: 0.02em; font-family: var(--sans); font-size: 13px; }
+
 .tag-draft {
   margin-left: 6px;
   font-family: var(--mono);
@@ -2886,6 +2921,14 @@ export function NavLink({
 
 A server component. The tree is known at render time and `<details>` needs no JavaScript.
 
+**It renders recursively, and that is a correctness requirement rather than elegance.**
+`buildTree` returns arbitrary depth. An earlier draft rendered exactly two levels, which
+would have left a three-deep page **absent from the navigation rail while still reachable
+by URL** — nothing errors, nothing logs, the page is simply invisible. That is the worst
+failure mode available in a documentation reader. A group node also links to itself, since
+group pages carry their own content (the seed's `architecture` page does) and would
+otherwise be unreachable from the rail.
+
 ```tsx
 import type { TreeNode } from "@/lib/pages/tree";
 import type { BuildInfo } from "@/lib/version/build";
@@ -2899,29 +2942,35 @@ type Props = {
   build: BuildInfo;
 };
 
-function link(spaceKey: string, node: TreeNode) {
-  return (
+function NavNode({ spaceKey, node }: { spaceKey: string; node: TreeNode }) {
+  const self = (
     <NavLink
-      key={node.id}
       href={`/${spaceKey}/${node.path}`}
       title={node.title}
       isDraft={node.publishedVersionId === null}
     />
+  );
+
+  if (node.children.length === 0) return self;
+
+  return (
+    <details className="navgroup" open>
+      <summary>{node.title}</summary>
+      <div className="navlist">
+        {self}
+        {node.children.map((child) => (
+          <NavNode key={child.id} spaceKey={spaceKey} node={child} />
+        ))}
+      </div>
+    </details>
   );
 }
 
 export function NavRail({ spaceKey, spaceName, tree, build }: Props) {
   return (
     <nav className="rail-l" aria-label={`${spaceName} navigation`}>
-      {tree.map((group) => (
-        <details className="navgroup" key={group.id} open>
-          <summary>{group.title}</summary>
-          <div className="navlist">
-            {group.children.length === 0
-              ? link(spaceKey, group)
-              : group.children.map((child) => link(spaceKey, child))}
-          </div>
-        </details>
+      {tree.map((node) => (
+        <NavNode key={node.id} spaceKey={spaceKey} node={node} />
       ))}
       <RailFoot build={build} />
     </nav>
