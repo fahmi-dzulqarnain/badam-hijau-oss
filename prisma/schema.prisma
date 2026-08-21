@@ -24,6 +24,28 @@ enum BugStatus {
   CLOSED
 }
 
+enum DocType {
+  DOC
+  ADR
+  RFC
+  RUNBOOK
+}
+
+enum DocStatus {
+  DRAFT
+  IN_REVIEW
+  PROPOSED
+  ACCEPTED
+  CLOSED
+  SUPERSEDED
+  DEPRECATED
+  REJECTED
+  WITHDRAWN
+  CURRENT
+  NEEDS_REVIEW
+  ARCHIVED
+}
+
 model User {
   id           String            @id @default(cuid())
   email        String            @unique
@@ -33,6 +55,9 @@ model User {
   createdAt    DateTime          @default(now())
   memberships  SpaceMembership[]
   bugReports   BugReport[]
+  pagesOwned   Page[]        @relation("PageOwner")
+  pagesCreated Page[]        @relation("PageCreatedBy")
+  pageVersions PageVersion[] @relation("PageVersionAuthor")
 }
 
 model Space {
@@ -44,6 +69,7 @@ model Space {
   visibility  SpaceVisibility   @default(MEMBERS)
   createdAt   DateTime          @default(now())
   memberships SpaceMembership[]
+  pages Page[]
 }
 
 model SpaceMembership {
@@ -84,4 +110,54 @@ model BugReport {
 
   @@index([status, createdAt])
   @@index([reporterId])
+}
+
+model Page {
+  id                 String    @id @default(cuid())
+  spaceId            String
+  parentId           String?
+  slug               String
+  path               String
+  title              String
+  docType            DocType   @default(DOC)
+  status             DocStatus @default(DRAFT)
+  position           Int       @default(0)
+  ownerId            String?
+  reviewedAt         DateTime?
+  publishedVersionId String?   @unique
+  publishedAt        DateTime?
+  createdById        String
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  space            Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  parent           Page?         @relation("PageTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children         Page[]        @relation("PageTree")
+  owner            User?         @relation("PageOwner", fields: [ownerId], references: [id])
+  createdBy        User          @relation("PageCreatedBy", fields: [createdById], references: [id])
+  versions         PageVersion[] @relation("PageVersions")
+  publishedVersion PageVersion?  @relation("PagePublishedVersion", fields: [publishedVersionId], references: [id])
+
+  @@unique([spaceId, path])
+  @@index([spaceId, status])
+  @@index([spaceId, parentId])
+}
+
+model PageVersion {
+  id          String    @id @default(cuid())
+  pageId      String
+  title       String
+  markdown    String
+  frontmatter Json      @default("{}")
+  status      DocStatus
+  authorId    String
+  message     String?
+  gitSha      String?
+  createdAt   DateTime  @default(now())
+
+  page        Page  @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
+  author      User  @relation("PageVersionAuthor", fields: [authorId], references: [id])
+  publishedOn Page? @relation("PagePublishedVersion")
+
+  @@index([pageId, createdAt])
 }

@@ -22,11 +22,13 @@ function readableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
  * caller cannot build a query and forget the filter. Extra conditions go in `and` and are
  * nested, so they can never collide with the predicate.
  *
- * Pass it DIRECTLY as `where` — never spread it. `where: readableSpace(v, { key })` is
- * correct; `where: { ...readableSpace(v), AND: [...] }` silently drops the predicate,
- * because the spread replaces this function's own top-level `AND`. Verified against
- * Postgres: the spread form returns members-only spaces to a non-member. TypeScript and
- * Prisma both accept it, so this comment is the only guard.
+ * Pass it DIRECTLY as `where` — never spread it, at any nesting depth. Correct:
+ * `where: readableSpace(v, { key })` and `where: { spaceId, space: readableSpace(v) }`.
+ * Broken: `{ ...readableSpace(v), AND: [...] }` and, identically,
+ * `{ space: { ...readableSpace(v), AND: [...] } }` — the spread replaces this function's
+ * own top-level `AND` and the predicate vanishes. Both forms were verified against
+ * Postgres to return members-only rows to a non-member. TypeScript and Prisma accept
+ * both, so this comment is the only guard.
  *
  * If a third Space query site ever needs conditions this signature cannot express, do not
  * reach for a spread — move composition up a level into a `findReadableSpaces(viewer,
