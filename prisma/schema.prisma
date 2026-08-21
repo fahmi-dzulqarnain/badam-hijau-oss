@@ -64,6 +64,11 @@ model BugReport {
   summary      String
   expected     String?
   routePath    String
+  // spaceId/pageId/versionId are captured context, deliberately without foreign keys:
+  // their value is highest when the referenced page is gone, so SetNull would erase the
+  // only clue and Restrict/Cascade would block deletion or destroy the report. routePath
+  // is the durable breadcrumb. Task 11 validates these at write time; readers must
+  // tolerate a dangling id.
   spaceId      String?
   pageId       String?
   versionId    String?
@@ -74,7 +79,9 @@ model BugReport {
   consoleError String?
   status       BugStatus @default(NEW)
   createdAt    DateTime  @default(now())
-  reporter     User      @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  updatedAt    DateTime  @updatedAt
+  reporter     User      @relation(fields: [reporterId], references: [id])
 
   @@index([status, createdAt])
+  @@index([reporterId])
 }

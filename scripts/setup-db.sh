@@ -3,6 +3,8 @@
 # Idempotent: safe to run repeatedly.
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5432}"
 
@@ -25,3 +27,14 @@ for name in badam badam_test; do
     echo "created $name"
   fi
 done
+
+# The integration harness refuses to run without .env.test, because falling back to
+# .env would truncate the development database.
+if [ -f .env.test ]; then
+  echo ".env.test already exists"
+elif [ -f .env.example ]; then
+  sed 's|/badam?schema|/badam_test?schema|' .env.example > .env.test
+  echo "created .env.test"
+else
+  echo "warning: .env.example is missing, cannot create .env.test" >&2
+fi
