@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SpaceVisibility {
+  MEMBERS
+  ALL_STAFF
+}
+
+enum SpaceRole {
+  VIEWER
+  EDITOR
+  ADMIN
+}
+
+enum BugStatus {
+  NEW
+  TRIAGED
+  CLOSED
+}
+
+model User {
+  id           String            @id @default(cuid())
+  email        String            @unique
+  name         String
+  avatarUrl    String?
+  isSuperAdmin Boolean           @default(false)
+  createdAt    DateTime          @default(now())
+  memberships  SpaceMembership[]
+  bugReports   BugReport[]
+}
+
+model Space {
+  id          String            @id @default(cuid())
+  key         String            @unique
+  name        String
+  description String?
+  initials    String
+  visibility  SpaceVisibility   @default(MEMBERS)
+  createdAt   DateTime          @default(now())
+  memberships SpaceMembership[]
+}
+
+model SpaceMembership {
+  id      String    @id @default(cuid())
+  spaceId String
+  userId  String
+  role    SpaceRole @default(VIEWER)
+  space   Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, userId])
+  @@index([userId])
+}
+
+model BugReport {
+  id           String    @id @default(cuid())
+  reporterId   String
+  summary      String
+  expected     String?
+  routePath    String
+  spaceId      String?
+  pageId       String?
+  versionId    String?
+  appVersion   String
+  gitSha       String?
+  userAgent    String
+  viewport     String
+  consoleError String?
+  status       BugStatus @default(NEW)
+  createdAt    DateTime  @default(now())
+  reporter     User      @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
