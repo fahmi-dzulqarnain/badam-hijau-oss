@@ -1507,7 +1507,8 @@ Sanitising runs **before** heading ids are added. Doing it the other way round m
 contents anchor.
 
 **Files:**
-- Create: `src/lib/markdown/toc.ts`, `src/lib/markdown/mermaid.ts`, `src/lib/markdown/render.ts`
+- Create: `src/lib/markdown/toc.ts`, `src/lib/markdown/mermaid.ts`,
+  `src/lib/markdown/wrap.ts`, `src/lib/markdown/render.ts`
 - Test: `src/lib/markdown/render.test.ts`
 
 - [ ] **Step 1: Install the pipeline**
@@ -1517,6 +1518,17 @@ npm install unified remark-parse remark-gfm remark-rehype rehype-slug \
   rehype-autolink-headings rehype-sanitize rehype-stringify \
   @shikijs/rehype shiki unist-util-visit hast-util-to-string
 ```
+
+**Two pre-authorised deviations**, so neither costs a round trip:
+
+1. `toc.ts`, `mermaid.ts` and `wrap.ts` all `import type { … } from "hast"`, whose types
+   live in `@types/hast`. It is normally hoisted as a transitive dependency of
+   `hast-util-to-string`. If `npm run typecheck` cannot resolve it, add it explicitly:
+   `npm install -D @types/hast`.
+2. `rehypeShiki`'s option for handling an unrecognised code language may be named
+   `fallbackLanguage` or `defaultLanguage` depending on the installed `@shikijs/rehype`.
+   The test "an unknown code language does not throw" is the arbiter — use whichever name
+   the installed version accepts, and report which.
 
 - [ ] **Step 2: Write the failing test**
 
