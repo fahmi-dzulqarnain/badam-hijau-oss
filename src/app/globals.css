@@ -1,0 +1,90 @@
+:root {
+  --ground: #F7F9F6;
+  --surface: #FFFFFF;
+  --surface-2: #F1F5F0;
+  --ink: #15201B;
+  --ink-2: #4E5F56;
+  --ink-3: #7C8B82;
+  --line: #DFE7DF;
+  --line-strong: #C6D2C7;
+  --accent: #2C6A4C;
+  --accent-ink: #1F4E37;
+  --accent-wash: #E8F1EA;
+  --amber: #8E5D11;
+  --amber-wash: #FAF0DD;
+  --code-bg: #F1F5F0;
+
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --serif: "Newsreader", ui-serif, Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0F1513;
+    --surface: #151D19;
+    --surface-2: #1B2521;
+    --ink: #E5EBE6;
+    --ink-2: #9EAEA4;
+    --ink-3: #78887E;
+    --line: #26312C;
+    --line-strong: #37473F;
+    --accent: #7FC79D;
+    --accent-ink: #A9DDC0;
+    --accent-wash: #18291F;
+    --amber: #D6A452;
+    --amber-wash: #27210F;
+    --code-bg: #101713;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0F1513;
+  --surface: #151D19;
+  --surface-2: #1B2521;
+  --ink: #E5EBE6;
+  --ink-2: #9EAEA4;
+  --ink-3: #78887E;
+  --line: #26312C;
+  --line-strong: #37473F;
+  --accent: #7FC79D;
+  --accent-ink: #A9DDC0;
+  --accent-wash: #18291F;
+  --amber: #D6A452;
+  --amber-wash: #27210F;
+  --code-bg: #101713;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Shiki dual-theme: the light colour is inline, the dark one is a CSS variable. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shiki,
+  :root:not([data-theme="light"]) .shiki span {
+    color: var(--shiki-dark) !important;
+    background-color: var(--shiki-dark-bg) !important;
+  }
+}
+:root[data-theme="dark"] .shiki,
+:root[data-theme="dark"] .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+}
