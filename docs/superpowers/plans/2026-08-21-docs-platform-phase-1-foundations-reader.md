@@ -3362,6 +3362,9 @@ printf 'ALLOW_TEST_LOGIN=""   # set to 1 for e2e runs only, never in a deployed 
 
 - [ ] **Step 4: Create `playwright.config.ts`**
 
+Port 3100 is confirmed free on this machine and approved for use (other local services
+occupy 80, 3317, 5432, 8080).
+
 ```ts
 import { defineConfig } from "@playwright/test";
 
