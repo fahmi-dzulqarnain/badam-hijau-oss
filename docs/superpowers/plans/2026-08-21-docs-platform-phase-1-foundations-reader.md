@@ -10,6 +10,11 @@
 
 **Spec:** [`docs/superpowers/specs/2026-08-21-internal-docs-platform-design.md`](../specs/2026-08-21-internal-docs-platform-design.md) — sections §5.1–5.2, §8, §11 (read routes), §12, §18.
 
+**Environment deviation:** the plan was written assuming Docker. This machine has no
+container runtime, so Phase 1 runs against the local Homebrew `postgresql@16` service on
+port 5432, provisioned by `scripts/setup-db.sh`. Spec §17 still calls for Docker in
+deployment; only local development differs.
+
 **Known divergence from the spec, deliberate:** §8 names a function `readableSpaceIds`. This plan implements `readableSpaceWhere(viewer)` returning a Prisma filter instead, because returning ids would require loading every space first and would let a caller forget to apply them. Same guarantee, enforced in SQL.
 
 ---
@@ -268,47 +273,64 @@ git commit -m "chore: scaffold Next.js app with design tokens"
 ### Task 2: Postgres, Prisma schema, and the integration test harness
 
 **Files:**
-- Create: `docker-compose.yml`, `.env.example`, `.env`, `.env.test`
+- Create: `scripts/setup-db.sh`, `.env.example`, `.env`, `.env.test`
 - Create: `prisma/schema.prisma`, `src/lib/db.ts`
 - Create: `tests/setup/global-setup.ts`, `tests/setup/reset.ts`
 - Create: `tests/integration/spaces.test.ts`
 - Modify: `vitest.config.ts`, `package.json`
 
-- [ ] **Step 1: Create `docker-compose.yml`**
+**Environment note:** this machine has no container runtime, so Postgres is the local
+Homebrew `postgresql@16` service on port **5432**, not a container on 5433. The role
+`badam` and the databases `badam` / `badam_test` already exist — Step 1 records how, and
+is idempotent so it is safe to re-run.
 
-Port 5433 on the host, so this never collides with a Postgres the developer already runs.
+- [ ] **Step 1: Create `scripts/setup-db.sh`**
 
-```yaml
-services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: badam
-      POSTGRES_PASSWORD: badam
-      POSTGRES_DB: badam
-    ports:
-      - "5433:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U badam"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
-volumes:
-  pgdata:
-```
-
-- [ ] **Step 2: Start Postgres and create the test database**
+This replaces the `docker-compose.yml` the plan originally called for. It is committed so
+the next developer can reproduce the database without guessing.
 
 ```bash
-docker compose up -d
-docker compose exec -T postgres createdb -U badam badam_test
+#!/usr/bin/env bash
+# Creates the badam role and its two databases on a local Postgres.
+# Idempotent: safe to run repeatedly.
+set -euo pipefail
+
+PGHOST="${PGHOST:-localhost}"
+PGPORT="${PGPORT:-5432}"
+
+psql -h "$PGHOST" -p "$PGPORT" -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'badam') THEN
+    CREATE ROLE badam LOGIN PASSWORD 'badam' CREATEDB;
+  END IF;
+END
+$$;
+SQL
+
+for name in badam badam_test; do
+  if psql -h "$PGHOST" -p "$PGPORT" -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='$name'" | grep -q 1; then
+    echo "$name already exists"
+  else
+    createdb -h "$PGHOST" -p "$PGPORT" -O badam "$name"
+    echo "created $name"
+  fi
+done
 ```
 
-Expected: `docker compose ps` shows the service healthy; the `createdb` command prints
-nothing and exits 0.
+Make it executable: `chmod +x scripts/setup-db.sh`
+
+- [ ] **Step 2: Verify the databases are reachable as the `badam` role**
+
+```bash
+./scripts/setup-db.sh
+PGPASSWORD=badam psql -h localhost -p 5432 -U badam -d badam_test -tAc "select current_database();"
+```
+
+Expected: the script reports both databases exist, and the query prints `badam_test`.
+If the connection is refused, the Homebrew service is down — `brew services restart
+postgresql@16` and check `/opt/homebrew/var/log/postgresql@16.log`.
 
 - [ ] **Step 3: Create the env files**
 
@@ -316,7 +338,7 @@ nothing and exits 0.
 
 ```bash
 cat > .env.example <<'EOF'
-DATABASE_URL="postgresql://badam:badam@localhost:5433/badam?schema=public"
+DATABASE_URL="postgresql://badam:badam@localhost:5432/badam?schema=public"
 AUTH_SECRET="generate-with-openssl-rand-base64-32"
 OIDC_ISSUER="https://accounts.google.com"
 OIDC_CLIENT_ID=""
@@ -551,8 +573,8 @@ test("a user cannot hold two memberships in the same space", async () => {
 - [ ] **Step 11: Run the test to verify it passes**
 
 Run: `npm test -- tests/integration/spaces.test.ts`
-Expected: 2 passed. If the run fails with "database badam_test does not exist", repeat
-Step 2.
+Expected: 2 passed. If the run fails with "database badam_test does not exist", re-run
+`./scripts/setup-db.sh`.
 
 - [ ] **Step 12: Commit**
 
