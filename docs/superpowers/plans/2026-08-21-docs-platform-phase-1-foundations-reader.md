@@ -2188,9 +2188,16 @@ the source of truth for identity, and we only need the local row for memberships
 Sessions are JWTs, so there is no session table to maintain.
 
 **Files:**
-- Create: `src/lib/users/upsert.ts`, `src/lib/auth/config.ts`, `src/lib/auth/viewer.ts`
+- Create: `src/lib/users/upsert.ts`, `src/lib/users/viewer.ts`
+- Create: `src/lib/auth/config.ts`, `src/lib/auth/viewer.ts`
 - Create: `src/app/api/auth/[...nextauth]/route.ts`
-- Test: `tests/integration/user-upsert.test.ts`
+- Test: `tests/integration/user-upsert.test.ts`, `tests/integration/viewer.test.ts`
+
+**Why the viewer lookup is split across two files.** `viewerForEmail` — the database half,
+and the only place a `Viewer` is ever constructed — lives in `src/lib/users/viewer.ts` with
+no Auth.js import. `src/lib/auth/viewer.ts` holds the thin session wiring on top. That split
+is what makes the security-relevant mapping testable without instantiating NextAuth inside
+Vitest, and keeps the module graph of an integration test free of the auth runtime.
 
 - [ ] **Step 1: Install Auth.js**
 
@@ -2325,33 +2332,25 @@ import { handlers } from "@/lib/auth/config";
 export const { GET, POST } = handlers;
 ```
 
-- [ ] **Step 8: Create `src/lib/auth/viewer.ts`**
+- [ ] **Step 8: Create `src/lib/users/viewer.ts`**
 
-Every server component that reads data calls `requireViewer()`. Nothing else constructs a
-`Viewer`.
+The database half of viewer loading, deliberately free of any Auth.js import so it can be
+tested without a session. This is the only place a `Viewer` is constructed, and it is what
+`can()` and `readableSpace()` consume, so it deserves direct tests rather than only
+end-to-end coverage through sign-in.
 
 ```ts
-import { cache } from "react";
-import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { auth } from "@/lib/auth/config";
 import type { Viewer } from "@/lib/authz/types";
 
-/**
- * Wrapped in `cache()` so one render sees one Viewer OBJECT, not just one equal value.
- * The repository's own `cache()` calls key on argument identity, so a fresh Viewer per
- * call would miss every time and silently make that memoization useless.
- */
-export const loadViewer = cache(async (): Promise<Viewer | null> => {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) return null;
-
+export async function viewerForEmail(email: string): Promise<Viewer | null> {
   const user = await db.user.findUnique({
+    // Lower-cased on both write (upsertUserFromProfile) and read, because the unique index
+    // on email is a plain btree: providers vary in the case they return, and without this
+    // the same person could resolve to two identities with different membership sets.
     where: { email: email.toLowerCase() },
     select: {
       id: true,
-      name: true,
       isSuperAdmin: true,
       memberships: { select: { spaceId: true, role: true } },
     },
@@ -2363,6 +2362,88 @@ export const loadViewer = cache(async (): Promise<Viewer | null> => {
     isSuperAdmin: user.isSuperAdmin,
     memberships: user.memberships,
   };
+}
+```
+
+- [ ] **Step 9: Write and run the viewer tests**
+
+`tests/integration/viewer.test.ts`:
+
+```ts
+import { beforeEach, expect, test } from "vitest";
+import { db, resetDb } from "../setup/reset";
+import { viewerForEmail } from "@/lib/users/viewer";
+
+beforeEach(resetDb);
+
+test("carries every membership the user holds", async () => {
+  const user = await db.user.create({
+    data: { email: "aisyah@example.com", name: "Aisyah R." },
+  });
+  const engineering = await db.space.create({
+    data: { key: "engineering", name: "Engineering", initials: "EN" },
+  });
+  const people = await db.space.create({
+    data: { key: "people", name: "People", initials: "PP" },
+  });
+  await db.spaceMembership.create({
+    data: { spaceId: engineering.id, userId: user.id, role: "EDITOR" },
+  });
+  await db.spaceMembership.create({
+    data: { spaceId: people.id, userId: user.id, role: "VIEWER" },
+  });
+
+  const viewer = await viewerForEmail("aisyah@example.com");
+
+  expect(viewer?.id).toBe(user.id);
+  expect(viewer?.isSuperAdmin).toBe(false);
+  expect(viewer?.memberships).toHaveLength(2);
+  expect(viewer?.memberships.map((m) => m.role).sort()).toEqual(["EDITOR", "VIEWER"]);
+});
+
+test("matches the email case-insensitively", async () => {
+  await db.user.create({ data: { email: "wei@example.com", name: "Wei L." } });
+  expect(await viewerForEmail("WEI@Example.COM")).not.toBeNull();
+});
+
+test("returns null when a signed-in email has no local user row", async () => {
+  expect(await viewerForEmail("ghost@example.com")).toBeNull();
+});
+
+test("carries super-admin status through", async () => {
+  await db.user.create({
+    data: { email: "root@example.com", name: "Root", isSuperAdmin: true },
+  });
+  expect((await viewerForEmail("root@example.com"))?.isSuperAdmin).toBe(true);
+});
+```
+
+Run: `npm test -- tests/integration/viewer.test.ts`
+Expected: 4 passed.
+
+- [ ] **Step 10: Create `src/lib/auth/viewer.ts`**
+
+Every server component that reads data calls `requireViewer()`. Nothing else constructs a
+`Viewer`.
+
+```ts
+import { cache } from "react";
+import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth/config";
+import { viewerForEmail } from "@/lib/users/viewer";
+import type { Viewer } from "@/lib/authz/types";
+
+/**
+ * Wrapped in `cache()` so one render sees one Viewer OBJECT, not just one equal value.
+ * The repository's own `cache()` calls key on argument identity, so a fresh Viewer per
+ * call would miss every time and silently make that memoization useless. Note `cache()`
+ * only memoizes inside a real RSC render — it is a passthrough everywhere else.
+ */
+export const loadViewer = cache(async (): Promise<Viewer | null> => {
+  const session = await auth();
+  const email = session?.user?.email;
+  if (!email) return null;
+  return viewerForEmail(email);
 });
 
 export async function requireViewer(): Promise<Viewer> {
@@ -2372,12 +2453,22 @@ export async function requireViewer(): Promise<Viewer> {
 }
 ```
 
-- [ ] **Step 9: Verify the typecheck passes**
+- [ ] **Step 11: Verify the typecheck AND the build pass**
 
-Run: `npm run typecheck`
-Expected: exit 0.
+Run: `npm run typecheck && npm run build`
+Expected: both exit 0.
 
-- [ ] **Step 10: Commit**
+**The build matters here specifically.** This task adds a route handler that instantiates
+NextAuth at module scope, and Next collects route modules during the build — with
+`OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` empty in `.env`. If Auth.js rejects an incomplete
+provider config eagerly, this is where it surfaces. Every other task runs the build; this
+one previously ran only the typecheck, which would have deferred the failure to Task 10.
+
+If the build does fail on the empty OIDC credentials, do not invent placeholder secrets:
+report the exact error. The likely correct fix is guarding provider construction on the
+variables being present, which is a decision to make deliberately rather than paper over.
+
+- [ ] **Step 12: Commit**
 
 ```bash
 git add -A
