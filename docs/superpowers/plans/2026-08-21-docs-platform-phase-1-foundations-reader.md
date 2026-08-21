@@ -3640,6 +3640,17 @@ All must hold before Phase 2 starts:
 - [ ] The Alpha badge and `0.1.0+<sha>` build string render in the shell
 - [ ] Report bug stores a row with the route, version and viewport captured automatically
 
+## Migration convention, learned in Task 2
+
+The `bug_report_retention` migration added `updatedAt TIMESTAMP(3) NOT NULL` with no
+default. That succeeded only because both databases were empty. Every later phase adds
+columns to tables holding real data, where the same SQL fails outright.
+
+So: **a new NOT NULL column on a populated table needs a default, or a three-step
+migration** (add nullable, backfill, set NOT NULL). Prisma will warn, and that warning
+must be read rather than clicked through. This matters from Phase 2 onward, where
+`PageDraft`, `PageRelation`, `System` and the search vector all land on live tables.
+
 ## Carried into later phases
 
 Named here so they are not mistaken for oversights:
