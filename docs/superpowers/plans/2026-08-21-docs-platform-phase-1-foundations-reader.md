@@ -1929,6 +1929,15 @@ add members. The cost is that a component switching on status gets no exhaustive
 check. If that becomes a real need, `import type { $Enums } from "@prisma/client"` is
 type-only and leaves `buildTree` pure; do it while this file is small rather than after.
 
+**Verified exhaustively.** The committed implementation was swept over every `parentId`
+graph on 1–5 nodes crossed with every input permutation — **948,524 cases** — asserting on
+each that no node is its own ancestor, every input row appears exactly once, and the
+caller's rows are not mutated. All pass, in ~12s. The reason it holds is worth knowing,
+because it is not obvious from the code: `parentId` is one edge per node, so the graph is
+*functional* and each component has **at most one** cycle. Two cycles sharing a node, or a
+figure-eight, are unconstructible — which is why cutting a single edge per component
+suffices.
+
 **Measured cost of the cycle guard.** The promotion loop re-walks reachability after each
 promotion, so it is quadratic — but only in the number of *distinct* cycles, and the
 constant is small:
