@@ -914,7 +914,7 @@ export function readableSpaceWhere(viewer: Viewer) {
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `npm test -- src/lib/authz/can.test.ts`
-Expected: 15 passed.
+Expected: 16 passed.
 
 - [ ] **Step 6: Commit**
 
