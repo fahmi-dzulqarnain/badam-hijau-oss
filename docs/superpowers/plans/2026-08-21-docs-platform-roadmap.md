@@ -1,0 +1,41 @@
+# Documentation platform — implementation roadmap
+
+Spec: [`docs/superpowers/specs/2026-08-21-internal-docs-platform-design.md`](../specs/2026-08-21-internal-docs-platform-design.md)
+
+Six phases. Each ends with software that runs, is tested, and is worth demoing. Each gets
+its own plan document, written when its predecessor lands — planning phase 5 against a
+codebase that does not exist yet produces a plan that gets rewritten.
+
+| Phase | Deliverable | Spec sections | Depends on |
+|---|---|---|---|
+| **1. Foundations & reader** | Signed-in staff read seeded published docs: space nav, breadcrumbs, TOC, page info card. Forbidden spaces 404. | §5.1–5.2, §8, §11 (read routes), §12 | — |
+| **2. Authoring** | Editors create, draft, preview and publish pages in the browser. Conflict detection on concurrent drafts. Move and delete with redirects. | §5.3, §9, §14 | 1 |
+| **3. Doc types & lifecycle** | ADR/RFC/runbook templates with validated frontmatter. Status vocabularies, typed relations, publish cascades, retired-document banner, generated indexes. | §6, §5.2 (`PageRelation`) | 2 |
+| **4. Search & diagrams** | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
+| **5. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
+| **6. Systems, attachments, admin** | Systems catalogue and facet filters. S3 attachments via presigned URLs. Space/member/system administration. Due-for-review workflow. | §7, §17, §12 (review) | 3 |
+
+## Ordering notes
+
+- **Phase 1 is a walking skeleton, not a stub.** It carries the real schema, the real
+  permission module and the real Markdown pipeline. Later phases add surface, not
+  foundations.
+- **Phase 5 is deliberately late.** The spec makes git a mirror that is never on the
+  critical path, so publishing works without it. Building it after authoring proves that
+  property instead of asserting it.
+- **Phase 3 before 4** because search filters by doc type and status, which phase 3
+  defines. Building search first means building it twice.
+- **Phase 6 last** because the systems facet is only useful once there are documents to
+  tag, and attachments are only useful once there is an editor to attach from.
+
+## Conventions fixed in phase 1
+
+These hold for every later phase. Changing one is a decision, not a detail.
+
+- **npm**, TypeScript strict, Next.js App Router, React Server Components for reads.
+- **Vitest** for unit and integration tests; **Playwright** for end-to-end.
+- Integration tests run against a **real Postgres** in Docker, never a mock or SQLite.
+- Permission checks live in the **data-access layer** and compile to SQL, never a filter
+  applied after fetching.
+- Pure logic (permissions, tree building, lifecycle rules) lives in modules that take
+  plain objects and import nothing from Prisma, so it is unit-testable without a database.

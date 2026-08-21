@@ -3,6 +3,7 @@
 **Date:** 2026-08-21
 **Status:** Approved for planning
 **Working name:** Badam
+**Release posture:** Alpha (see §18)
 
 ## 1. Summary
 
@@ -53,6 +54,7 @@ All are additive later. None is required for the system to be useful.
 | D10 | One draft per page with optimistic concurrency | Conflict detection is sufficient; co-editing is not worth the complexity in v1 |
 | D11 | Postgres full-text search | Adequate to a few thousand pages; no second datastore to operate |
 | D12 | S3-compatible object storage for attachments from day one | Keeps the container stateless; a mounted volume breaks the moment there is more than one replica |
+| D13 | Ship as an alpha, with in-product bug reporting from day one | Early users will hit rough edges; the cost of a bug going unreported is higher than the cost of the button |
 
 ## 5. Domain model
 
@@ -74,6 +76,7 @@ All are additive later. None is required for the system to be useful.
 - **Redirect** — old path to page, created when a page moves.
 - **AuditLog** — actor, action, target, metadata.
 - **GitJob** — queued mirror work with retry state.
+- **BugReport** — an in-product bug report with its captured context (§18.2).
 
 ### 5.2 Prisma sketch
 
@@ -317,7 +320,7 @@ provenance is visible and a broken mirror is noticed.
 | `/systems`, `/systems/[key]` | System catalogue and per-system documentation |
 | `/search?q=` | Search results |
 | `/edit/[pageId]`, `/new` | Editor |
-| `/admin/spaces`, `/admin/systems`, `/admin/git` | Administration |
+| `/admin/spaces`, `/admin/systems`, `/admin/git`, `/admin/bugs` | Administration |
 
 ## 12. Reading and content pipeline
 
@@ -366,6 +369,7 @@ interface so it can be replaced without touching callers.
 | Malformed Mermaid block | Renders as a code block with an inline error, rest of page unaffected |
 | Attachment too large or wrong type | Rejected before a presigned URL is issued, with the limit stated in the message |
 | Object storage unreachable | Upload fails with a retryable message; page text is unaffected and already saved |
+| Bug webhook unreachable | Report is already stored; forwarding retries in the background and the reporter sees success |
 | Page moved | Old path resolves via `Redirect`, 301 to the new path |
 
 ## 15. Testing
@@ -408,6 +412,8 @@ src/
     git/           # publisher, job queue
     templates/
     blob/          # BlobStore interface + S3 implementation, presigning
+    bugs/          # report capture, context collection, webhook forwarding
+    version/       # app version + git sha, read once at startup
   components/      # nav tree, toc, page info, editor, diagram
 prisma/
   schema.prisma
@@ -434,12 +440,78 @@ delete-on-page-delete is a queued job rather than a synchronous call, on the sam
 Configuration by environment variable: database URL, OIDC issuer / client id / client
 secret, session secret, git remote URL and credentials, git author fallback, S3 endpoint /
 region / bucket / access key / secret key, presigned URL lifetime, maximum upload size,
-review interval in months.
+review interval in months, `GIT_SHA` build argument, and optional `BUG_WEBHOOK_URL`.
 
 The git working tree remains local to the container and is re-cloned on start, so it is
 also not durable state.
 
-## 18. Assumptions
+## 18. Alpha posture and bug reporting
+
+The first release is labelled **alpha** in the product, not only in a changelog. Readers
+should know they are on early software, and reporting a problem must be cheaper than
+tolerating it.
+
+### 18.1 Version surfacing
+
+- The brand block in the top bar carries an **Alpha** chip.
+- The foot of the left rail shows the build as `0.<minor>.<patch>+<short-sha>`, read from
+  `package.json` and the `GIT_SHA` build argument. This is the string bug reports quote,
+  so it must be present in every environment including local development.
+
+### 18.2 Report a bug
+
+A **Report bug** button is pinned to the **bottom of the left navigation rail**, present on
+every reader and editor route so it is reachable from wherever the problem was seen.
+
+Clicking it opens a modal with two fields: "What happened?" (required) and "What did you
+expect?" (optional). Everything else is captured automatically, because a reporter who has
+to gather context reports less:
+
+route path, space key, page id, published version id, reporter id, app version and git
+sha, viewport size, user agent, and the most recent client-side console error if one
+occurred in the session.
+
+Reports are written to a `BugReport` row with status `NEW | TRIAGED | CLOSED`, listed for
+admins at `/admin/bugs`. If `BUG_WEBHOOK_URL` is configured, forwarding to Slack, Jira or
+Teams happens as a **queued job**, never inline — the same rule as the git mirror. A
+reporter is never blocked, and never shown a failure, because an outbound integration is
+down.
+
+This is a signal channel, not a support system: no threading, no replies, no
+notifications in alpha. Those are non-goals (§3).
+
+```prisma
+enum BugStatus { NEW TRIAGED CLOSED }
+
+model BugReport {
+  id           String    @id @default(cuid())
+  reporterId   String
+  summary      String                    // "What happened?"
+  expected     String?                   // "What did you expect?"
+  routePath    String
+  spaceId      String?
+  pageId       String?
+  versionId    String?
+  appVersion   String
+  gitSha       String?
+  userAgent    String
+  viewport     String                    // "1440x900"
+  consoleError String?
+  status       BugStatus @default(NEW)
+  createdAt    DateTime  @default(now())
+
+  @@index([status, createdAt])
+}
+```
+
+### 18.3 What alpha does not excuse
+
+Permission checks, the publish transaction and lifecycle cascades are correctness, not
+polish. Alpha means unfinished surface and missing features — it does not mean a document
+can leak across a space boundary or a decision can silently stay live after being
+superseded.
+
+## 19. Assumptions
 
 - The OIDC provider is configured at deploy time; Google Workspace and Microsoft Entra
   both work through the generic provider without code changes.
