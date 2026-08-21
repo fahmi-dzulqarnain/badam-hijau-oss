@@ -22,9 +22,17 @@ deployment; only local development differs.
 ### Task 1: Project scaffold and design tokens
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `vitest.config.ts`
+- Create: `package.json`, `package-lock.json`, `tsconfig.json`, `next.config.ts`, `vitest.config.ts`
 - Create: `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`
 - Modify: `.gitignore`
+
+**Conventions this task fixes for the whole project:** npm is the package manager, and
+`package-lock.json` **is committed** — reproducible installs matter more than a tidy diff.
+
+**Expect Next to rewrite `tsconfig.json` on every build.** Next 16 unconditionally forces
+`"jsx": "react-jsx"` (it logs this as a mandatory change) and appends
+`.next/dev/types/**/*.ts` to `include`. Both are correct; do not fight them, and do not
+mistake them for drift in a later task.
 
 This task produces configuration, not behaviour, so it has no test. It is verified by a
 typecheck and a production build — both must pass before you commit.
@@ -357,6 +365,12 @@ Then set `AUTH_SECRET` in `.env` to the output of `openssl rand -base64 32`.
 npm install @prisma/client zod
 npm install -D prisma dotenv
 ```
+
+**Pre-authorised fallback:** the scaffold installed **TypeScript 7.x**, the native
+compiler line. Prisma's generated client depends on heavy TS 5-era type machinery. If
+`npm run typecheck` fails on generated Prisma types (not on your own code), pin
+`typescript` to `^5.9`, reinstall, re-run, and report that you did. Do not spend time
+working around a compiler incompatibility.
 
 - [ ] **Step 5: Create `prisma/schema.prisma`**
 
