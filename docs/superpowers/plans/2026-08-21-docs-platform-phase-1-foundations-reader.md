@@ -1529,6 +1529,23 @@ pipeline, then again with `rehypeSanitize` removed:
 | `<script>`, `<img onerror>`, `<div onclick>`, `<iframe>`, raw `<a href="javascript:">` | `remarkRehype({ allowDangerousHtml: false })` — raw HTML never enters the hast tree |
 | `[link](javascript:alert(1))`, `![x](data:text/html;base64,…)` | **`rehypeSanitize` alone** — remark parses these into real elements, and only the sanitiser strips the scheme |
 
+**Known collision, deliberately not fixed.** `rehype-slug` runs after the sanitiser and
+knows nothing about the footnote ids `remark-gfm` has already baked into the tree, so a
+heading whose slug happens to equal one of them produces a duplicate DOM id:
+
+- `## Footnote label` → `id="footnote-label"`, colliding with the generated
+  `<h2 class="sr-only" id="footnote-label">` that every footnote's `aria-describedby`
+  points at.
+- `## User content fn 1` → `id="user-content-fn-1"`, colliding with the footnote item
+  `<li id="user-content-fn-1">` the footnote reference links to — so the link jumps to the
+  heading instead of the note.
+
+The available fix is a `prefix` on `rehype-slug`, namespacing heading ids away from
+footnote ids entirely. Declined: it would turn every anchor into `#h-context`, and on a
+documentation site anchors get copied into tickets and chat, so uglier permalinks
+everywhere is a worse trade than a collision that needs a heading titled exactly "Footnote
+label" or "User content fn 1". Revisit only if someone actually hits it.
+
 **Accepted limitation.** An image-only heading (`## ![Architecture](a.png)`) stringifies to
 empty text, so `rehype-slug` gives it `id=""`, `rehype-autolink-headings` skips it, and it
 gets no table-of-contents entry. It stays unlinkable. Do not invent a fallback id for it.
