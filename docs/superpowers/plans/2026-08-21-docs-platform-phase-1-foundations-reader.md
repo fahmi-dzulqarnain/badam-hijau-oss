@@ -1529,6 +1529,15 @@ pipeline, then again with `rehypeSanitize` removed:
 | `<script>`, `<img onerror>`, `<div onclick>`, `<iframe>`, raw `<a href="javascript:">` | `remarkRehype({ allowDangerousHtml: false })` — raw HTML never enters the hast tree |
 | `[link](javascript:alert(1))`, `![x](data:text/html;base64,…)` | **`rehypeSanitize` alone** — remark parses these into real elements, and only the sanitiser strips the scheme |
 
+**Accepted limitation.** An image-only heading (`## ![Architecture](a.png)`) stringifies to
+empty text, so `rehype-slug` gives it `id=""`, `rehype-autolink-headings` skips it, and it
+gets no table-of-contents entry. It stays unlinkable. Do not invent a fallback id for it.
+
+**Invariant Phase 4 depends on.** `.mermaid-source` and `.table-scroll` can only ever be
+produced by these plugins: `defaultSchema` does not allow `className` on `*` or on `div`,
+so a document author cannot forge either class even if raw HTML were later enabled. Phase
+4's hydration selector therefore cannot be pointed at author-controlled content.
+
 So the sanitiser is load-bearing, but for a narrower reason than "it removes script tags":
 its unique job is dangerous URL schemes in **legitimately parsed Markdown**. The
 consequence to carry forward: if a later phase ever sets `allowDangerousHtml: true` to let
@@ -1566,6 +1575,12 @@ npm install unified remark-parse remark-gfm remark-rehype rehype-slug \
 
 ```ts
 import { expect, test } from "vitest";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import remarkRehype from "remark-rehype";
+import rehypeStringify from "rehype-stringify";
+import { wrapTables } from "./wrap";
 import { renderMarkdown } from "./render";
 
 test("renders headings with stable ids and collects them for the table of contents", async () => {
@@ -1630,9 +1645,43 @@ test("wraps tables in a horizontal scroll container", async () => {
   expect(html).toContain('<div class="table-scroll"><table>');
 });
 
-test("does not double-wrap a table", async () => {
-  const { html } = await renderMarkdown("| A |\n| --- |\n| 1 |\n");
+test("wrapTables is idempotent when applied twice to one tree", async () => {
+  const html = String(
+    await unified()
+      .use(remarkParse)
+      .use(remarkGfm)
+      .use(remarkRehype)
+      .use(wrapTables)
+      .use(wrapTables)
+      .use(rehypeStringify)
+      .process("| A |\n| --- |\n| 1 |\n"),
+  );
   expect(html.match(/table-scroll/g)).toHaveLength(1);
+});
+
+test("every internal anchor has a matching id", async () => {
+  const { html } = await renderMarkdown(
+    "Text[^1] and more[^two]\n\n[^1]: first\n\n[^two]: second\n",
+  );
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+  const hrefs = [...html.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]);
+
+  expect(hrefs.length).toBeGreaterThan(0);
+  expect(hrefs.filter((href) => !ids.includes(href))).toEqual([]);
+});
+
+test("the generated footnotes heading is not a table of contents entry", async () => {
+  const { headings } = await renderMarkdown(
+    "## Real section\n\nText[^1]\n\n[^1]: note\n",
+  );
+  expect(headings.map((h) => h.text)).toEqual(["Real section"]);
+});
+
+test("a heading with no text yields no table of contents entry", async () => {
+  const { headings } = await renderMarkdown(
+    "## ![Architecture](a.png)\n\n## Real\n",
+  );
+  expect(headings.map((h) => h.text)).toEqual(["Real"]);
 });
 ```
 
@@ -1658,11 +1707,27 @@ export function collectHeadings(options: { headings: Heading[] }) {
   return (tree: Root) => {
     visit(tree, "element", (node) => {
       if (node.tagName !== "h2" && node.tagName !== "h3") return;
+
       const id = node.properties?.id;
-      if (typeof id !== "string") return;
+      // An empty id is a real case, not a defensive check: an image-only heading such as
+      // `## ![Architecture](a.png)` stringifies to "" because hast-util-to-string ignores
+      // alt text. rehype-autolink-headings skips those, so collecting one would put a
+      // blank row in the table of contents linking to `#`.
+      if (typeof id !== "string" || id === "") return;
+
+      // remark-gfm appends its own `<h2 class="sr-only" id="…footnote-label">Footnotes</h2>`
+      // to any document with footnotes. It is a real h2 with an id, so without this it
+      // becomes a phantom entry pointing at a visually hidden heading. The class is
+      // machine-generated and unforgeable — the sanitiser strips `class` from author HTML.
+      const classes = node.properties?.className;
+      if (Array.isArray(classes) && classes.includes("sr-only")) return;
+
+      const text = toString(node);
+      if (text.trim() === "") return;
+
       options.headings.push({
         id,
-        text: toString(node),
+        text,
         depth: node.tagName === "h2" ? 2 : 3,
       });
     });
@@ -1695,7 +1760,8 @@ export function extractMermaid() {
 
       const classes = code.properties?.className;
       const isMermaid =
-        Array.isArray(classes) && classes.includes("language-mermaid");
+        Array.isArray(classes) &&
+        classes.some((c) => String(c).toLowerCase() === "language-mermaid");
       if (!isMermaid) return;
 
       parent.children[index] = {
@@ -1759,14 +1825,19 @@ import { wrapTables } from "./wrap";
 
 export type RenderedDoc = { html: string; headings: Heading[] };
 
-// The annotation is required, not decorative: `unified().use()` overloads on
-// `Parameters | [boolean]` (so a plugin can be disabled with `false`), and without it
-// inference collapses onto the `[boolean]` branch and fails with TS2345. Note the type is
-// exported as `Options` from rehype-sanitize — `Schema` comes from hast-util-sanitize.
 const schema: Options = {
   ...defaultSchema,
+  // clobberPrefix defaults to "user-content-", but remark-gfm ALREADY prefixes footnote
+  // ids and their hrefs. Sanitising then prefixes the ids a second time while leaving the
+  // hrefs untouched, so every footnote link and backref dangles. Emptying it loses
+  // nothing: the sanitiser runs before rehype-slug, so heading ids are never prefixed
+  // anyway, and footnote ids are the only ids it currently touches.
+  clobberPrefix: "",
   attributes: {
     ...defaultSchema.attributes,
+    // Byte-identical to hast-util-sanitize 5's current default. Kept as an explicit pin
+    // against an upstream widening, not as a change — and it is what forces the `Options`
+    // annotation above.
     code: [["className", /^language-./]],
   },
 };
@@ -1787,6 +1858,13 @@ export async function renderMarkdown(markdown: string): Promise<RenderedDoc> {
     .use(wrapTables)
     .use(rehypeShiki, {
       themes: { light: "github-light", dark: "github-dark" },
+      // Without this, Shiki loads all 346 bundled grammars: 4.2s and +80MB on the first
+      // render in a process. An unlisted language degrades to `fallbackLanguage` rather
+      // than throwing, which the "unknown code language" test already covers.
+      langs: [
+        "ts", "tsx", "js", "jsx", "json", "yaml",
+        "bash", "sql", "swift", "prisma", "md", "dockerfile",
+      ],
       fallbackLanguage: "text",
     })
     .use(rehypeStringify)
@@ -1799,7 +1877,7 @@ export async function renderMarkdown(markdown: string): Promise<RenderedDoc> {
 - [ ] **Step 8: Run the test to verify it passes**
 
 Run: `npm test -- src/lib/markdown/render.test.ts`
-Expected: 9 passed.
+Expected: **12 passed.**
 
 - [ ] **Step 9: Commit**
 
