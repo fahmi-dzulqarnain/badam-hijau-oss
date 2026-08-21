@@ -312,6 +312,7 @@ the next developer can reproduce the database without guessing.
 # Creates the badam role and its two databases on a local Postgres.
 # Idempotent: safe to run repeatedly.
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5432}"
@@ -335,6 +336,17 @@ for name in badam badam_test; do
     echo "created $name"
   fi
 done
+
+# The integration harness refuses to run without .env.test, because falling back to
+# .env would truncate the development database.
+if [ -f .env.test ]; then
+  echo ".env.test already exists"
+elif [ -f .env.example ]; then
+  sed 's|/badam?schema|/badam_test?schema|' .env.example > .env.test
+  echo "created .env.test"
+else
+  echo "warning: .env.example is missing, cannot create .env.test" >&2
+fi
 ```
 
 Make it executable: `chmod +x scripts/setup-db.sh`
@@ -356,6 +368,7 @@ postgresql@16` and check `/opt/homebrew/var/log/postgresql@16.log`.
 
 ```bash
 cat > .env.example <<'EOF'
+# Copy to .env. Run ./scripts/setup-db.sh to also create .env.test for the test suite.
 DATABASE_URL="postgresql://badam:badam@localhost:5432/badam?schema=public"
 AUTH_SECRET="generate-with-openssl-rand-base64-32"
 OIDC_ISSUER="https://accounts.google.com"
@@ -454,6 +467,11 @@ model BugReport {
   summary      String
   expected     String?
   routePath    String
+  // spaceId/pageId/versionId are captured context, deliberately without foreign keys:
+  // their value is highest when the referenced page is gone, so SetNull would erase the
+  // only clue and Restrict/Cascade would block deletion or destroy the report. routePath
+  // is the durable breadcrumb. Task 11 validates these at write time; readers must
+  // tolerate a dangling id.
   spaceId      String?
   pageId       String?
   versionId    String?
@@ -464,11 +482,20 @@ model BugReport {
   consoleError String?
   status       BugStatus @default(NEW)
   createdAt    DateTime  @default(now())
-  reporter     User      @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  updatedAt    DateTime  @updatedAt
+  reporter     User      @relation(fields: [reporterId], references: [id])
 
   @@index([status, createdAt])
+  @@index([reporterId])
 }
 ```
+
+**No `onDelete: Cascade` on `reporter`, deliberately.** Deleting a user must not delete
+their bug reports — the value is in the captured context, and an offboarded employee's
+reports are exactly the ones worth keeping. Prisma's default `Restrict` makes a future
+offboarding path fail loudly and force a deliberate decision. `Cascade` stays correct on
+both `SpaceMembership` relations. `@@index([reporterId])` is explicit because Postgres
+does not auto-index foreign key columns.
 
 - [ ] **Step 6: Run the first migration**
 
@@ -504,11 +531,26 @@ import { execSync } from "node:child_process";
 import { config } from "dotenv";
 
 export default function setup() {
-  config({ path: ".env.test", override: true });
-  execSync("npx prisma migrate deploy", {
-    stdio: "inherit",
-    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
-  });
+  if (config({ path: ".env.test", override: true }).error) {
+    throw new Error(
+      ".env.test not found. Refusing to migrate: falling back to .env would run " +
+        "migrations against the development database. Create it with:\n" +
+        "  ./scripts/setup-db.sh",
+    );
+  }
+
+  const databaseUrl = process.env.DATABASE_URL ?? "";
+  if (!databaseUrl || !new URL(databaseUrl).pathname.endsWith("_test")) {
+    throw new Error(
+      `Refusing to migrate "${databaseUrl || "<unset>"}": not a test database.`,
+    );
+  }
+
+  // `--no` stops npx fetching an arbitrary Prisma from the registry if node_modules is
+  // stale - that version would decide which migrations run. Do not pass an `env` option
+  // here: execSync already defaults to process.env, so setting DATABASE_URL to its own
+  // value is inert, and inert code that looks like a safeguard is worse than none.
+  execSync("npx --no prisma migrate deploy", { stdio: "inherit" });
 }
 ```
 
@@ -517,16 +559,57 @@ export default function setup() {
 ```ts
 import { config } from "dotenv";
 
-config({ path: ".env.test", override: true });
+// This dotenv call and the identical one in global-setup.ts are BOTH load-bearing.
+// globalSetup mutates process.env in the main Vitest process and workers inherit it;
+// this call covers the case where this module is what first constructs the client.
+// Deleting either one as "duplication" silently retargets the whole suite.
+if (config({ path: ".env.test", override: true }).error) {
+  throw new Error(
+    ".env.test not found. Refusing to run integration tests: falling back to .env " +
+      "would TRUNCATE the development database. Create it with:\n" +
+      "  ./scripts/setup-db.sh",
+  );
+}
+
+const databaseUrl = process.env.DATABASE_URL ?? "";
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is unset after loading .env.test.");
+}
+// Assert the suffix rather than the literal name, so this survives a database rename.
+if (!new URL(databaseUrl).pathname.endsWith("_test")) {
+  throw new Error(`Refusing to run integration tests against ${databaseUrl}`);
+}
 
 const { db } = await import("@/lib/db");
 
 export { db };
 
+let verifiedDatabase = false;
+let tables: string[] | undefined;
+
 export async function resetDb() {
-  await db.$executeRawUnsafe(
-    'TRUNCATE TABLE "BugReport", "SpaceMembership", "Space", "User" CASCADE',
-  );
+  if (!verifiedDatabase) {
+    const rows = await db.$queryRaw<{ current_database: string }[]>`
+      SELECT current_database()`;
+    const current = rows[0]?.current_database ?? "";
+    if (!current.endsWith("_test")) {
+      throw new Error(`Refusing to TRUNCATE "${current}": not a test database.`);
+    }
+    verifiedDatabase = true;
+  }
+
+  tables ??= (
+    await db.$queryRaw<{ tablename: string }[]>`
+      SELECT tablename FROM pg_tables
+      WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'
+    `
+  ).map((row) => `"${row.tablename}"`);
+
+  if (tables.length === 0) {
+    throw new Error("resetDb: no tables found. Did migrations run?");
+  }
+
+  await db.$executeRawUnsafe(`TRUNCATE TABLE ${tables.join(", ")} CASCADE`);
 }
 ```
 
@@ -547,6 +630,11 @@ Modify `vitest.config.ts` — add `globalSetup` to the `test` block:
 ```
 
 `fileParallelism: false` because the integration tests share one database and truncate it.
+This also serialises the pure unit tests in Tasks 3, 5, 6, 8 and 13. Measured cost is a
+couple of hundred milliseconds — the suite's real cost is `globalSetup` shelling out to
+the Prisma CLI (~1.6s). Splitting into Vitest `test.projects` (a parallel `unit` project
+with no `globalSetup`, an `integration` project keeping both settings) is the right
+eventual fix; do it when there are enough unit tests to notice, not now.
 **Keep the `{ts,tsx}` globs exactly as they already are** — Task 1 widened them so a
 `.test.tsx` file cannot be silently skipped. Narrowing them back to `.ts` is a regression.
 
@@ -2620,6 +2708,10 @@ Run: `npm test -- tests/integration/bug-report.test.ts`
 Expected: FAIL — `Failed to resolve import "@/lib/bugs/create"`.
 
 - [ ] **Step 7: Create `src/lib/bugs/create.ts`**
+
+`spaceId`, `pageId` and `versionId` carry no foreign keys by design (see the schema
+comment in Task 2). Validate them here at write time so client-supplied garbage is never
+stored, and let readers tolerate an id that later dangles.
 
 ```ts
 import { db } from "@/lib/db";
