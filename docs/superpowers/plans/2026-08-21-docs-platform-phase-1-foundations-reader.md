@@ -1910,6 +1910,15 @@ git commit -m "feat: add sanitising markdown pipeline with toc, mermaid and tabl
 Pure function over flat rows. The navigation rail is the single most-rendered component in
 the app, so this must not do a query per level.
 
+**It must also survive a `parentId` cycle.** `Page.parentId` is a self-referential foreign
+key and Postgres does not prevent `a → b → a`. In a naive implementation every member of a
+cycle gets attached to a parent, none is reachable from a root, and the function returns
+`[]` — the whole navigation rail vanishes silently, with no error anywhere. Task 13's
+`countDescendants` also recurses with no depth limit, so a cycle would hang the render
+thread mid-SSR. Nothing creates cycles in Phase 1 (it is read-only), but Phase 2's page
+move is precisely the operation that could, and a silent empty nav is the worst way to
+find out.
+
 **Files:**
 - Create: `src/lib/pages/tree.ts`
 - Test: `src/lib/pages/tree.test.ts`
@@ -1977,6 +1986,50 @@ test("a parent appearing after its child still nests correctly", () => {
 test("an empty input produces an empty tree", () => {
   expect(buildTree([])).toEqual([]);
 });
+
+/** Walks the whole tree. Loops forever if buildTree ever returns a cyclic structure. */
+function collectIds(tree: ReturnType<typeof buildTree>): string[] {
+  const seen = new Set<string>();
+  const stack = [...tree];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || seen.has(node.id)) continue;
+    seen.add(node.id);
+    for (const child of node.children) stack.push(child);
+  }
+  return [...seen].sort();
+}
+
+test("a parentId cycle still yields every row, reachable and finite", () => {
+  const tree = buildTree([
+    row({ id: "a", parentId: "b" }),
+    row({ id: "b", parentId: "a" }),
+  ]);
+
+  // The bug this guards: a naive build attaches both to each other, leaves no roots, and
+  // returns [] - the navigation rail vanishes with nothing logged.
+  expect(tree.length).toBeGreaterThan(0);
+  expect(collectIds(tree)).toEqual(["a", "b"]);
+});
+
+test("a three-node cycle mixed with a real subtree keeps both", () => {
+  const tree = buildTree([
+    row({ id: "root" }),
+    row({ id: "leaf", parentId: "root" }),
+    row({ id: "x", parentId: "z" }),
+    row({ id: "y", parentId: "x" }),
+    row({ id: "z", parentId: "y" }),
+  ]);
+
+  expect(collectIds(tree)).toEqual(["leaf", "root", "x", "y", "z"]);
+  expect(tree.find((n) => n.id === "root")?.children.map((n) => n.id)).toEqual(["leaf"]);
+});
+
+test("a page that is its own parent becomes a childless root", () => {
+  const tree = buildTree([row({ id: "self", parentId: "self" })]);
+  expect(tree.map((n) => n.id)).toEqual(["self"]);
+  expect(tree[0]?.children).toEqual([]);
+});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -2020,6 +2073,39 @@ export function buildTree(rows: PageRow[]): TreeNode[] {
     }
   }
 
+  // Everything reachable by walking down from the roots. The `seen` guard is what makes
+  // this terminate on a cyclic graph rather than looping forever.
+  const walkFromRoots = (): Set<string> => {
+    const seen = new Set<string>();
+    const stack = [...roots];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node || seen.has(node.id)) continue;
+      seen.add(node.id);
+      for (const child of node.children) stack.push(child);
+    }
+    return seen;
+  };
+
+  // A parentId cycle leaves every member attached to a parent and none reachable from a
+  // root, so without this the function would return an empty tree and the navigation rail
+  // would silently disappear. Detach one member per cycle and surface it as a root, so the
+  // result is always finite and always contains every input row.
+  let reachable = walkFromRoots();
+  for (const row of rows) {
+    if (reachable.has(row.id)) continue;
+
+    const node = nodes.get(row.id);
+    if (!node) continue;
+
+    const parent = row.parentId === null ? undefined : nodes.get(row.parentId);
+    if (parent) {
+      parent.children = parent.children.filter((child) => child.id !== node.id);
+    }
+    roots.push(node);
+    reachable = walkFromRoots();
+  }
+
   return roots;
 }
 ```
@@ -2027,7 +2113,7 @@ export function buildTree(rows: PageRow[]): TreeNode[] {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- src/lib/pages/tree.test.ts`
-Expected: 5 passed.
+Expected: **8 passed.**
 
 - [ ] **Step 5: Commit**
 
