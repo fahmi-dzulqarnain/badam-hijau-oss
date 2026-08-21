@@ -52,6 +52,7 @@ All are additive later. None is required for the system to be useful.
 | D9 | Systems are a facet, not a folder | A single ADR can legitimately affect Hub, kiosk and POS |
 | D10 | One draft per page with optimistic concurrency | Conflict detection is sufficient; co-editing is not worth the complexity in v1 |
 | D11 | Postgres full-text search | Adequate to a few thousand pages; no second datastore to operate |
+| D12 | S3-compatible object storage for attachments from day one | Keeps the container stateless; a mounted volume breaks the moment there is more than one replica |
 
 ## 5. Domain model
 
@@ -68,7 +69,8 @@ All are additive later. None is required for the system to be useful.
 - **System** — a deployable or library. Facet applied to pages.
 - **PageSystem** — join between Page and System.
 - **Template** — seeded document template per doc type.
-- **Attachment** — uploaded file belonging to a page.
+- **Attachment** — uploaded file belonging to a page. `blobKey`, `filename`, `mimeType`,
+  `sizeBytes`, `uploadedById`.
 - **Redirect** — old path to page, created when a page moves.
 - **AuditLog** — actor, action, target, metadata.
 - **GitJob** — queued mirror work with retry state.
@@ -362,7 +364,8 @@ interface so it can be replaced without touching callers.
 | Invalid frontmatter or illegal transition | Publish rejected, field-level messages in the editor |
 | Git push failure | Publish stands, `gitSha = null`, retry with backoff, admin visibility |
 | Malformed Mermaid block | Renders as a code block with an inline error, rest of page unaffected |
-| Attachment too large or wrong type | Rejected with the limit stated in the message |
+| Attachment too large or wrong type | Rejected before a presigned URL is issued, with the limit stated in the message |
+| Object storage unreachable | Upload fails with a retryable message; page text is unaffected and already saved |
 | Page moved | Old path resolves via `Redirect`, 301 to the new path |
 
 ## 15. Testing
@@ -404,7 +407,7 @@ src/
     systems/
     git/           # publisher, job queue
     templates/
-    blob/          # attachment store interface
+    blob/          # BlobStore interface + S3 implementation, presigning
   components/      # nav tree, toc, page info, editor, diagram
 prisma/
   schema.prisma
@@ -417,12 +420,24 @@ data-access layer; each `lib` module exposes a small interface and is testable a
 
 ## 17. Deployment and configuration
 
-A single Docker image plus Postgres. Migrations run on deploy. Attachments go to a mounted
-volume in v1 behind a `BlobStore` interface so object storage is a later swap.
+A single Docker image, Postgres, and S3-compatible object storage. Migrations run on
+deploy.
+
+**Attachments go to object storage from day one** — no mounted volume, so the application
+container stays stateless and horizontal scaling does not break uploads. Access is behind
+a `BlobStore` interface with an S3 implementation (AWS S3, or MinIO where the company
+self-hosts). Uploads and downloads use presigned URLs so file bytes never pass through the
+application; the bucket itself stays private. `Attachment.blobKey` is the object key, and
+delete-on-page-delete is a queued job rather than a synchronous call, on the same
+"never block the user on a remote store" principle as the git mirror.
 
 Configuration by environment variable: database URL, OIDC issuer / client id / client
-secret, session secret, git remote URL and credentials, git author fallback, attachments
-directory, maximum upload size, review-interval months.
+secret, session secret, git remote URL and credentials, git author fallback, S3 endpoint /
+region / bucket / access key / secret key, presigned URL lifetime, maximum upload size,
+review interval in months.
+
+The git working tree remains local to the container and is re-cloned on start, so it is
+also not durable state.
 
 ## 18. Assumptions
 
