@@ -540,13 +540,15 @@ Modify `vitest.config.ts` — add `globalSetup` to the `test` block:
 ```ts
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],
     globalSetup: ["tests/setup/global-setup.ts"],
     fileParallelism: false,
   },
 ```
 
 `fileParallelism: false` because the integration tests share one database and truncate it.
+**Keep the `{ts,tsx}` globs exactly as they already are** — Task 1 widened them so a
+`.test.tsx` file cannot be silently skipped. Narrowing them back to `.ts` is a regression.
 
 - [ ] **Step 10: Write the failing test**
 
