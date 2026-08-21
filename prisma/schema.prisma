@@ -55,9 +55,9 @@ model User {
   createdAt    DateTime          @default(now())
   memberships  SpaceMembership[]
   bugReports   BugReport[]
-  pagesOwned   Page[]        @relation("PageOwner")
-  pagesCreated Page[]        @relation("PageCreatedBy")
-  pageVersions PageVersion[] @relation("PageVersionAuthor")
+  pagesOwned   Page[]            @relation("PageOwner")
+  pagesCreated Page[]            @relation("PageCreatedBy")
+  pageVersions PageVersion[]     @relation("PageVersionAuthor")
 }
 
 model Space {
@@ -69,7 +69,7 @@ model Space {
   visibility  SpaceVisibility   @default(MEMBERS)
   createdAt   DateTime          @default(now())
   memberships SpaceMembership[]
-  pages Page[]
+  pages       Page[]
 }
 
 model SpaceMembership {
