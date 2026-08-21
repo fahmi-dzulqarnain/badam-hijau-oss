@@ -10,6 +10,10 @@ export function can(viewer: Viewer, space: SpaceRef, action: Action): boolean {
   const role = roleIn(viewer, space.id);
 
   switch (action) {
+    // Every current SpaceRole grants read, so any membership suffices. This is the one
+    // fail-open direction in the module: a future role that must NOT confer read
+    // (PENDING, INVITED, BLOCKED) has to change this line and the predicate in
+    // where.ts together, or the two mechanisms will silently disagree.
     case "READ":
       return space.visibility === "ALL_STAFF" || role !== undefined;
     case "EDIT":
@@ -30,19 +34,4 @@ export function needsAccessAudit(viewer: Viewer, space: SpaceRef): boolean {
     space.visibility === "MEMBERS" &&
     roleIn(viewer, space.id) === undefined
   );
-}
-
-/**
- * A Prisma `where` fragment for Space, so the permission check runs in SQL. Returning
- * ids instead would mean loading every space first, and would let a caller forget to
- * apply the filter.
- */
-export function readableSpaceWhere(viewer: Viewer) {
-  if (viewer.isSuperAdmin) return {};
-  return {
-    OR: [
-      { visibility: "ALL_STAFF" as const },
-      { memberships: { some: { userId: viewer.id } } },
-    ],
-  };
 }

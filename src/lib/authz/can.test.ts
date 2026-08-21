@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { can, needsAccessAudit, readableSpaceWhere } from "./can";
+import { can, needsAccessAudit } from "./can";
 import type { SpaceRef, Viewer } from "./types";
 
 const openSpace: SpaceRef = { id: "s-open", visibility: "ALL_STAFF" };
@@ -90,17 +90,3 @@ describe("super admin", () => {
   });
 });
 
-describe("readableSpaceWhere", () => {
-  test("a super admin gets an unfiltered clause", () => {
-    expect(readableSpaceWhere(viewer({ isSuperAdmin: true }))).toEqual({});
-  });
-
-  test("everyone else gets all-staff spaces or their own memberships", () => {
-    expect(readableSpaceWhere(viewer())).toEqual({
-      OR: [
-        { visibility: "ALL_STAFF" },
-        { memberships: { some: { userId: "u1" } } },
-      ],
-    });
-  });
-});
