@@ -720,7 +720,19 @@ cover combinations that would be tedious to set up in the database.
 **Files:**
 - Create: `src/lib/authz/types.ts`
 - Create: `src/lib/authz/can.ts`
+- Create: `src/lib/authz/where.ts`
 - Test: `src/lib/authz/can.test.ts`
+- Test: `tests/integration/authz-where.test.ts`
+
+**Why the query fragment is a separate file with a composing helper.** An earlier draft
+exported `readableSpaceWhere(viewer)` returning a bare `{ OR: [...] }` to be **spread**
+into a caller's `where`. That is an authorization bypass: object spread merges by key, so
+any caller who also needs a top-level `OR` silently deletes the permission predicate.
+Reproduced against Postgres — a non-member read a `MEMBERS` space title through an
+ordinary search query, and neither `tsc` nor Prisma can detect it, because the duplicate
+key collapses in the object literal before Prisma is called. The predicate is now private
+and reached only through `readableSpace(viewer, ...and)`, which returns the complete
+`where` clause and `AND`s extra conditions so they can never collide.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -728,7 +740,7 @@ cover combinations that would be tedious to set up in the database.
 
 ```ts
 import { describe, expect, test } from "vitest";
-import { can, needsAccessAudit, readableSpaceWhere } from "./can";
+import { can, needsAccessAudit } from "./can";
 import type { SpaceRef, Viewer } from "./types";
 
 const openSpace: SpaceRef = { id: "s-open", visibility: "ALL_STAFF" };
@@ -818,21 +830,6 @@ describe("super admin", () => {
     expect(needsAccessAudit(viewer(), closedSpace)).toBe(false);
   });
 });
-
-describe("readableSpaceWhere", () => {
-  test("a super admin gets an unfiltered clause", () => {
-    expect(readableSpaceWhere(viewer({ isSuperAdmin: true }))).toEqual({});
-  });
-
-  test("everyone else gets all-staff spaces or their own memberships", () => {
-    expect(readableSpaceWhere(viewer())).toEqual({
-      OR: [
-        { visibility: "ALL_STAFF" },
-        { memberships: { some: { userId: "u1" } } },
-      ],
-    });
-  });
-});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -873,6 +870,10 @@ export function can(viewer: Viewer, space: SpaceRef, action: Action): boolean {
   const role = roleIn(viewer, space.id);
 
   switch (action) {
+    // Every current SpaceRole grants read, so any membership suffices. This is the one
+    // fail-open direction in the module: a future role that must NOT confer read
+    // (PENDING, INVITED, BLOCKED) has to change this line and the predicate in
+    // where.ts together, or the two mechanisms will silently disagree.
     case "READ":
       return space.visibility === "ALL_STAFF" || role !== undefined;
     case "EDIT":
@@ -895,31 +896,183 @@ export function needsAccessAudit(viewer: Viewer, space: SpaceRef): boolean {
   );
 }
 
+```
+
+- [ ] **Step 5: Create `src/lib/authz/where.ts`**
+
+Separate file so `can.ts` stays free of database types and unit-testable in isolation.
+
+```ts
+import type { Prisma } from "@prisma/client";
+import type { Viewer } from "./types";
+
 /**
- * A Prisma `where` fragment for Space, so the permission check runs in SQL. Returning
- * ids instead would mean loading every space first, and would let a caller forget to
- * apply the filter.
+ * The readability predicate alone. Deliberately NOT exported: it contains a top-level
+ * `OR`, so spreading it into a caller's `where` that also has `OR` would silently delete
+ * one of them — a total authorization bypass that neither tsc nor Prisma can detect.
+ * Compose through `readableSpace` instead.
  */
-export function readableSpaceWhere(viewer: Viewer) {
+function readableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
   if (viewer.isSuperAdmin) return {};
   return {
     OR: [
-      { visibility: "ALL_STAFF" as const },
+      { visibility: "ALL_STAFF" },
       { memberships: { some: { userId: viewer.id } } },
     ],
   };
 }
+
+/**
+ * The only sanctioned way to query spaces. Returns the COMPLETE `where` clause, so a
+ * caller cannot build a query and forget the filter. Extra conditions are ANDed, and
+ * `AND` nests rather than merges, so no caller condition can collide with the predicate
+ * at any depth.
+ */
+export function readableSpace(
+  viewer: Viewer,
+  ...and: Prisma.SpaceWhereInput[]
+): Prisma.SpaceWhereInput {
+  return { AND: [readableSpaceWhere(viewer), ...and] };
+}
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+The `Prisma.SpaceWhereInput` annotation is load-bearing beyond documentation: without it
+the inferred type is a literal union, and a caller can spread the *Space* predicate into a
+`Page` or `User` query and get past `tsc`. It also makes a typo'd field name an error at
+the definition site instead of a runtime surprise.
+
+- [ ] **Step 6: Run the unit tests to verify they pass**
 
 Run: `npm test -- src/lib/authz/can.test.ts`
-Expected: 16 passed.
+Expected: 14 passed.
 
-- [ ] **Step 6: Commit**
+The predicate is covered behaviourally in `tests/integration/authz-where.test.ts`
+instead. Asserting its literal object shape with `toEqual` was actively harmful: those
+assertions passed while a caller bypassed the predicate entirely, and would have failed
+on the correct fix even though behaviour was identical.
+
+- [ ] **Step 7: Write the composition and drift tests**
+
+These need real SQL, so they are integration tests. The first is the regression test for
+the bypass described above — the only test that would have caught it. The second pins
+`can()` and the SQL predicate together, so a later phase cannot add an editable-space
+predicate that disagrees with `can(..., "EDIT")` without a failure.
+
+`tests/integration/authz-where.test.ts`:
+
+```ts
+import { beforeEach, expect, test } from "vitest";
+import { db, resetDb } from "../setup/reset";
+import { can } from "@/lib/authz/can";
+import { readableSpace } from "@/lib/authz/where";
+import type { SpaceRef, Viewer } from "@/lib/authz/types";
+
+beforeEach(resetDb);
+
+const stranger: Viewer = { id: "u-stranger", isSuperAdmin: false, memberships: [] };
+const root: Viewer = { id: "u-root", isSuperAdmin: true, memberships: [] };
+
+async function fixture() {
+  const member = await db.user.create({
+    data: { email: "member@example.com", name: "Member" },
+  });
+  const open = await db.space.create({
+    data: {
+      key: "handbook",
+      name: "Handbook planning",
+      initials: "HB",
+      visibility: "ALL_STAFF",
+    },
+  });
+  const closed = await db.space.create({
+    data: {
+      key: "layoffs",
+      name: "Layoffs 2027 planning",
+      initials: "LO",
+      visibility: "MEMBERS",
+    },
+  });
+  return { member, open, closed };
+}
+
+test("a caller's own OR cannot displace the permission predicate", async () => {
+  await fixture();
+
+  const rows = await db.space.findMany({
+    where: readableSpace(stranger, {
+      OR: [{ name: { contains: "planning" } }, { key: { contains: "planning" } }],
+    }),
+    select: { key: true },
+  });
+
+  const keys = rows.map((row) => row.key);
+  expect(keys).toContain("handbook");
+  expect(keys).not.toContain("layoffs");
+});
+
+test("a super admin sees members-only spaces through the same helper", async () => {
+  await fixture();
+
+  const rows = await db.space.findMany({
+    where: readableSpace(root),
+    select: { key: true },
+  });
+
+  expect(rows.map((row) => row.key).sort()).toEqual(["handbook", "layoffs"]);
+});
+
+test("can(READ) agrees with the SQL predicate for every viewer and visibility", async () => {
+  const { member, open, closed } = await fixture();
+  await db.spaceMembership.create({
+    data: { spaceId: closed.id, userId: member.id, role: "VIEWER" },
+  });
+
+  const viewers: { label: string; viewer: Viewer }[] = [
+    { label: "stranger", viewer: stranger },
+    { label: "super admin", viewer: root },
+    {
+      label: "member of the closed space",
+      viewer: {
+        id: member.id,
+        isSuperAdmin: false,
+        memberships: [{ spaceId: closed.id, role: "VIEWER" }],
+      },
+    },
+  ];
+
+  for (const { label, viewer } of viewers) {
+    const rows = await db.space.findMany({
+      where: readableSpace(viewer),
+      select: { id: true },
+    });
+    const visible = new Set(rows.map((row) => row.id));
+
+    for (const space of [open, closed]) {
+      const ref: SpaceRef = { id: space.id, visibility: space.visibility };
+      expect(
+        visible.has(space.id),
+        `${label} / ${space.key}: can() and the SQL predicate disagree`,
+      ).toBe(can(viewer, ref, "READ"));
+    }
+  }
+});
+```
+
+- [ ] **Step 8: Prove the regression test catches the bug**
+
+Temporarily change the first test's `where` to the old broken shape:
+
+```ts
+    where: { ...readableSpace(stranger), OR: [{ name: { contains: "planning" } }] },
+```
+
+Run it and confirm it FAILS by returning `layoffs`. Restore the correct version
+afterwards. A regression test never observed failing is not evidence of anything.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/lib/authz
+git add src/lib/authz tests/integration/authz-where.test.ts
 git commit -m "feat: add space permission module"
 ```
 
@@ -1183,9 +1336,14 @@ test("listSpacePages returns every page including unpublished ones", async () =>
       createdById: author.id,
     },
   });
-  const rows = await listSpacePages(space.id);
+  const rows = await listSpacePages(stranger, space.id);
   expect(rows).toHaveLength(2);
   expect(rows.filter((r) => r.publishedVersionId === null)).toHaveLength(1);
+});
+
+test("listSpacePages returns nothing for a space the viewer cannot read", async () => {
+  const { space } = await fixture("MEMBERS");
+  expect(await listSpacePages(stranger, space.id)).toEqual([]);
 });
 ```
 
@@ -1198,12 +1356,15 @@ Expected: FAIL — `Failed to resolve import "@/lib/pages/repo"`.
 
 ```ts
 import { db } from "@/lib/db";
-import { readableSpaceWhere } from "@/lib/authz/can";
+import { readableSpace } from "@/lib/authz/where";
 import type { Viewer } from "@/lib/authz/types";
 
 export async function getReadableSpaceByKey(key: string, viewer: Viewer) {
+  // TODO(phase-2): call needsAccessAudit(viewer, space) on the result and write to
+  // AuditLog. This is the single funnel every space read passes through, so it is the
+  // correct wiring point for spec §8's super-admin audit requirement.
   return db.space.findFirst({
-    where: { key, ...readableSpaceWhere(viewer) },
+    where: readableSpace(viewer, { key }),
     select: {
       id: true,
       key: true,
@@ -1240,9 +1401,12 @@ export async function getPublishedPage(params: {
   return { space, page, version: page.publishedVersion };
 }
 
-export async function listSpacePages(spaceId: string) {
+export async function listSpacePages(viewer: Viewer, spaceId: string) {
+  // Takes the viewer and re-asserts readability through the relation rather than
+  // trusting that the caller resolved the space id through a permission check first.
+  // A bare spaceId parameter would be safe only by convention, which spec §8 rejects.
   return db.page.findMany({
-    where: { spaceId },
+    where: { spaceId, space: readableSpace(viewer) },
     orderBy: [{ position: "asc" }, { title: "asc" }],
     select: {
       id: true,
@@ -2518,7 +2682,7 @@ export default async function SpaceLayout({
   // Unreadable and nonexistent are the same answer, so titles do not leak (spec §8).
   if (!space) notFound();
 
-  const tree = buildTree(await listSpacePages(space.id));
+  const tree = buildTree(await listSpacePages(viewer, space.id));
   const build = buildInfo();
 
   return (
@@ -3379,7 +3543,7 @@ export default async function SpaceLanding({
   const space = await getReadableSpaceByKey(spaceKey, viewer);
   if (!space) notFound();
 
-  const modules = summariseModules(buildTree(await listSpacePages(space.id)));
+  const modules = summariseModules(buildTree(await listSpacePages(viewer, space.id)));
   const recent = await listRecentlyPublished(space.id);
   const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
 
@@ -3666,4 +3830,8 @@ Named here so they are not mistaken for oversights:
   transaction that is the natural invalidation point. Phase 1 renders on each request,
   which is correct but not fast.
 - **`AuditLog` and `needsAccessAudit` wiring** — the function and its tests exist in
-  Phase 1; the table and the call site land in Phase 2 with the audit model.
+  Phase 1; the table and the call site land in Phase 2 with the audit model. State this
+  as an **accepted risk, not an oversight**: for the whole of Phase 1, super-admin reads
+  of `MEMBERS` spaces go unaudited, and the reader is the only surface Phase 1 ships, so
+  that is precisely the window in which such reads will happen. A `TODO(phase-2)` marks
+  the wiring point in `src/lib/pages/repo.ts` so it is discoverable from the code.
