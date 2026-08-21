@@ -609,6 +609,19 @@ git add -A
 git commit -m "feat: add Postgres schema for users, spaces and bug reports"
 ```
 
+**Accepted audit finding — do not "fix" it.** Installing the Prisma CLI brings
+`deepmerge-ts <8.0.0` (GHSA-ggr8-5vv4-36mx, high, stack exhaustion on recursive object
+graphs) via `@prisma/config`. It stays, because:
+
+- `prisma` is a devDependency — the CLI, not the production runtime.
+- The vulnerable path merges our own config file, not attacker-controlled input.
+- `npm audit fix --force` *downgrades* prisma to 6.12.0, a breaking change.
+- The advisory range spans 6.13.0 to 7.10.0, so upgrading to Prisma 7.x does not fix it
+  either. There is no version that is both current and unaffected.
+
+Re-evaluate when `@prisma/config` ships a patched `deepmerge-ts`. Do not run
+`npm audit fix --force` in any later task.
+
 ---
 
 ### Task 3: Permission module
