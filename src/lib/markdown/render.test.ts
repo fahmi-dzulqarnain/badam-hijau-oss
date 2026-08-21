@@ -1,4 +1,10 @@
 import { expect, test } from "vitest";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import remarkRehype from "remark-rehype";
+import rehypeStringify from "rehype-stringify";
+import { wrapTables } from "./wrap";
 import { renderMarkdown } from "./render";
 
 test("renders headings with stable ids and collects them for the table of contents", async () => {
@@ -63,7 +69,41 @@ test("wraps tables in a horizontal scroll container", async () => {
   expect(html).toContain('<div class="table-scroll"><table>');
 });
 
-test("does not double-wrap a table", async () => {
-  const { html } = await renderMarkdown("| A |\n| --- |\n| 1 |\n");
+test("wrapTables is idempotent when applied twice to one tree", async () => {
+  const html = String(
+    await unified()
+      .use(remarkParse)
+      .use(remarkGfm)
+      .use(remarkRehype)
+      .use(wrapTables)
+      .use(wrapTables)
+      .use(rehypeStringify)
+      .process("| A |\n| --- |\n| 1 |\n"),
+  );
   expect(html.match(/table-scroll/g)).toHaveLength(1);
+});
+
+test("every internal anchor has a matching id", async () => {
+  const { html } = await renderMarkdown(
+    "Text[^1] and more[^two]\n\n[^1]: first\n\n[^two]: second\n",
+  );
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+  const hrefs = [...html.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]);
+
+  expect(hrefs.length).toBeGreaterThan(0);
+  expect(hrefs.filter((href) => !ids.includes(href))).toEqual([]);
+});
+
+test("the generated footnotes heading is not a table of contents entry", async () => {
+  const { headings } = await renderMarkdown(
+    "## Real section\n\nText[^1]\n\n[^1]: note\n",
+  );
+  expect(headings.map((h) => h.text)).toEqual(["Real section"]);
+});
+
+test("a heading with no text yields no table of contents entry", async () => {
+  const { headings } = await renderMarkdown(
+    "## ![Architecture](a.png)\n\n## Real\n",
+  );
+  expect(headings.map((h) => h.text)).toEqual(["Real"]);
 });

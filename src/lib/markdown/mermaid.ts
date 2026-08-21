@@ -20,7 +20,8 @@ export function extractMermaid() {
 
       const classes = code.properties?.className;
       const isMermaid =
-        Array.isArray(classes) && classes.includes("language-mermaid");
+        Array.isArray(classes) &&
+        classes.some((c) => String(c).toLowerCase() === "language-mermaid");
       if (!isMermaid) return;
 
       parent.children[index] = {
