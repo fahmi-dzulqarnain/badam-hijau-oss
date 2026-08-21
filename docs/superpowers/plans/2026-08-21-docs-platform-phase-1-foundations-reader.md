@@ -1929,6 +1929,22 @@ add members. The cost is that a component switching on status gets no exhaustive
 check. If that becomes a real need, `import type { $Enums } from "@prisma/client"` is
 type-only and leaves `buildTree` pure; do it while this file is small rather than after.
 
+**Measured cost of the cycle guard.** The promotion loop re-walks reachability after each
+promotion, so it is quadratic — but only in the number of *distinct* cycles, and the
+constant is small:
+
+| Input | Time | Roots |
+|---|---|---|
+| One 500-node cycle | 0.5 ms | 1 |
+| 250 separate 2-node cycles (500 nodes) | 4.3 ms | 250 |
+| 1000 separate 2-node cycles (2000 nodes) | 54.8 ms | 1000 |
+| Healthy 2000-node tree | 0.5 ms | 1 |
+
+4× the nodes gave 12.7× the time, so the quadratic is real. It is also irrelevant in
+practice: the worst row is a 2000-page space in which *every* page sits in its own cycle.
+The healthy path — which is every real render — pays one extra linear walk. Do not
+optimise this without a reproduction that matters.
+
 - [ ] **Step 1: Write the failing test**
 
 `src/lib/pages/tree.test.ts`:
