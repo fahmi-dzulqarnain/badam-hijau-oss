@@ -55,6 +55,11 @@ test("an empty input produces an empty tree", () => {
  * Collects every occurrence. Throws if a node repeats on its own ancestor path (a live
  * cycle) or is reached twice by different paths (a duplicate) — either would hang or
  * double-count a recursive consumer such as Task 13's summariseModules.
+ *
+ * An earlier version used a `seen` set and `continue`, which is the same guard buildTree
+ * uses internally — so it terminated on any structure and could not detect the very thing
+ * its docstring claimed. A mutant with one line removed from buildTree returned a
+ * genuinely circular tree and still passed both cycle tests.
  */
 function collectIds(tree: TreeNode[]): string[] {
   const ids: string[] = [];

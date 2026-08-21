@@ -55,7 +55,8 @@ export function buildTree(rows: PageRow[]): TreeNode[] {
     // Climb to the cycle blocking this node and cut a member of *that*, rather than
     // promoting this node. Promoting the first unreachable row instead would flatten any
     // healthy subtree hanging below the cycle into extra top-level entries, and which
-    // rows got flattened would depend on the query's ordering.
+    // rows got flattened would depend on the query's ordering — the same logical tree
+    // gave 1 root or 3 roots depending on input order.
     const climbed = new Set<string>();
     let onCycle = node;
     while (!climbed.has(onCycle.id)) {
