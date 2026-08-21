@@ -1521,6 +1521,21 @@ Sanitising runs **before** heading ids are added. Doing it the other way round m
 `rehype-sanitize` rewrites our ids to `user-content-*`, silently breaking every table of
 contents anchor.
 
+**What each defence actually stops** — measured by running six payloads through the
+pipeline, then again with `rehypeSanitize` removed:
+
+| Vector | Stopped by |
+|---|---|
+| `<script>`, `<img onerror>`, `<div onclick>`, `<iframe>`, raw `<a href="javascript:">` | `remarkRehype({ allowDangerousHtml: false })` — raw HTML never enters the hast tree |
+| `[link](javascript:alert(1))`, `![x](data:text/html;base64,…)` | **`rehypeSanitize` alone** — remark parses these into real elements, and only the sanitiser strips the scheme |
+
+So the sanitiser is load-bearing, but for a narrower reason than "it removes script tags":
+its unique job is dangerous URL schemes in **legitimately parsed Markdown**. The
+consequence to carry forward: if a later phase ever sets `allowDangerousHtml: true` to let
+authors write inline HTML, `rehypeSanitize` becomes the *only* defence for all six vectors,
+and its schema — currently `defaultSchema` plus a `className` allowance on `code` — would
+need reviewing as a security boundary rather than a formatting detail.
+
 **Files:**
 - Create: `src/lib/markdown/toc.ts`, `src/lib/markdown/mermaid.ts`,
   `src/lib/markdown/wrap.ts`, `src/lib/markdown/render.ts`
@@ -1733,7 +1748,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkRehype from "remark-rehype";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema, type Options } from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeShiki from "@shikijs/rehype";
@@ -1744,7 +1759,11 @@ import { wrapTables } from "./wrap";
 
 export type RenderedDoc = { html: string; headings: Heading[] };
 
-const schema = {
+// The annotation is required, not decorative: `unified().use()` overloads on
+// `Parameters | [boolean]` (so a plugin can be disabled with `false`), and without it
+// inference collapses onto the `[boolean]` branch and fails with TS2345. Note the type is
+// exported as `Options` from rehype-sanitize — `Schema` comes from hast-util-sanitize.
+const schema: Options = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
