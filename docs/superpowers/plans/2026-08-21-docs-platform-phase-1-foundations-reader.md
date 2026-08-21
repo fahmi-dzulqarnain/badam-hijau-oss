@@ -81,7 +81,7 @@ fails at build.
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["dom", "dom.iterable", "ES2023"],
+    "lib": ["dom", "dom.iterable", "ES2024"],
     "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
