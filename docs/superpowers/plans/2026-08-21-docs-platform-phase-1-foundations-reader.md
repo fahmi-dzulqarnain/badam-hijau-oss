@@ -1285,20 +1285,18 @@ const stranger: Viewer = { id: "u-stranger", isSuperAdmin: false, memberships: [
 
 test("an all-staff page is readable by a non-member", async () => {
   await fixture("ALL_STAFF");
-  const result = await getPublishedPage({
+  const result = await getPublishedPage(stranger, {
     spaceKey: "engineering",
     path: "architecture/mqtt-contracts",
-    viewer: stranger,
   });
   expect(result?.version.markdown).toContain("One namespace.");
 });
 
 test("a members-only page is not readable by a non-member", async () => {
   await fixture("MEMBERS");
-  const result = await getPublishedPage({
+  const result = await getPublishedPage(stranger, {
     spaceKey: "engineering",
     path: "architecture/mqtt-contracts",
-    viewer: stranger,
   });
   expect(result).toBeNull();
 });
@@ -1313,10 +1311,9 @@ test("a members-only page is readable by a member", async () => {
     isSuperAdmin: false,
     memberships: [{ spaceId: space.id, role: "VIEWER" }],
   };
-  const result = await getPublishedPage({
+  const result = await getPublishedPage(viewer, {
     spaceKey: "engineering",
     path: "architecture/mqtt-contracts",
-    viewer,
   });
   expect(result?.page.title).toBe("MQTT contracts");
 });
@@ -1324,10 +1321,9 @@ test("a members-only page is readable by a member", async () => {
 test("a super admin can read a members-only page", async () => {
   await fixture("MEMBERS");
   const root: Viewer = { id: "root", isSuperAdmin: true, memberships: [] };
-  const result = await getPublishedPage({
+  const result = await getPublishedPage(root, {
     spaceKey: "engineering",
     path: "architecture/mqtt-contracts",
-    viewer: root,
   });
   expect(result).not.toBeNull();
 });
@@ -1343,18 +1339,17 @@ test("an unpublished page is not readable even by a member", async () => {
       createdById: author.id,
     },
   });
-  const result = await getPublishedPage({
+  const result = await getPublishedPage(stranger, {
     spaceKey: "engineering",
     path: "architecture/draft-only",
-    viewer: stranger,
   });
   expect(result).toBeNull();
 });
 
 test("an unreadable space key resolves to null rather than an error", async () => {
   await fixture("MEMBERS");
-  expect(await getReadableSpaceByKey("engineering", stranger)).toBeNull();
-  expect(await getReadableSpaceByKey("nonexistent", stranger)).toBeNull();
+  expect(await getReadableSpaceByKey(stranger, "engineering")).toBeNull();
+  expect(await getReadableSpaceByKey(stranger, "nonexistent")).toBeNull();
 });
 
 test("listSpacePages returns every page including unpublished ones", async () => {
@@ -1387,14 +1382,21 @@ Expected: FAIL — `Failed to resolve import "@/lib/pages/repo"`.
 - [ ] **Step 7: Create `src/lib/pages/repo.ts`**
 
 ```ts
+import { cache } from "react";
 import { db } from "@/lib/db";
 import { readableSpace } from "@/lib/authz/where";
 import type { Viewer } from "@/lib/authz/types";
 
-export async function getReadableSpaceByKey(key: string, viewer: Viewer) {
-  // TODO(phase-2): call needsAccessAudit(viewer, space) on the result and write to
-  // AuditLog. This is the single funnel every space read passes through, so it is the
-  // correct wiring point for spec §8's super-admin audit requirement.
+/**
+ * Resolves a space the viewer may read, or null. Unreadable and nonexistent give the
+ * same answer, so a title cannot leak through a status code (spec §8).
+ *
+ * TODO(phase-2): call needsAccessAudit(viewer, space) on the result and write to
+ * AuditLog. Every page read must resolve its space through here first, which makes this
+ * the right wiring point — but that is a precondition on callers, not a property of this
+ * module: listSpacePages applies its own permission filter without passing through here.
+ */
+export const getReadableSpaceByKey = cache(async (viewer: Viewer, key: string) => {
   return db.space.findFirst({
     where: readableSpace(viewer, { key }),
     select: {
@@ -1406,41 +1408,49 @@ export async function getReadableSpaceByKey(key: string, viewer: Viewer) {
       visibility: true,
     },
   });
-}
+});
 
-export async function getPublishedPage(params: {
-  spaceKey: string;
-  path: string;
-  viewer: Viewer;
-}) {
-  const space = await getReadableSpaceByKey(params.spaceKey, params.viewer);
-  if (!space) return null;
+/**
+ * One rule for this whole module: every query states its own permission predicate, even
+ * when the caller has already resolved a readable space. A reader should never have to
+ * work out whether a query is guarded by its own filter or by call ordering.
+ */
+export const getPublishedPage = cache(
+  async (viewer: Viewer, params: { spaceKey: string; path: string }) => {
+    const space = await getReadableSpaceByKey(viewer, params.spaceKey);
+    if (!space) return null;
 
-  // No `space: readableSpace(viewer)` on this query, deliberately: the space was
-  // resolved through the permission check three lines above, inside this same function.
-  // The guarantee is local, not a convention spanning a call boundary — which is the
-  // distinction that makes `listSpacePages` below take the viewer instead.
-  const page = await db.page.findFirst({
-    where: {
-      spaceId: space.id,
-      path: params.path,
-      publishedVersionId: { not: null },
-    },
-    include: {
-      publishedVersion: true,
-      owner: { select: { name: true } },
-    },
-  });
+    const page = await db.page.findFirst({
+      where: {
+        spaceId: space.id,
+        path: params.path,
+        publishedVersionId: { not: null },
+        space: readableSpace(viewer),
+      },
+      // Explicit select, never `include`. Prisma expands `include: true` into a column
+      // list at generation time, so `include` would silently start shipping every column
+      // a later phase adds — starting with Phase 2's cached render on PageVersion.
+      select: {
+        id: true,
+        title: true,
+        path: true,
+        status: true,
+        docType: true,
+        publishedAt: true,
+        reviewedAt: true,
+        owner: { select: { name: true } },
+        publishedVersion: { select: { markdown: true, gitSha: true } },
+      },
+    });
 
-  if (!page?.publishedVersion) return null;
+    if (!page?.publishedVersion) return null;
 
-  return { space, page, version: page.publishedVersion };
-}
+    const { publishedVersion, ...rest } = page;
+    return { space, page: rest, version: publishedVersion };
+  },
+);
 
-export async function listSpacePages(viewer: Viewer, spaceId: string) {
-  // Takes the viewer and re-asserts readability through the relation rather than
-  // trusting that the caller resolved the space id through a permission check first.
-  // A bare spaceId parameter would be safe only by convention, which spec §8 rejects.
+export const listSpacePages = cache(async (viewer: Viewer, spaceId: string) => {
   return db.page.findMany({
     where: { spaceId, space: readableSpace(viewer) },
     orderBy: [{ position: "asc" }, { title: "asc" }],
@@ -1455,8 +1465,26 @@ export async function listSpacePages(viewer: Viewer, spaceId: string) {
       publishedVersionId: true,
     },
   });
-}
+});
 ```
+
+**Three things here are load-bearing, not style.**
+
+`cache()` gives request-level memoization: the reader's layout and page both resolve the
+same space, and without it that is a duplicate query every render (measured: five queries
+per reader render, two of them byte-identical). It keys on argument *identity*, so it only
+works if the `Viewer` object is stable across a render — which is why Task 7 wraps
+`loadViewer` in `cache()` too. Outside a render scope it calls straight through without
+memoizing, so the integration tests are unaffected.
+
+Explicit `select` rather than `include`: Prisma expands `include: true` into a column list
+at generation time, so `include` would silently begin shipping Phase 2's cached-render
+column on every page read, with no diff to review.
+
+Every query carries its own predicate. An earlier draft justified omitting it from the page
+query because the space had been resolved two lines above. That was safe but unstateable —
+the module argued both sides of its own rule twenty lines apart, which makes the next query
+site a coin flip.
 
 - [ ] **Step 8: Run the test to verify it passes**
 
@@ -1745,6 +1773,12 @@ the app, so this must not do a query per level.
 - Create: `src/lib/pages/tree.ts`
 - Test: `src/lib/pages/tree.test.ts`
 
+`status` and `docType` are declared as `string` here. That is valid — Prisma generates
+`DocStatus` as a string union, so the assignment works and keeps working as later phases
+add members. The cost is that a component switching on status gets no exhaustiveness
+check. If that becomes a real need, `import type { $Enums } from "@prisma/client"` is
+type-only and leaves `buildTree` pure; do it while this file is small rather than after.
+
 - [ ] **Step 1: Write the failing test**
 
 `src/lib/pages/tree.test.ts`:
@@ -2013,12 +2047,18 @@ Every server component that reads data calls `requireViewer()`. Nothing else con
 `Viewer`.
 
 ```ts
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import type { Viewer } from "@/lib/authz/types";
 
-export async function loadViewer(): Promise<Viewer | null> {
+/**
+ * Wrapped in `cache()` so one render sees one Viewer OBJECT, not just one equal value.
+ * The repository's own `cache()` calls key on argument identity, so a fresh Viewer per
+ * call would miss every time and silently make that memoization useless.
+ */
+export const loadViewer = cache(async (): Promise<Viewer | null> => {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) return null;
@@ -2039,7 +2079,7 @@ export async function loadViewer(): Promise<Viewer | null> {
     isSuperAdmin: user.isSuperAdmin,
     memberships: user.memberships,
   };
-}
+});
 
 export async function requireViewer(): Promise<Viewer> {
   const viewer = await loadViewer();
@@ -2714,7 +2754,7 @@ export default async function SpaceLayout({
   const { space: spaceKey } = await params;
   const viewer = await requireViewer();
 
-  const space = await getReadableSpaceByKey(spaceKey, viewer);
+  const space = await getReadableSpaceByKey(viewer, spaceKey);
   // Unreadable and nonexistent are the same answer, so titles do not leak (spec §8).
   if (!space) notFound();
 
@@ -3339,10 +3379,9 @@ export default async function DocPage({
   const { space: spaceKey, path } = await params;
   const viewer = await requireViewer();
 
-  const result = await getPublishedPage({
+  const result = await getPublishedPage(viewer, {
     spaceKey,
     path: path.join("/"),
-    viewer,
   });
   if (!result) notFound();
 
@@ -3537,9 +3576,10 @@ Expected: 4 passed.
 Append to the file:
 
 ```ts
-export async function listRecentlyPublished(spaceId: string, limit = 5) {
+export const listRecentlyPublished = cache(
+  async (viewer: Viewer, spaceId: string, limit = 5) => {
   return db.page.findMany({
-    where: { spaceId, publishedAt: { not: null } },
+    where: { spaceId, publishedAt: { not: null }, space: readableSpace(viewer) },
     orderBy: { publishedAt: "desc" },
     take: limit,
     select: {
@@ -3550,7 +3590,7 @@ export async function listRecentlyPublished(spaceId: string, limit = 5) {
       publishedVersion: { select: { author: { select: { name: true } } } },
     },
   });
-}
+});
 ```
 
 - [ ] **Step 6: Create `src/app/(reader)/[space]/page.tsx`**
@@ -3576,11 +3616,11 @@ export default async function SpaceLanding({
   const { space: spaceKey } = await params;
   const viewer = await requireViewer();
 
-  const space = await getReadableSpaceByKey(spaceKey, viewer);
+  const space = await getReadableSpaceByKey(viewer, spaceKey);
   if (!space) notFound();
 
   const modules = summariseModules(buildTree(await listSpacePages(viewer, space.id)));
-  const recent = await listRecentlyPublished(space.id);
+  const recent = await listRecentlyPublished(viewer, space.id);
   const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
 
   return (
@@ -3839,6 +3879,15 @@ All must hold before Phase 2 starts:
 - [ ] An unpublished page is unreachable by URL
 - [ ] The Alpha badge and `0.1.0+<sha>` build string render in the shell
 - [ ] Report bug stores a row with the route, version and viewport captured automatically
+
+## Rejected on evidence: `import "server-only"`
+
+A review recommended adding `import "server-only"` to `src/lib/pages/repo.ts` so an
+accidental client-component import fails with a clear error. Checked: the package is not
+installed (`ERR_MODULE_NOT_FOUND`), and outside the `react-server` resolution condition it
+resolves to a module that throws by design — so adding it breaks the Vitest run, which
+imports this file directly. Do not add it in a later task without also solving the test
+resolution.
 
 ## Migration convention, learned in Task 2
 

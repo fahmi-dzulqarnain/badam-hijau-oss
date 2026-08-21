@@ -28,6 +28,32 @@ codebase that does not exist yet produces a plan that gets rewritten.
 - **Phase 6 last** because the systems facet is only useful once there are documents to
   tag, and attachments are only useful once there is an editor to attach from.
 
+## Phase 2 landmine, measured during Phase 1
+
+Phase 2's page move rewrites descendant `path` values. `Page_spaceId_path_key` is a bare
+unique **index**, not a constraint, so `SET CONSTRAINTS ... DEFERRED` can never apply to
+it — and Postgres checks it row by row *even within a single statement*. Confirmed by
+probe:
+
+- A one-statement **swap** of two sibling paths fails: `duplicate key value violates
+  unique constraint "Page_spaceId_path_key"`.
+- A one-statement **subtree prefix rewrite** commits cleanly, because the new path set
+  shares a prefix no moving row currently holds, so it is disjoint from every unwritten
+  old path.
+
+So a subtree move is safe and a swap is not. Three rules for whoever builds it:
+
+1. Do the descendant rewrite in **one statement**. Prisma's `updateMany` cannot use a
+   column expression, so this is `$executeRaw`.
+2. Reject a rename whose target path is already occupied **up front**, rather than
+   attempting a two-phase shuffle.
+3. Take a `pg_advisory_xact_lock` on the space id so concurrent moves in one space
+   serialise, instead of deadlocking on arbitrary row-lock order.
+
+Do **not** convert the index to a deferrable constraint pre-emptively: Prisma cannot
+express `DEFERRABLE`, so it would be hand-written SQL that reads as permanent drift on
+every `migrate dev`, and it is no cheaper to do now than then.
+
 ## Conventions fixed in phase 1
 
 These hold for every later phase. Changing one is a decision, not a detail.
