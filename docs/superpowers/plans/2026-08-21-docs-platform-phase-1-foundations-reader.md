@@ -29,10 +29,14 @@ deployment; only local development differs.
 **Conventions this task fixes for the whole project:** npm is the package manager, and
 `package-lock.json` **is committed** — reproducible installs matter more than a tidy diff.
 
-**Expect Next to rewrite `tsconfig.json` on every build.** Next 16 unconditionally forces
-`"jsx": "react-jsx"` (it logs this as a mandatory change) and appends
-`.next/dev/types/**/*.ts` to `include`. Both are correct; do not fight them, and do not
-mistake them for drift in a later task.
+**Why `tsconfig.json` looks the way it does.** Next 16 forces `"jsx": "react-jsx"` (logged
+as a mandatory change) and appends `.next/dev/types/**/*.ts` to `include`. The committed
+config already satisfies both, so builds do **not** rewrite it and `git status` stays
+clean. Remove either and Next will put it back — so if a build ever does dirty this file,
+that is real drift worth reading, not noise to ignore.
+
+**`skipLibCheck: true` is load-bearing.** Turning it off surfaces six pre-existing errors
+from Next's own `.d.ts` files and from chai/vitest. Do not "tighten" it in a later task.
 
 This task produces configuration, not behaviour, so it has no test. It is verified by a
 typecheck and a production build — both must pass before you commit.
@@ -58,12 +62,18 @@ Also set `"private": true` and `"version": "0.1.0"` — Task 8 reads that versio
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   }
 }
 ```
+
+`next typegen` is not decoration. Without it, `tsc --noEmit` on a fresh clone silently
+skips route checking entirely: `next-env.d.ts` imports `./.next/types/routes.d.ts`, and
+when that file is absent `skipLibCheck` swallows the unresolved import, so `typedRoutes`
+degrades to a no-op with no warning. A bad `Link href` then passes typecheck and only
+fails at build.
 
 - [ ] **Step 3: Create `tsconfig.json`**
 
@@ -71,7 +81,7 @@ Also set `"private": true` and `"version": "0.1.0"` — Task 8 reads that versio
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["dom", "dom.iterable", "ES2022"],
+    "lib": ["dom", "dom.iterable", "ES2023"],
     "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
@@ -114,7 +124,7 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],
   },
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
@@ -3378,6 +3388,11 @@ printf 'ALLOW_TEST_LOGIN=""   # set to 1 for e2e runs only, never in a deployed 
 
 Port 3100 is confirmed free on this machine and approved for use (other local services
 occupy 80, 3317, 5432, 8080).
+
+**Convention:** Playwright specs live in `e2e/` and are named `*.spec.ts`. Vitest's
+`include` only covers `src/**` and `tests/**`, so it can never import a Playwright spec —
+`test()` called outside Playwright's runner throws an opaque error, and this separation is
+what prevents it. Do not move E2E files under `tests/`.
 
 ```ts
 import { defineConfig } from "@playwright/test";
