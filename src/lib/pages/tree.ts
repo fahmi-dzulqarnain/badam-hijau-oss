@@ -12,17 +12,17 @@ export type PageRow = {
 export type TreeNode = PageRow & { children: TreeNode[] };
 
 export function buildTree(rows: PageRow[]): TreeNode[] {
+  // Keyed by id, so duplicate rows collapse to one node. Iterating this map rather than
+  // `rows` below is what makes that safe: pushing the same node object twice would build
+  // a structure a recursive consumer cannot walk.
   const nodes = new Map<string, TreeNode>();
   for (const row of rows) {
     nodes.set(row.id, { ...row, children: [] });
   }
 
   const roots: TreeNode[] = [];
-  for (const row of rows) {
-    const node = nodes.get(row.id);
-    if (!node) continue;
-
-    const parent = row.parentId === null ? undefined : nodes.get(row.parentId);
+  for (const node of nodes.values()) {
+    const parent = node.parentId === null ? undefined : nodes.get(node.parentId);
     if (parent) {
       parent.children.push(node);
     } else {
@@ -47,20 +47,30 @@ export function buildTree(rows: PageRow[]): TreeNode[] {
 
   // A parentId cycle leaves every member attached to a parent and none reachable from a
   // root, so without this the function would return an empty tree and the navigation rail
-  // would silently disappear. Detach one member per cycle and surface it as a root, so the
-  // result is always finite and always contains every input row.
+  // would silently disappear.
   let reachable = walkFromRoots();
-  for (const row of rows) {
-    if (reachable.has(row.id)) continue;
+  for (const node of nodes.values()) {
+    if (reachable.has(node.id)) continue;
 
-    const node = nodes.get(row.id);
-    if (!node) continue;
-
-    const parent = row.parentId === null ? undefined : nodes.get(row.parentId);
-    if (parent) {
-      parent.children = parent.children.filter((child) => child.id !== node.id);
+    // Climb to the cycle blocking this node and cut a member of *that*, rather than
+    // promoting this node. Promoting the first unreachable row instead would flatten any
+    // healthy subtree hanging below the cycle into extra top-level entries, and which
+    // rows got flattened would depend on the query's ordering.
+    const climbed = new Set<string>();
+    let onCycle = node;
+    while (!climbed.has(onCycle.id)) {
+      climbed.add(onCycle.id);
+      const next = onCycle.parentId === null ? undefined : nodes.get(onCycle.parentId);
+      if (!next) break;
+      onCycle = next;
     }
-    roots.push(node);
+
+    const parent =
+      onCycle.parentId === null ? undefined : nodes.get(onCycle.parentId);
+    if (parent) {
+      parent.children = parent.children.filter((child) => child.id !== onCycle.id);
+    }
+    roots.push(onCycle);
     reachable = walkFromRoots();
   }
 

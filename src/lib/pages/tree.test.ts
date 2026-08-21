@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { buildTree, type PageRow } from "./tree";
+import { buildTree, type PageRow, type TreeNode } from "./tree";
 
 function row(over: Partial<PageRow> & { id: string }): PageRow {
   return {
@@ -51,17 +51,21 @@ test("an empty input produces an empty tree", () => {
   expect(buildTree([])).toEqual([]);
 });
 
-/** Walks the whole tree. Loops forever if buildTree ever returns a cyclic structure. */
-function collectIds(tree: ReturnType<typeof buildTree>): string[] {
-  const seen = new Set<string>();
-  const stack = [...tree];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || seen.has(node.id)) continue;
-    seen.add(node.id);
-    for (const child of node.children) stack.push(child);
-  }
-  return [...seen].sort();
+/**
+ * Collects every occurrence. Throws if a node repeats on its own ancestor path (a live
+ * cycle) or is reached twice by different paths (a duplicate) — either would hang or
+ * double-count a recursive consumer such as Task 13's summariseModules.
+ */
+function collectIds(tree: TreeNode[]): string[] {
+  const ids: string[] = [];
+  const visit = (node: TreeNode, path: Set<string>) => {
+    if (path.has(node.id)) throw new Error(`cycle: ${node.id} is its own ancestor`);
+    ids.push(node.id);
+    const next = new Set(path).add(node.id);
+    for (const child of node.children) visit(child, next);
+  };
+  for (const root of tree) visit(root, new Set());
+  return ids.sort();
 }
 
 test("a parentId cycle still yields every row, reachable and finite", () => {
@@ -93,4 +97,16 @@ test("a page that is its own parent becomes a childless root", () => {
   const tree = buildTree([row({ id: "self", parentId: "self" })]);
   expect(tree.map((n) => n.id)).toEqual(["self"]);
   expect(tree[0]?.children).toEqual([]);
+});
+
+test("a subtree hanging below a cycle keeps its shape", () => {
+  const tree = buildTree([
+    row({ id: "a", parentId: "b" }),
+    row({ id: "b", parentId: "a" }),
+    row({ id: "c", parentId: "a" }),
+    row({ id: "d", parentId: "c" }),
+  ]);
+
+  expect(collectIds(tree)).toEqual(["a", "b", "c", "d"]);
+  expect(tree).toHaveLength(1);
 });
