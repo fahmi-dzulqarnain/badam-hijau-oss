@@ -1108,9 +1108,13 @@ git commit -m "feat: add space permission module"
 
 **Files:**
 - Modify: `prisma/schema.prisma`
-- Modify: `tests/setup/reset.ts`
 - Create: `src/lib/pages/repo.ts`
 - Test: `tests/integration/pages-repo.test.ts`
+
+**`tests/setup/reset.ts` needs no change.** An earlier draft of this task edited a
+hardcoded `TRUNCATE` list here. Task 2 replaced that list with a `pg_tables` introspection
+precisely so this edit would never be needed again — new tables are picked up
+automatically. Editing it back to a literal list is a regression.
 
 `docType` and `status` are in this migration even though Phase 3 owns the lifecycle logic,
 because adding enum columns later is a migration this saves.
@@ -1220,15 +1224,17 @@ npx prisma migrate dev --name pages
 
 Expected: a new migration directory and a regenerated client.
 
-- [ ] **Step 4: Add the new tables to the truncate list**
+- [ ] **Step 4: Confirm the test harness picked up the new tables**
 
-Modify `tests/setup/reset.ts` — replace the `TRUNCATE` statement:
+Nothing to edit. `resetDb` introspects `pg_tables`, so `Page` and `PageVersion` are
+truncated automatically. Confirm it rather than assuming:
 
-```ts
-  await db.$executeRawUnsafe(
-    'TRUNCATE TABLE "BugReport", "PageVersion", "Page", "SpaceMembership", "Space", "User" CASCADE',
-  );
+```bash
+npm test -- tests/integration/spaces.test.ts
 ```
+
+Expected: still 2 passed. If a later test leaks rows between files, the introspection is
+the first thing to check — but it should need no maintenance.
 
 - [ ] **Step 5: Write the failing test**
 
@@ -1410,6 +1416,10 @@ export async function getPublishedPage(params: {
   const space = await getReadableSpaceByKey(params.spaceKey, params.viewer);
   if (!space) return null;
 
+  // No `space: readableSpace(viewer)` on this query, deliberately: the space was
+  // resolved through the permission check three lines above, inside this same function.
+  // The guarantee is local, not a convention spanning a call boundary — which is the
+  // distinction that makes `listSpacePages` below take the viewer instead.
   const page = await db.page.findFirst({
     where: {
       spaceId: space.id,
@@ -1451,7 +1461,7 @@ export async function listSpacePages(viewer: Viewer, spaceId: string) {
 - [ ] **Step 8: Run the test to verify it passes**
 
 Run: `npm test -- tests/integration/pages-repo.test.ts`
-Expected: 7 passed.
+Expected: 8 passed.
 
 - [ ] **Step 9: Commit**
 
