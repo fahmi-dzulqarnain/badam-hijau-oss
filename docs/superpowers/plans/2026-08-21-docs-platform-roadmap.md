@@ -28,6 +28,25 @@ codebase that does not exist yet produces a plan that gets rewritten.
 - **Phase 6 last** because the systems facet is only useful once there are documents to
   tag, and attachments are only useful once there is an editor to attach from.
 
+## Phase 4 constraint: Mermaid hydration decodes what the sanitiser escaped
+
+Phase 1's pipeline turns a ```mermaid fence into
+`<div class="mermaid-source">…</div>` with the text HTML-escaped, so it is inert in the
+document. Measured output for a hostile diagram label:
+
+```
+<div class="mermaid-source">graph TD\nA["&#x3C;/div>&#x3C;script>alert(1)&#x3C;/script>"]</div>
+```
+
+Phase 4 hydrates these by reading `textContent`, which **decodes the escaping** — Mermaid
+receives the literal `</div><script>alert(1)</script>` as diagram source. Whether that
+executes is then entirely Mermaid's decision, not ours.
+
+So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`, which sanitises
+labels and blocks click handlers — not the default `"loose"`), and must not use
+`innerHTML` to move the source around. Treat the escaping in the document as protecting
+the *document*, not as having sanitised the *diagram source*.
+
 ## Phase 2 landmine, measured during Phase 1
 
 Phase 2's page move rewrites descendant `path` values. `Page_spaceId_path_key` is a bare
