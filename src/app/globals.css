@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   --ground: #F7F9F6;
   --surface: #FFFFFF;
   --surface-2: #F1F5F0;
@@ -14,10 +15,13 @@
   --amber-wash: #FAF0DD;
   --code-bg: #F1F5F0;
 
-  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --serif: "Newsreader", ui-serif, Georgia, serif;
-  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --sans: var(--font-plex-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --serif: var(--font-newsreader), ui-serif, Georgia, serif;
+  --mono: var(--font-plex-mono), ui-monospace, Menlo, monospace;
 }
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -81,10 +85,16 @@ a { color: inherit; }
   :root:not([data-theme="light"]) .shiki span {
     color: var(--shiki-dark) !important;
     background-color: var(--shiki-dark-bg) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+    text-decoration: var(--shiki-dark-text-decoration) !important;
   }
 }
 :root[data-theme="dark"] .shiki,
 :root[data-theme="dark"] .shiki span {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
 }
