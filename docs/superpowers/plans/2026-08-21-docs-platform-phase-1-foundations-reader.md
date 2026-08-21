@@ -15,6 +15,12 @@ container runtime, so Phase 1 runs against the local Homebrew `postgresql@16` se
 port 5432, provisioned by `scripts/setup-db.sh`. Spec §17 still calls for Docker in
 deployment; only local development differs.
 
+**Working rule for whoever executes this plan:** create a **new commit** for every change,
+including review fixes. Never `git commit --amend`. Amending is only safe when nothing has
+landed on top, and plan-document commits land between tasks — an amend has already folded
+a source change into a docs commit once. A longer history costs nothing; a mixed commit
+costs a bisect.
+
 **Known divergence from the spec, deliberate:** §8 names a function `readableSpaceIds`. This plan implements `readableSpaceWhere(viewer)` returning a Prisma filter instead, because returning ids would require loading every space first and would let a caller forget to apply them. Same guarantee, enforced in SQL.
 
 ---
