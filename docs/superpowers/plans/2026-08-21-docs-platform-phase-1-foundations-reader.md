@@ -1470,12 +1470,27 @@ export const listSpacePages = cache(async (viewer: Viewer, spaceId: string) => {
 
 **Three things here are load-bearing, not style.**
 
-`cache()` gives request-level memoization: the reader's layout and page both resolve the
-same space, and without it that is a duplicate query every render (measured: five queries
-per reader render, two of them byte-identical). It keys on argument *identity*, so it only
-works if the `Viewer` object is stable across a render — which is why Task 7 wraps
-`loadViewer` in `cache()` too. Outside a render scope it calls straight through without
-memoizing, so the integration tests are unaffected.
+`cache()` gives request-level memoization, but **only inside a real React Server Component
+render**, and it is worth knowing exactly when it does nothing:
+
+- Under the default module condition — which is what Vitest, Route Handlers, Server Actions
+  and any plain Node context resolve — React's shipped `cache` is a pure passthrough:
+  `function (fn) { return function () { return fn.apply(null, arguments); }; }`. It never
+  memoizes, and never throws. Verified by reading `node_modules/react/cjs/
+  react.development.js` and by observing two identical queries from two calls with the same
+  argument reference.
+- Under the `react-server` condition with an active render dispatcher, it keys through a
+  per-argument `WeakMap`/`Map` chain — so memoization is by argument **identity**, not
+  value. Two structurally-equal but distinct `Viewer` objects both miss.
+
+Two consequences. First, this is why Task 7 wraps `loadViewer` in `cache()`: one render must
+yield one `Viewer` *object*, or every lookup here misses even in RSC. Second, **do not try
+to verify this memoization from a unit test** — it is inert there by design, and a test
+asserting one query would fail for reasons that have nothing to do with this code.
+
+The measured saving it will deliver once Tasks 10–13 render for real: five queries per
+reader render, two of them byte-identical, and four of five duplicated on the landing
+route.
 
 Explicit `select` rather than `include`: Prisma expands `include: true` into a column list
 at generation time, so `include` would silently begin shipping Phase 2's cached-render
