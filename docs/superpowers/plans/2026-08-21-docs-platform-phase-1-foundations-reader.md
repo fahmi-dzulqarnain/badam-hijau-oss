@@ -476,8 +476,10 @@ model BugReport {
   // spaceId/pageId/versionId are captured context, deliberately without foreign keys:
   // their value is highest when the referenced page is gone, so SetNull would erase the
   // only clue and Restrict/Cascade would block deletion or destroy the report. routePath
-  // is the durable breadcrumb. Task 11 validates these at write time; readers must
-  // tolerate a dangling id.
+  // is the durable breadcrumb. These are DERIVED SERVER-SIDE from routePath through the
+  // permission-filtered repository (see src/lib/bugs/context.ts) and never accepted from
+  // the client, so they cannot be forged and need no validation. Readers must still
+  // tolerate a dangling id, since the page may be deleted later.
   spaceId      String?
   pageId       String?
   versionId    String?
@@ -1439,7 +1441,7 @@ export const getPublishedPage = cache(
         publishedAt: true,
         reviewedAt: true,
         owner: { select: { name: true } },
-        publishedVersion: { select: { markdown: true, gitSha: true } },
+        publishedVersion: { select: { id: true, markdown: true, gitSha: true } },
       },
     });
 
@@ -3729,10 +3731,18 @@ Context is captured, not requested. Forwarding to a webhook is out of Phase 1 sc
 (Phase 6 adds the queue); the report is stored, which is the part that must never be lost.
 
 **Files:**
-- Create: `src/lib/bugs/schema.ts`, `src/lib/bugs/create.ts`
+- Create: `src/lib/bugs/schema.ts`, `src/lib/bugs/context.ts`, `src/lib/bugs/create.ts`
 - Create: `src/app/api/bugs/route.ts`
 - Replace: `src/components/BugReportDialog.tsx`
-- Test: `src/lib/bugs/schema.test.ts`, `tests/integration/bug-report.test.ts`
+- Test: `src/lib/bugs/schema.test.ts`, `tests/integration/bug-context.test.ts`,
+  `tests/integration/bug-report.test.ts`
+
+**Page context is derived, never accepted.** The client sends only what it alone knows —
+what happened, the route, the viewport, the user agent, the build. Which space, page and
+version that route refers to is resolved on the server through the permission-filtered
+repository. Two reasons: a client-supplied `pageId` could name a page in a space the
+reporter cannot read, which an admin would then see in the report list; and deriving it
+means there is nothing to validate, so no validation can be forgotten.
 
 - [ ] **Step 1: Write the failing validation test**
 
@@ -3767,7 +3777,21 @@ test("optional fields default to null rather than undefined", () => {
   const parsed = bugReportInput.parse(valid);
   expect(parsed.expected).toBeNull();
   expect(parsed.consoleError).toBeNull();
-  expect(parsed.pageId).toBeNull();
+});
+
+test("silently ignores client-supplied page context", () => {
+  // The client must not be able to attach these. Zod strips unknown keys by default, so
+  // this asserts the schema is not accidentally widened to passthrough later.
+  const parsed = bugReportInput.parse({
+    ...valid,
+    pageId: "forged",
+    spaceId: "forged",
+    versionId: "forged",
+  }) as Record<string, unknown>;
+
+  expect(parsed.pageId).toBeUndefined();
+  expect(parsed.spaceId).toBeUndefined();
+  expect(parsed.versionId).toBeUndefined();
 });
 
 test("rejects a report with no route path", () => {
@@ -3793,9 +3817,10 @@ export const bugReportInput = z.object({
   summary: z.string().trim().min(1).max(5000),
   expected: optionalText(5000),
   routePath: z.string().min(1).max(2000),
-  spaceId: optionalText(64),
-  pageId: optionalText(64),
-  versionId: optionalText(64),
+  // No spaceId/pageId/versionId here, deliberately. They are derived server-side from
+  // routePath (src/lib/bugs/context.ts). Accepting them from the client would let a
+  // reporter tag a report with a page from a space they cannot read, which an admin would
+  // then see in the report list.
   appVersion: z.string().min(1).max(64),
   gitSha: optionalText(64),
   userAgent: z.string().min(1).max(1000),
@@ -3809,7 +3834,7 @@ export type BugReportInput = z.infer<typeof bugReportInput>;
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `npm test -- src/lib/bugs/schema.test.ts`
-Expected: 5 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Write the failing storage test**
 
@@ -3832,9 +3857,6 @@ const input = {
   summary: "The TOC jumps to the wrong heading",
   expected: null,
   routePath: "/engineering/decisions/adr-0042",
-  spaceId: null,
-  pageId: null,
-  versionId: null,
   appVersion: "0.1.0",
   gitSha: "df0ef11",
   userAgent: "Mozilla/5.0",
@@ -3842,9 +3864,11 @@ const input = {
   consoleError: null,
 };
 
+const noContext = { spaceId: null, pageId: null, versionId: null };
+
 test("stores a report as NEW against its reporter", async () => {
   const user = await reporter();
-  const report = await createBugReport(user.id, input);
+  const report = await createBugReport(user.id, input, noContext);
 
   expect(report.status).toBe("NEW");
   expect(report.reporterId).toBe(user.id);
@@ -3853,10 +3877,11 @@ test("stores a report as NEW against its reporter", async () => {
 
 test("keeps the captured context verbatim", async () => {
   const user = await reporter();
-  const report = await createBugReport(user.id, {
-    ...input,
-    consoleError: "TypeError: x is not a function",
-  });
+  const report = await createBugReport(
+    user.id,
+    { ...input, consoleError: "TypeError: x is not a function" },
+    noContext,
+  );
 
   const stored = await db.bugReport.findUniqueOrThrow({ where: { id: report.id } });
   expect(stored.routePath).toBe("/engineering/decisions/adr-0042");
@@ -3864,10 +3889,24 @@ test("keeps the captured context verbatim", async () => {
   expect(stored.consoleError).toBe("TypeError: x is not a function");
 });
 
+test("stores the server-derived context alongside the report", async () => {
+  const user = await reporter();
+  const report = await createBugReport(user.id, input, {
+    spaceId: "sp-1",
+    pageId: "pg-1",
+    versionId: "ver-1",
+  });
+
+  const stored = await db.bugReport.findUniqueOrThrow({ where: { id: report.id } });
+  expect(stored.spaceId).toBe("sp-1");
+  expect(stored.pageId).toBe("pg-1");
+  expect(stored.versionId).toBe("ver-1");
+});
+
 test("several reports from one user are all kept", async () => {
   const user = await reporter();
-  await createBugReport(user.id, input);
-  await createBugReport(user.id, { ...input, summary: "Second problem" });
+  await createBugReport(user.id, input, noContext);
+  await createBugReport(user.id, { ...input, summary: "Second problem" }, noContext);
 
   expect(await db.bugReport.count()).toBe(2);
 });
@@ -3878,27 +3917,197 @@ test("several reports from one user are all kept", async () => {
 Run: `npm test -- tests/integration/bug-report.test.ts`
 Expected: FAIL — `Failed to resolve import "@/lib/bugs/create"`.
 
-- [ ] **Step 7: Create `src/lib/bugs/create.ts`**
+- [ ] **Step 6b: Create `src/lib/bugs/context.ts`**
 
-`spaceId`, `pageId` and `versionId` carry no foreign keys by design (see the schema
-comment in Task 2). Validate them here at write time so client-supplied garbage is never
-stored, and let readers tolerate an id that later dangles.
+```ts
+import { getPublishedPage, getReadableSpaceByKey } from "@/lib/pages/repo";
+import type { Viewer } from "@/lib/authz/types";
+
+export type ReportContext = {
+  spaceId: string | null;
+  pageId: string | null;
+  versionId: string | null;
+};
+
+const NONE: ReportContext = { spaceId: null, pageId: null, versionId: null };
+
+/**
+ * Works out which space and page a report came from, using the route the reporter was on.
+ *
+ * Derived here rather than accepted from the client, deliberately. A client-supplied
+ * pageId could name a page in a space the reporter cannot read, and an admin reading the
+ * report list would then see an id that leaked out of a space that reporter had no access
+ * to. Resolving through the permission-filtered repository makes that impossible by
+ * construction — and removes any need to validate these at all.
+ *
+ * Returns nulls rather than throwing. A report from an unrecognised route is still worth
+ * keeping, and routePath is the durable breadcrumb either way.
+ */
+export async function resolveReportContext(
+  viewer: Viewer,
+  routePath: string,
+): Promise<ReportContext> {
+  const [spaceKey, ...rest] = routePath.split("/").filter(Boolean);
+  if (!spaceKey) return NONE;
+
+  const space = await getReadableSpaceByKey(viewer, spaceKey);
+  if (!space) return NONE;
+
+  if (rest.length === 0) {
+    return { spaceId: space.id, pageId: null, versionId: null };
+  }
+
+  const found = await getPublishedPage(viewer, { spaceKey, path: rest.join("/") });
+  if (!found) return { spaceId: space.id, pageId: null, versionId: null };
+
+  return { spaceId: space.id, pageId: found.page.id, versionId: found.version.id };
+}
+```
+
+- [ ] **Step 6c: Write and run the context tests**
+
+`tests/integration/bug-context.test.ts`:
+
+```ts
+import { beforeEach, expect, test } from "vitest";
+import { db, resetDb } from "../setup/reset";
+import { resolveReportContext } from "@/lib/bugs/context";
+import type { Viewer } from "@/lib/authz/types";
+
+beforeEach(resetDb);
+
+const stranger: Viewer = { id: "nobody", isSuperAdmin: false, memberships: [] };
+
+async function fixture() {
+  const author = await db.user.create({
+    data: { email: "author@example.com", name: "Author" },
+  });
+  const space = await db.space.create({
+    data: { key: "engineering", name: "Engineering", initials: "EN", visibility: "MEMBERS" },
+  });
+  const page = await db.page.create({
+    data: {
+      spaceId: space.id,
+      slug: "mqtt",
+      path: "architecture/mqtt",
+      title: "MQTT",
+      createdById: author.id,
+      status: "CURRENT",
+    },
+  });
+  const version = await db.pageVersion.create({
+    data: {
+      pageId: page.id,
+      title: "MQTT",
+      markdown: "hi",
+      status: "CURRENT",
+      authorId: author.id,
+    },
+  });
+  await db.page.update({
+    where: { id: page.id },
+    data: { publishedVersionId: version.id, publishedAt: new Date() },
+  });
+
+  const member: Viewer = {
+    id: author.id,
+    isSuperAdmin: false,
+    memberships: [{ spaceId: space.id, role: "VIEWER" }],
+  };
+  await db.spaceMembership.create({
+    data: { spaceId: space.id, userId: author.id, role: "VIEWER" },
+  });
+
+  return { space, page, version, member };
+}
+
+test("resolves space, page and version from a page route", async () => {
+  const { space, page, version, member } = await fixture();
+
+  expect(await resolveReportContext(member, "/engineering/architecture/mqtt")).toEqual({
+    spaceId: space.id,
+    pageId: page.id,
+    versionId: version.id,
+  });
+});
+
+test("resolves the space alone from a space route", async () => {
+  const { space, member } = await fixture();
+
+  expect(await resolveReportContext(member, "/engineering")).toEqual({
+    spaceId: space.id,
+    pageId: null,
+    versionId: null,
+  });
+});
+
+test("gives a non-member nothing, even for a real page", async () => {
+  await fixture();
+
+  // The whole point: a reporter cannot attach context from a space they cannot read.
+  expect(await resolveReportContext(stranger, "/engineering/architecture/mqtt")).toEqual({
+    spaceId: null,
+    pageId: null,
+    versionId: null,
+  });
+});
+
+test("returns nulls for an unrecognised route rather than throwing", async () => {
+  const { member } = await fixture();
+
+  expect(await resolveReportContext(member, "/")).toEqual({
+    spaceId: null,
+    pageId: null,
+    versionId: null,
+  });
+  expect(await resolveReportContext(member, "/nonexistent/page")).toEqual({
+    spaceId: null,
+    pageId: null,
+    versionId: null,
+  });
+});
+
+test("keeps the space when the page path does not resolve", async () => {
+  const { space, member } = await fixture();
+
+  expect(await resolveReportContext(member, "/engineering/gone/missing")).toEqual({
+    spaceId: space.id,
+    pageId: null,
+    versionId: null,
+  });
+});
+```
+
+Run: `npm test -- tests/integration/bug-context.test.ts`
+Expected: 5 passed.
+
+- [ ] **Step 7: Create `src/lib/bugs/create.ts`**
 
 ```ts
 import { db } from "@/lib/db";
+import type { ReportContext } from "./context";
 import type { BugReportInput } from "./schema";
 
-export async function createBugReport(reporterId: string, input: BugReportInput) {
+export async function createBugReport(
+  reporterId: string,
+  input: BugReportInput,
+  context: ReportContext,
+) {
   return db.bugReport.create({
-    data: { reporterId, ...input },
+    data: { reporterId, ...input, ...context },
   });
 }
 ```
 
+`context` is a separate parameter rather than folded into `input` so the type system keeps
+the two apart: `input` is client-supplied and validated, `context` is server-derived and
+trusted. Merging them would make it possible to pass a client value where a derived one
+belongs without anything complaining.
+
 - [ ] **Step 8: Run it to verify it passes**
 
 Run: `npm test -- tests/integration/bug-report.test.ts`
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 9: Create `src/app/api/bugs/route.ts`**
 
@@ -3906,6 +4115,7 @@ Expected: 3 passed.
 import { NextResponse } from "next/server";
 import { loadViewer } from "@/lib/auth/viewer";
 import { bugReportInput } from "@/lib/bugs/schema";
+import { resolveReportContext } from "@/lib/bugs/context";
 import { createBugReport } from "@/lib/bugs/create";
 
 export async function POST(request: Request) {
@@ -3922,7 +4132,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const report = await createBugReport(viewer.id, parsed.data);
+  const context = await resolveReportContext(viewer, parsed.data.routePath);
+  const report = await createBugReport(viewer.id, parsed.data, context);
   return NextResponse.json({ id: report.id }, { status: 201 });
 }
 ```
