@@ -164,3 +164,103 @@
 
 @media (max-width: 1180px) { .shell { grid-template-columns: 262px minmax(0, 1fr); } }
 @media (max-width: 860px)  { .shell { grid-template-columns: minmax(0, 1fr); } .rail-l { display: none; } }
+
+/* Only reachable below 860px, where .rail-l (and its Report bug button) is hidden. */
+.bugbtn-compact { display: none; }
+
+@media (max-width: 860px) {
+  .bugbtn-compact {
+    display: block;
+    margin-left: auto;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    cursor: pointer;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+  }
+}
+
+.bugdim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+
+.bugcard {
+  width: min(460px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+}
+
+.bugcard h2 {
+  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.bugcard .bughint {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.bugcard label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.bugcard textarea {
+  width: 100%;
+  min-height: 76px;
+  margin-bottom: 14px;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  resize: vertical;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+}
+
+.bugcard .bugactions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bugcard button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 13px;
+  cursor: pointer;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.bugcard button[type="submit"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ground);
+}
+.bugcard button[type="submit"]:disabled { opacity: 0.5; cursor: default; }
+
+.bugcard .bugerror { margin: 0 0 12px; font-size: 13px; color: var(--amber); }
