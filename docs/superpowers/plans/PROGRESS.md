@@ -117,7 +117,12 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   to `.ts`, a hardcoded `TRUNCATE` list restored over an introspected one, a stale file list,
   a reprinted `requireViewer()` call losing its callback.
 - **Sync plan fences from the source files** after a task lands, rather than hand-editing.
-  Makes drift structurally impossible.
+  Makes drift structurally impossible in that direction.
+- **A forward plan edit is not a code change.** Amending the plan to specify something new
+  creates drift until a task actually ships it — which happened once: the plan gained
+  `id: true` on a Prisma select that the file never got, and the next task built a
+  workaround around an accurate description of stale code. Either dispatch the change or
+  note it as pending; do not leave the plan describing a future that has not happened.
 - **Mutation-test any test whose job is to catch a catastrophic failure.** The tree builder's
   cycle tests could not detect a cyclic result until they were mutation-tested; the helper's
   docstring claimed a property it did not check.
