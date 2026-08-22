@@ -37,7 +37,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // Ordering is load-bearing: returning false AFTER upserting would still create the
       // row, so the gate must come first.
       if (!isAllowedSignIn(
-        { email: profile?.email, emailVerified: profile?.email_verified as boolean | undefined },
+        { email: profile?.email, emailVerified: profile?.email_verified },
         allowedDomains,
       )) {
         return false;

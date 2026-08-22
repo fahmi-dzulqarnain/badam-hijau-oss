@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { config } from "dotenv";
 
 export default function setup() {
-  if (config({ path: ".env.test", override: true }).error) {
+  if (config({ path: ".env.test", override: true, quiet: true }).error) {
     throw new Error(
       ".env.test not found. Refusing to migrate: falling back to .env would run " +
         "migrations against the development database. Create it with:\n" +

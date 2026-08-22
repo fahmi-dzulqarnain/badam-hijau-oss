@@ -1,6 +1,7 @@
 export type SignInClaims = {
   email?: string | null;
-  emailVerified?: boolean | null;
+  /** Deliberately `unknown`: this claim's runtime type varies by IdP. */
+  emailVerified?: unknown;
 };
 
 export function parseAllowedDomains(raw: string | undefined): string[] {
@@ -8,6 +9,25 @@ export function parseAllowedDomains(raw: string | undefined): string[] {
     .split(",")
     .map((domain) => domain.trim().toLowerCase())
     .filter(Boolean);
+}
+
+/**
+ * Whether an email claim counts as verified.
+ *
+ * The claim is not universally boolean — Auth.js types Okta's as `string` and Apple's as
+ * `"true" | true` — so a strict `=== false` check would let the string "false" through as
+ * if the claim were absent. That matters because the upsert matches on email: an issuer
+ * willing to assert an unverified address hands over the matching row, including its
+ * isSuperAdmin flag.
+ *
+ * An ABSENT claim is treated as verified. The OIDC spec makes it optional and several
+ * legitimate providers never send it; rejecting absence would lock out real staff. Only an
+ * explicit falsy assertion is a rejection.
+ */
+export function isEmailVerified(claim: unknown): boolean {
+  if (claim === false) return false;
+  if (typeof claim === "string" && claim.trim().toLowerCase() === "false") return false;
+  return true;
 }
 
 /**
@@ -24,12 +44,7 @@ export function isAllowedSignIn(claims: SignInClaims, allowedDomains: string[]):
   const email = claims.email?.trim().toLowerCase();
   if (!email) return false;
 
-  // An unverified email claim is an assertion, not an identity. This matters more than it
-  // looks: the upsert matches on email, so an issuer willing to mint
-  // email_verified:false for an existing address hands over that account, including its
-  // isSuperAdmin flag. Providers that omit the claim entirely are accepted — only an
-  // explicit false is a rejection.
-  if (claims.emailVerified === false) return false;
+  if (!isEmailVerified(claims.emailVerified)) return false;
 
   const domain = email.split("@")[1];
   if (!domain) return false;

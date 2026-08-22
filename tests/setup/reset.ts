@@ -4,7 +4,7 @@ import { config } from "dotenv";
 // globalSetup mutates process.env in the main Vitest process and workers inherit it;
 // this call covers the case where this module is what first constructs the client.
 // Deleting either one as "duplication" silently retargets the whole suite.
-if (config({ path: ".env.test", override: true }).error) {
+if (config({ path: ".env.test", override: true, quiet: true }).error) {
   throw new Error(
     ".env.test not found. Refusing to run integration tests: falling back to .env " +
       "would TRUNCATE the development database. Create it with:\n" +

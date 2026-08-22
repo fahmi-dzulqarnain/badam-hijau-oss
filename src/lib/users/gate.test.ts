@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { isAllowedSignIn, parseAllowedDomains } from "./gate";
+import { isAllowedSignIn, isEmailVerified, parseAllowedDomains } from "./gate";
 
 const allowed = ["company.example", "contractors.company.example"];
 
@@ -43,6 +43,30 @@ describe("isAllowedSignIn", () => {
 
   test("does not match a domain by suffix", () => {
     expect(isAllowedSignIn({ email: "x@evilcompany.example" }, allowed)).toBe(false);
+  });
+
+  test("rejects the string \"false\", which Okta-shaped providers send", () => {
+    expect(isAllowedSignIn({ email: "root@company.example", emailVerified: "false" }, allowed)).toBe(false);
+  });
+
+  test("accepts the string \"true\", which Apple-shaped providers send", () => {
+    expect(isAllowedSignIn({ email: "a@company.example", emailVerified: "true" }, allowed)).toBe(true);
+  });
+});
+
+describe("isEmailVerified", () => {
+  test("only an explicit falsy assertion is a rejection", () => {
+    expect(isEmailVerified(false)).toBe(false);
+    expect(isEmailVerified("false")).toBe(false);
+    expect(isEmailVerified("FALSE")).toBe(false);
+    expect(isEmailVerified("  false  ")).toBe(false);
+  });
+
+  test("absent or affirmative claims are accepted", () => {
+    expect(isEmailVerified(undefined)).toBe(true);
+    expect(isEmailVerified(null)).toBe(true);
+    expect(isEmailVerified(true)).toBe(true);
+    expect(isEmailVerified("true")).toBe(true);
   });
 });
 
