@@ -1,7 +1,7 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 58 commits · **77 tests passing** · typecheck and
-build clean · working tree clean
+Branch: `phase-1-foundations-reader` · 66 commits · **80 tests passing** · typecheck
+and build clean · working tree clean
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
 · Roadmap: [`2026-08-21-docs-platform-roadmap.md`](2026-08-21-docs-platform-roadmap.md)
@@ -17,8 +17,8 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 7. OIDC + viewer loader | ✅ approved |
 | 8. Build version module | ✅ approved |
 | 9. Seed script | ✅ approved |
-| **10. Reader shell** | **next — validated and ready to dispatch** |
-| 11. Bug reporting | not started |
+| 10. Reader shell | ✅ approved |
+| **11. Bug reporting** | **next — restructured, ready to dispatch** |
 | 12. Page reader route | not started |
 | 13. Space landing | not started |
 | 14. Playwright E2E | not started |
@@ -26,7 +26,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 
 ## Test suite
 
-77 tests, 10 files. 44 pure unit (no database), 33 integration against real Postgres.
+80 tests, 11 files. 47 pure unit (no database), 33 integration against real Postgres.
 
 | File | Tests |
 |---|---|
@@ -36,6 +36,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | `src/lib/pages/tree.test.ts` | 9 |
 | `tests/integration/pages-repo.test.ts` | 8 |
 | `src/lib/version/build.test.ts` | 6 |
+| `src/lib/auth/test-login.test.ts` | 3 |
 | `tests/integration/user-upsert.test.ts` | 4 |
 | `tests/integration/viewer.test.ts` | 4 |
 | `tests/integration/authz-where.test.ts` | 3 |
@@ -55,10 +56,11 @@ Postgres is the local Homebrew `postgresql@16` service on port 5432 — there is
 runtime on this machine. The integration harness refuses to run unless `DATABASE_URL` names
 a database ending in `_test`.
 
-**You cannot sign in yet.** Real OIDC credentials are empty and the test-login provider
-lands in Task 10. From Task 10 onward, set `ALLOW_TEST_LOGIN=1` and sign in at
-`/api/auth/signin` as `aisyah@example.com` (member) or `stranger@example.com` (member of
-nothing, which is how 404-not-403 is demonstrated).
+**Signing in locally:** set `ALLOW_TEST_LOGIN=1` and sign in at `/api/auth/signin` as
+`aisyah@example.com` (member of engineering), `stranger@example.com` (member of nothing —
+how 404-not-403 is demonstrated), or `efcorporates@gmail.com` (super-admin). A session
+minted this way is revoked the moment the flag is turned off, because the token records
+which provider minted it.
 
 ## Seeded data
 
@@ -98,6 +100,14 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   URL.
 - **Sanitise before `rehype-slug`**, or heading ids become `user-content-*` and every table
   of contents anchor silently stops matching.
+- **A test-login session dies when the flag does.** The JWT records its minting provider;
+  without that a passwordless super-admin token is byte-identical to an OIDC one and cannot
+  be revoked or audited. `AUTH_SECRET` must therefore be distinct per environment.
+- **Drafts appear in the rail as inert text, not links.** `getPublishedPage` requires a
+  published version, so a linked draft would 404 for everyone.
+- **A signed-out deep link lands on the space root**, not the requested page. The layout has
+  only the space key; preserving the full path needs middleware, which needs the auth config
+  split into edge-safe and node halves. Deferred deliberately.
 - Implementers create a **new commit**, never `--amend`.
 
 ## Working method that has earned its keep
