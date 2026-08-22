@@ -20,13 +20,15 @@ export function BugReportDialog({
 
   // Escape closes. Deliberately not a focus trap — more than an alpha needs — but a dialog
   // that cannot be dismissed from the keyboard is worse than one that is merely imperfect.
+  // Gated on state so Escape cannot unmount mid-submit: the row would still be created, the
+  // user would never see "Thanks", and the natural next move is to file it twice.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && state !== "sending") onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, state]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -53,14 +55,8 @@ export function BugReportDialog({
   }
 
   return (
-    <div className="bugdim" onClick={onClose}>
-      <div
-        className="bugcard"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Report a bug"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="bugdim">
+      <div className="bugcard" role="dialog" aria-label="Report a bug">
         {state === "sent" ? (
           <>
             <h2>Thanks</h2>

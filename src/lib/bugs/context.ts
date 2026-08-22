@@ -20,6 +20,13 @@ const NONE: ReportContext = { spaceId: null, pageId: null, versionId: null };
  *
  * Returns nulls rather than throwing. A report from an unrecognised route is still worth
  * keeping, and routePath is the durable breadcrumb either way.
+ *
+ * `split("/").filter(Boolean)` collapses repeated and leading/trailing slashes, so
+ * "//engineering////architecture//mqtt" and "engineering/architecture/mqtt" (no leading
+ * slash) resolve to the same context as the canonical route. The derived value is
+ * therefore "a route that normalises to this page", not "the route the reporter was on
+ * verbatim" — harmless, since the space predicate still gates everything below, but worth
+ * knowing before reading routePath as an exact match.
  */
 export async function resolveReportContext(
   viewer: Viewer,

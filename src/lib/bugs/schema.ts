@@ -1,10 +1,21 @@
 import { z } from "zod";
 
+// A NUL byte is legal JSON and passes validation, but Postgres rejects the insert
+// outright (22021), producing a 500 that no retry can clear. Strip control characters
+// while keeping newlines and tabs, which carry meaning in a pasted stack trace.
+const stripControl = (value: string) =>
+  value.replace(/\p{C}/gu, (ch) => (ch === "\n" || ch === "\t" ? ch : ""));
+
 const optionalText = (max: number) =>
-  z.string().trim().max(max).nullish().transform((v) => (v ? v : null));
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((v) => (v ? stripControl(v) : null));
 
 export const bugReportInput = z.object({
-  summary: z.string().trim().min(1).max(5000),
+  summary: z.string().trim().min(1).max(5000).transform(stripControl),
   expected: optionalText(5000),
   routePath: z.string().min(1).max(2000),
   // No spaceId/pageId/versionId here, deliberately. They are derived server-side from

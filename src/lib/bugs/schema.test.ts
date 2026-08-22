@@ -47,3 +47,13 @@ test("rejects a report with no route path", () => {
   const { routePath, ...withoutRoute } = valid;
   expect(bugReportInput.safeParse(withoutRoute).success).toBe(false);
 });
+
+test("strips a NUL byte, which Postgres would reject outright", () => {
+  const parsed = bugReportInput.parse({ ...valid, summary: "before\0after" });
+  expect(parsed.summary).toBe("beforeafter");
+});
+
+test("keeps newlines and tabs, which carry meaning in a pasted trace", () => {
+  const parsed = bugReportInput.parse({ ...valid, summary: "line one\n\tindented" });
+  expect(parsed.summary).toBe("line one\n\tindented");
+});
