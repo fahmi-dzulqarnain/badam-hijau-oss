@@ -3144,7 +3144,10 @@ export default async function SpaceLayout({
   params: Promise<{ space: string }>;
 }) {
   const { space: spaceKey } = await params;
-  const viewer = await requireViewer();
+  // Passing the destination is what makes a deep link from Slack or a ticket survive a
+  // cold visit. Without it the callback cookie is the bare origin and the reader lands on
+  // the placeholder home page instead of the page they asked for.
+  const viewer = await requireViewer(`/${spaceKey}`);
 
   const space = await getReadableSpaceByKey(viewer, spaceKey);
   // Unreadable and nonexistent are the same answer, so titles do not leak (spec §8).
@@ -3769,7 +3772,7 @@ export default async function DocPage({
   params: Promise<{ space: string; path: string[] }>;
 }) {
   const { space: spaceKey, path } = await params;
-  const viewer = await requireViewer();
+  const viewer = await requireViewer(`/${spaceKey}/${path.join("/")}`);
 
   const result = await getPublishedPage(viewer, {
     spaceKey,
@@ -4006,7 +4009,7 @@ export default async function SpaceLanding({
   params: Promise<{ space: string }>;
 }) {
   const { space: spaceKey } = await params;
-  const viewer = await requireViewer();
+  const viewer = await requireViewer(`/${spaceKey}`);
 
   const space = await getReadableSpaceByKey(viewer, spaceKey);
   if (!space) notFound();
@@ -4116,6 +4119,15 @@ Then in the `NextAuth({ ... })` call, replace the `providers` array with:
 
 and extract the existing OIDC object literal into `const oidcProvider = { ... }` above the
 `NextAuth` call so both branches can reference it.
+
+**Two things this task must not lose.** The `signIn` callback short-circuits the domain
+allowlist for `account?.provider === "test-login"` — seeded users are `@example.com`, which
+is not a company domain, so removing that line silently breaks every E2E sign-in with a
+`false` return and no error. And the suite needs a genuine **negative** assertion that the
+provider is absent when the flag is unset: the existing test only proves it is present when
+the flag *is* set, which is the easy half. A unit test that clears `ALLOW_TEST_LOGIN`,
+imports the config fresh, and asserts `test-login` is not among the providers is the piece
+that actually guards against shipping a passwordless super-admin login.
 
 - [ ] **Step 3: Document the flag in `.env.example`**
 
@@ -4271,6 +4283,26 @@ All must hold before Phase 2 starts:
 - [ ] An unpublished page is unreachable by URL
 - [ ] The Alpha badge and `0.1.0+<sha>` build string render in the shell
 - [ ] Report bug stores a row with the route, version and viewport captured automatically
+
+## Offboarding, which is not what you would guess
+
+Established by probing the running server. Deleting a `User` row is **not** offboarding:
+the next sign-in upserts it straight back, with `isSuperAdmin: false` and no memberships.
+(Prisma's `Restrict` on `BugReport.reporterId` blocks the delete outright once the user has
+filed one, anyway.) And because Auth.js re-encodes the JWT with a fresh expiry on every
+session read, the session window is *rolling* — revoking upstream does not sign anyone out.
+
+The correct sequence, in this order:
+
+1. **Delete the user's `SpaceMembership` rows.** The only step that takes effect
+   immediately, and it works precisely because memberships are read per request rather than
+   baked into the token.
+2. **Revoke at the IdP.** Stops future sign-ins only.
+3. **Leave the `User` row alone.** It carries authorship on `PageVersion` and `BugReport`.
+
+`session.maxAge` is 8 hours, so step 2 becomes effective within a working day rather than
+the 30-day default. A durable in-app kill switch — `User.disabledAt`, checked in
+`viewerForEmail` and never cleared by the upsert — belongs in Phase 2 alongside `AuditLog`.
 
 ## Rejected on evidence: `import "server-only"`
 
