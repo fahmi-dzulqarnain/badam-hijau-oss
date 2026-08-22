@@ -4771,6 +4771,11 @@ export default async function DocPage({
   params: Promise<{ space: string; path: string[] }>;
 }) {
   const { space: spaceKey, path } = await params;
+  // The full path is the right value at this call site, but note it rarely decides the
+  // redirect: on a cold load the space layout also runs and its own requireViewer — which
+  // has only the space key — will usually redirect first. Passing the full path here is
+  // correct rather than effective, and becomes effective if the layout's auth call is ever
+  // moved or removed.
   const viewer = await requireViewer(`/${spaceKey}/${path.join("/")}`);
 
   const result = await getPublishedPage(viewer, {
@@ -4834,6 +4839,32 @@ npm run build && npm run dev
 Then sign in and open `/engineering/architecture/mqtt-contracts`. Expected: title, status
 metadata, a highlighted TypeScript block, a rendered table, the table of contents listing
 "Namespace / Subscribing / Diagram", and the page info card showing Aisyah R. as owner.
+
+- [ ] **Step 7b: Load the page and confirm what the build cannot tell you**
+
+Task 10 established that a passing build says nothing about whether a page renders. With
+`ALLOW_TEST_LOGIN=1`, sign in as `aisyah@example.com` and fetch
+`/engineering/architecture/mqtt-contracts`. Confirm in the HTML:
+
+- The `h1` is the page title, and the breadcrumb links back to the space.
+- The table of contents lists **Namespace**, **Subscribing** and **Diagram**, and each
+  `href="#…"` has a matching `id` in the body — the anchors must actually resolve.
+- The seeded GFM table is wrapped in `<div class="table-scroll">`.
+- The ` ```ts ` fence rendered through Shiki (`class="shiki"`), and the ` ```mermaid ` fence
+  became `class="mermaid-source"` rather than a highlighted code block.
+- The page info card shows the owner (`Aisyah R.`) and a version count.
+- The nav rail marks this page `aria-current="page"`.
+
+Then check the failure paths, which are the ones that matter:
+
+- The unpublished ADR — `/engineering/decisions/adr-0043-prisma-migrations` — returns
+  **404**, not a rendered page.
+- The three-deep page `/engineering/architecture/mqtt-contracts/topic-registry` returns 200.
+- As `stranger@example.com`, the same MQTT page returns **404** and its title appears
+  nowhere in the response body.
+
+Paste the evidence. If the TOC anchors do not match the body ids, the Markdown pipeline's
+sanitise-before-slug ordering has regressed and the table of contents is silently broken.
 
 - [ ] **Step 8: Commit**
 
