@@ -3256,7 +3256,7 @@ export function testLoginEnabled(env: Partial<NodeJS.ProcessEnv> = process.env):
 import { expect, test } from "vitest";
 import { testLoginEnabled } from "./test-login";
 
-test("enabled only by an exact \"1\"", () => {
+test('enabled only by an exact "1"', () => {
   expect(testLoginEnabled({ ALLOW_TEST_LOGIN: "1" })).toBe(true);
 });
 
@@ -3505,21 +3505,12 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export function NavLink({
-  href,
-  title,
-  isDraft,
-}: {
-  href: string;
-  title: string;
-  isDraft: boolean;
-}) {
+export function NavLink({ href, title }: { href: string; title: string }) {
   const pathname = usePathname();
 
   return (
     <Link href={href as Route} aria-current={pathname === href ? "page" : undefined}>
       {title}
-      {isDraft ? <span className="tag-draft">Draft</span> : null}
     </Link>
   );
 }
@@ -3551,21 +3542,35 @@ type Props = {
 };
 
 function NavNode({ spaceKey, node }: { spaceKey: string; node: TreeNode }) {
-  const self = (
-    <NavLink
-      href={`/${spaceKey}/${node.path}`}
-      title={node.title}
-      isDraft={node.publishedVersionId === null}
-    />
-  );
+  const isDraft = node.publishedVersionId === null;
+  // `Page.path` has no format constraint, so a slug containing `#`, `?` or a space would
+  // silently produce a broken link without this — one the `Route` cast in NavLink makes
+  // untypecheckable, since the string is opaque to typedRoutes either way.
+  const href = `/${spaceKey}/${node.path
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
 
-  if (node.children.length === 0) return self;
+  // A draft has no published version, so getPublishedPage would 404 it. Show that the
+  // page exists — members should know a draft is in flight — but do not offer a link
+  // that cannot work.
+  const renderSelf = (title: string) =>
+    isDraft ? (
+      <span className="navdraft">
+        {title}
+        <span className="tag-draft">Draft</span>
+      </span>
+    ) : (
+      <NavLink href={href} title={title} />
+    );
+
+  if (node.children.length === 0) return renderSelf(node.title);
 
   return (
     <details className="navgroup" open>
       <summary>{node.title}</summary>
       <div className="navlist">
-        {self}
+        {renderSelf("Overview")}
         {node.children.map((child) => (
           <NavNode key={child.id} spaceKey={spaceKey} node={child} />
         ))}
@@ -3576,12 +3581,14 @@ function NavNode({ spaceKey, node }: { spaceKey: string; node: TreeNode }) {
 
 export function NavRail({ spaceKey, spaceName, tree, build }: Props) {
   return (
-    <nav className="rail-l" aria-label={`${spaceName} navigation`}>
-      {tree.map((node) => (
-        <NavNode key={node.id} spaceKey={spaceKey} node={node} />
-      ))}
+    <div className="rail-l">
+      <nav aria-label={`${spaceName} navigation`}>
+        {tree.map((node) => (
+          <NavNode key={node.id} spaceKey={spaceKey} node={node} />
+        ))}
+      </nav>
       <RailFoot build={build} />
-    </nav>
+    </div>
   );
 }
 ```
