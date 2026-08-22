@@ -1,9 +1,8 @@
 import { notFound } from "next/navigation";
-import "@/components/doc.css";
-import { db } from "@/lib/db";
 import { requireViewer } from "@/lib/auth/viewer";
-import { getPublishedPage } from "@/lib/pages/repo";
+import { getPublishedPage, listSpacePages } from "@/lib/pages/repo";
 import { renderMarkdown } from "@/lib/markdown/render";
+import { dateFormat } from "@/lib/format";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageInfoCard } from "@/components/PageInfoCard";
 import { Toc } from "@/components/Toc";
@@ -29,13 +28,33 @@ export default async function DocPage({
 
   const { space, page, version } = result;
   const { html, headings } = await renderMarkdown(version.markdown);
-  const versionCount = await db.pageVersion.count({ where: { pageId: page.id } });
-  const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
+
+  // Cache hit: the layout already called this with the same viewer object in this render.
+  const rows = await listSpacePages(viewer, space.id);
+  const byPath = new Map(rows.map((row) => [row.path, row]));
+
+  const segments = page.path.split("/");
+  const ancestors = segments.slice(0, -1).map((_, index) => {
+    const path = segments.slice(0, index + 1).join("/");
+    const row = byPath.get(path);
+    return {
+      path,
+      title: row?.title ?? path.split("/").pop()!.replace(/-/g, " "),
+      // An unpublished ancestor would 404, exactly as NavRail's draft entries would —
+      // so it is shown as text, not offered as a link.
+      isLinkable: row?.publishedVersionId != null,
+    };
+  });
 
   return (
     <>
       <main className="doc">
-        <Breadcrumbs spaceKey={space.key} spaceName={space.name} path={page.path} />
+        <Breadcrumbs
+          spaceKey={space.key}
+          spaceName={space.name}
+          ancestors={ancestors}
+          title={page.title}
+        />
         <h1>{page.title}</h1>
 
         <div className="meta">
@@ -44,30 +63,29 @@ export default async function DocPage({
           </span>
           <span>
             <span className="k">Published</span>{" "}
-            {page.publishedAt ? formatter.format(page.publishedAt) : "—"}
+            {page.publishedAt ? dateFormat.format(page.publishedAt) : "—"}
           </span>
           <span>
             <span className="k">Commit</span> {version.gitSha ?? "not mirrored yet"}
           </span>
         </div>
 
+        {/* `dangerouslySetInnerHTML` is safe here only because `renderMarkdown` sanitises. If
+            that pipeline is ever changed to skip `rehype-sanitize`, this becomes stored XSS —
+            the test in Task 5 Step 2 is what guards it. */}
         <div className="body" dangerouslySetInnerHTML={{ __html: html }} />
       </main>
 
-      <aside className="rail-r">
+      <aside className="rail-r" aria-label="Page information">
         <Toc headings={headings} />
         <PageInfoCard
           ownerName={page.owner?.name ?? null}
           reviewedAt={page.reviewedAt}
           docType={page.docType}
           status={page.status}
-          versionCount={versionCount}
+          versionCount={page._count.versions}
         />
       </aside>
     </>
   );
 }
-
-// `dangerouslySetInnerHTML` is safe here only because `renderMarkdown` sanitises. If that
-// pipeline is ever changed to skip `rehype-sanitize`, this becomes stored XSS — the test in
-// Task 5 Step 2 is what guards it.

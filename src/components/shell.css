@@ -162,6 +162,8 @@
   padding: 1px 5px;
 }
 
+/* Paired with doc.css's `.rail-r { display: none; }` at the same width — change one and
+   check the other, or the right rail and the grid column it depends on fall out of sync. */
 @media (max-width: 1180px) { .shell { grid-template-columns: 262px minmax(0, 1fr); } }
 @media (max-width: 860px)  { .shell { grid-template-columns: minmax(0, 1fr); } .rail-l { display: none; } }
 

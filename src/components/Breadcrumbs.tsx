@@ -1,30 +1,47 @@
 import Link from "next/link";
+import type { Route } from "next";
+
+type Ancestor = { path: string; title: string; isLinkable: boolean };
+
+const encodePath = (path: string) =>
+  path.split("/").map(encodeURIComponent).join("/");
 
 export function Breadcrumbs({
   spaceKey,
   spaceName,
-  path,
+  ancestors,
+  title,
 }: {
   spaceKey: string;
   spaceName: string;
-  path: string;
+  ancestors: Ancestor[];
+  title: string;
 }) {
-  const segments = path.split("/");
-  const ancestors = segments.slice(0, -1);
-
   return (
     <nav className="crumbs" aria-label="Breadcrumb">
-      <Link href={`/${spaceKey}`}>{spaceName}</Link>
-      {ancestors.map((segment, index) => (
-        <span key={segment}>
-          <span className="sep"> / </span>
-          <Link href={`/${spaceKey}/${ancestors.slice(0, index + 1).join("/")}`}>
-            {segment.replace(/-/g, " ")}
-          </Link>
-        </span>
-      ))}
-      <span className="sep">/</span>
-      <span>{segments.at(-1)?.replace(/-/g, " ")}</span>
+      <ol>
+        <li>
+          <Link href={`/${encodeURIComponent(spaceKey)}` as Route}>{spaceName}</Link>
+        </li>
+        {ancestors.map((ancestor) => (
+          <li key={ancestor.path}>
+            <span className="sep">/</span>
+            {ancestor.isLinkable ? (
+              <Link
+                href={`/${encodeURIComponent(spaceKey)}/${encodePath(ancestor.path)}` as Route}
+              >
+                {ancestor.title}
+              </Link>
+            ) : (
+              <span>{ancestor.title}</span>
+            )}
+          </li>
+        ))}
+        <li>
+          <span className="sep">/</span>
+          <span aria-current="page">{title}</span>
+        </li>
+      </ol>
     </nav>
   );
 }

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import "@/components/shell.css";
+import "@/components/doc.css";
 import { requireViewer } from "@/lib/auth/viewer";
 import { getReadableSpaceByKey, listSpacePages } from "@/lib/pages/repo";
 import { buildTree } from "@/lib/pages/tree";

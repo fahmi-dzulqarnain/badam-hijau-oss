@@ -1,3 +1,5 @@
+import { dateFormat } from "@/lib/format";
+
 export function PageInfoCard({
   ownerName,
   reviewedAt,
@@ -11,8 +13,6 @@ export function PageInfoCard({
   status: string;
   versionCount: number;
 }) {
-  const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
-
   return (
     <>
       <div className="railhead">Page info</div>
@@ -21,7 +21,7 @@ export function PageInfoCard({
           <dt>Owner</dt>
           <dd>{ownerName ?? "Unassigned"}</dd>
           <dt>Last reviewed</dt>
-          <dd>{reviewedAt ? formatter.format(reviewedAt) : "Never"}</dd>
+          <dd>{reviewedAt ? dateFormat.format(reviewedAt) : "Never"}</dd>
           <dt>Type</dt>
           <dd>{docType}</dd>
           <dt>Lifecycle</dt>

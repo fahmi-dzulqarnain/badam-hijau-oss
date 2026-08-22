@@ -11,6 +11,8 @@
 }
 .crumbs a { text-decoration: none; }
 .crumbs .sep { color: var(--line-strong); }
+.crumbs ol { display: contents; list-style: none; margin: 0; padding: 0; }
+.crumbs li { display: contents; }
 
 .doc h1 {
   margin: 0 0 10px;
@@ -42,18 +44,32 @@
   color: var(--ink-3);
 }
 
+.body :is(h1, h2, h3, h4) { scroll-margin-top: 72px; }
+.body h1 { margin: 34px 0 12px; font-family: var(--serif); font-size: 23px; font-weight: 500; }
 .body h2 {
   margin: 38px 0 12px;
   font-family: var(--serif);
   font-size: 23px;
   font-weight: 500;
-  scroll-margin-top: 72px;
   text-wrap: balance;
 }
 .body h2:first-child { margin-top: 0; }
+.body h3 { margin: 26px 0 8px; font-family: var(--serif); font-size: 18px; font-weight: 500; }
 .body p, .body ul, .body ol { max-width: 66ch; }
 .body li::marker { color: var(--accent); }
 .body a { color: var(--accent); }
+/* Heading anchors come from rehype-autolink-headings. Without this every section title
+   in the product paints accent-green and underlined. */
+.body :is(h1, h2, h3, h4, h5, h6) a { color: inherit; text-decoration: none; }
+.body img { max-width: 100%; height: auto; }
+.body .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 .body pre {
   overflow-x: auto;
@@ -110,6 +126,7 @@
   color: var(--ink-2);
   text-decoration: none;
   border-left: 2px solid var(--line);
+  overflow-wrap: anywhere;
 }
 .toc a.depth-3 { padding-left: 20px; }
 
@@ -129,4 +146,25 @@
 }
 .card dd { margin: 2px 0 0; font-size: 12.5px; }
 
+.body .mermaid-source {
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+}
+.body blockquote {
+  margin: 18px 0;
+  padding: 2px 0 2px 14px;
+  color: var(--ink-2);
+  border-left: 2px solid var(--line-strong);
+}
+.body hr { margin: 28px 0; border: 0; border-top: 1px solid var(--line); }
+.body .contains-task-list { list-style: none; padding-left: 0; }
+
+/* Paired with shell.css's `.shell` column collapse at the same width — change one and
+   check the other, or the right rail and the grid column it depends on fall out of sync. */
 @media (max-width: 1180px) { .rail-r { display: none; } }
