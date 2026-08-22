@@ -3733,7 +3733,20 @@ Context is captured, not requested. Forwarding to a webhook is out of Phase 1 sc
 **Files:**
 - Create: `src/lib/bugs/schema.ts`, `src/lib/bugs/context.ts`, `src/lib/bugs/create.ts`
 - Create: `src/app/api/bugs/route.ts`
+- Create: `src/components/BugReportButton.tsx`
+- Modify: `src/components/RailFoot.tsx`, `src/components/TopBar.tsx`,
+  `src/components/shell.css`
 - Replace: `src/components/BugReportDialog.tsx`
+
+**The button has to survive the rail disappearing.** Below 860px `.rail-l` is
+`display: none`, which took the Report bug button with it — so on a phone there was no way
+to report anything. Spec §18.2 wants it "reachable from wherever the problem was seen", so
+the trigger and its dialog move into one client component used twice: in the rail foot
+(the approved placement, wide screens) and in the top bar (visible only below 860px). They
+are never both on screen, so two independent instances are simpler than lifting state.
+
+**The dialog is an overlay, not inline.** Rendered inside `.rail-foot` it would be a form
+with two textareas squeezed into a 238px column.
 - Test: `src/lib/bugs/schema.test.ts`, `tests/integration/bug-context.test.ts`,
   `tests/integration/bug-report.test.ts`
 
@@ -4138,12 +4151,189 @@ export async function POST(request: Request) {
 }
 ```
 
-- [ ] **Step 10: Replace `src/components/BugReportDialog.tsx`**
+- [ ] **Step 9b: Create `src/components/BugReportButton.tsx`**
+
+Owns the open/closed state so both placements are self-contained.
 
 ```tsx
 "use client";
 
 import { useState } from "react";
+import type { BuildInfo } from "@/lib/version/build";
+import { BugReportDialog } from "./BugReportDialog";
+
+export function BugReportButton({
+  build,
+  className,
+}: {
+  build: BuildInfo;
+  className: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <button type="button" className={className} onClick={() => setOpen(true)}>
+        Report bug
+      </button>
+      {open ? <BugReportDialog build={build} onClose={() => setOpen(false)} /> : null}
+    </>
+  );
+}
+```
+
+- [ ] **Step 9c: Use it in both placements**
+
+`src/components/RailFoot.tsx` loses its own state and becomes:
+
+```tsx
+import type { BuildInfo } from "@/lib/version/build";
+import { BugReportButton } from "./BugReportButton";
+
+export function RailFoot({ build }: { build: BuildInfo }) {
+  return (
+    <div className="rail-foot">
+      <BugReportButton build={build} className="bugbtn" />
+      <span className="build">
+        {build.label} &middot; <span className="build-channel">{build.channel}</span>
+      </span>
+    </div>
+  );
+}
+```
+
+Note it is no longer a client component — `BugReportButton` is.
+
+`src/components/TopBar.tsx` gains the narrow-screen trigger:
+
+```tsx
+import type { BuildInfo } from "@/lib/version/build";
+import { BugReportButton } from "./BugReportButton";
+
+export function TopBar({ build }: { build: BuildInfo }) {
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <span className="brand-name">Badam</span>
+        <span className="brand-channel">{build.channel}</span>
+      </div>
+      {/* Only rendered below 860px, where the rail and its own button are hidden. */}
+      <BugReportButton build={build} className="bugbtn-compact" />
+    </header>
+  );
+}
+```
+
+- [ ] **Step 9d: Add the dialog and compact-button styles to `src/components/shell.css`**
+
+```css
+/* Only reachable below 860px, where .rail-l (and its Report bug button) is hidden. */
+.bugbtn-compact { display: none; }
+
+@media (max-width: 860px) {
+  .bugbtn-compact {
+    display: block;
+    margin-left: auto;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    cursor: pointer;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+  }
+}
+
+.bugdim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+
+.bugcard {
+  width: min(460px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+}
+
+.bugcard h2 {
+  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.bugcard .bughint {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.bugcard label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.bugcard textarea {
+  width: 100%;
+  min-height: 76px;
+  margin-bottom: 14px;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  resize: vertical;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+}
+
+.bugcard .bugactions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bugcard button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 13px;
+  cursor: pointer;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.bugcard button[type="submit"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ground);
+}
+.bugcard button[type="submit"]:disabled { opacity: 0.5; cursor: default; }
+
+.bugcard .bugerror { margin: 0 0 12px; font-size: 13px; color: var(--amber); }
+```
+
+- [ ] **Step 10: Replace `src/components/BugReportDialog.tsx`**
+
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import type { BuildInfo } from "@/lib/version/build";
 
@@ -4161,10 +4351,23 @@ export function BugReportDialog({
   const [expected, setExpected] = useState("");
   const [state, setState] = useState<State>("editing");
 
+  // Escape closes. Deliberately not a focus trap — more than an alpha needs — but a dialog
+  // that cannot be dismissed from the keyboard is worse than one that is merely imperfect.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setState("sending");
 
+    // Only what the client alone knows. Which space, page and version this route refers to
+    // is resolved on the server, so a reporter cannot attach context from a space they
+    // cannot read.
     const response = await fetch("/api/bugs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4182,55 +4385,96 @@ export function BugReportDialog({
     setState(response?.ok ? "sent" : "failed");
   }
 
-  if (state === "sent") {
-    return (
-      <div role="dialog" aria-label="Report a bug">
-        <p>Thanks — logged against {build.label}.</p>
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div role="dialog" aria-label="Report a bug">
-      <form onSubmit={submit}>
-        <label htmlFor="bug-summary">What happened?</label>
-        <textarea
-          id="bug-summary"
-          required
-          value={summary}
-          onChange={(event) => setSummary(event.target.value)}
-        />
+    <div className="bugdim" onClick={onClose}>
+      <div
+        className="bugcard"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Report a bug"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {state === "sent" ? (
+          <>
+            <h2>Thanks</h2>
+            <p className="bughint">Logged against {build.label}.</p>
+            <div className="bugactions">
+              <button type="button" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </>
+        ) : (
+          <form onSubmit={submit}>
+            <h2>Report a bug</h2>
+            <p className="bughint">
+              The page you are on, your browser, the window size and the build are attached
+              automatically.
+            </p>
 
-        <label htmlFor="bug-expected">What did you expect?</label>
-        <textarea
-          id="bug-expected"
-          value={expected}
-          onChange={(event) => setExpected(event.target.value)}
-        />
+            <label htmlFor="bug-summary">What happened?</label>
+            <textarea
+              id="bug-summary"
+              required
+              autoFocus
+              value={summary}
+              onChange={(event) => setSummary(event.target.value)}
+            />
 
-        {state === "failed" ? (
-          <p role="alert">That did not send. Try again in a moment.</p>
-        ) : null}
+            <label htmlFor="bug-expected">What did you expect?</label>
+            <textarea
+              id="bug-expected"
+              value={expected}
+              onChange={(event) => setExpected(event.target.value)}
+            />
 
-        <button type="submit" disabled={state === "sending" || summary.trim() === ""}>
-          {state === "sending" ? "Sending" : "Send report"}
-        </button>
-        <button type="button" onClick={onClose}>
-          Cancel
-        </button>
-      </form>
+            {state === "failed" ? (
+              <p className="bugerror" role="alert">
+                That did not send. Try again in a moment.
+              </p>
+            ) : null}
+
+            <div className="bugactions">
+              <button type="button" onClick={onClose}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={state === "sending" || summary.trim() === ""}
+              >
+                {state === "sending" ? "Sending" : "Send report"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   );
 }
 ```
 
-- [ ] **Step 11: Verify the whole suite and the build**
+The hint line is not decoration. §18.2 captures the route, user agent, viewport and build
+without asking, so the person filing the report should be told that rather than discovering
+it later.
+
+- [ ] **Step 11: Verify the whole suite, the build, and a real report**
 
 Run: `npm test && npm run typecheck && npm run build`
-Expected: all green.
+Expected: all green — 95 tests (80 existing + 6 schema + 5 context + 4 storage).
+
+Then prove the round trip, because none of those tests exercise the route handler:
+
+1. Start the server with `ALLOW_TEST_LOGIN=1`, sign in as `aisyah@example.com`, and POST to
+   `/api/bugs` from **a page route** — `{"summary":"smoke","routePath":"/engineering/architecture/mqtt-contracts","appVersion":"0.1.0","userAgent":"probe","viewport":"800x600"}`.
+   Expect 201, then query the row and confirm `spaceId`, `pageId` **and** `versionId` are
+   populated — that is the server-side derivation working.
+2. POST the same body while signed in as `stranger@example.com`. Expect 201 (the report is
+   still worth keeping) but all three context columns **null** — a non-member must not be
+   able to attach that page's identity.
+3. POST while signed out. Expect **401**.
+4. POST with `{"summary":"   "}`. Expect **400**.
+
+Paste the row contents for 1 and 2.
 
 - [ ] **Step 12: Commit**
 
