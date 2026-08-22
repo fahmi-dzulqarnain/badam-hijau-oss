@@ -10,6 +10,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Sign in to report a bug." }, { status: 401 });
   }
 
+  // 128KB. The schema's own limits allow ~18,100 UTF-16 code units across all fields, and
+  // Zod counts units while Content-Length counts UTF-8 BYTES — so a maximum-length report
+  // in a 3-bytes-per-unit script (CJK) is ~54KB, and a 32KB cap rejected it outright. This
+  // is still four orders of magnitude below the ~300MB that exhausts a memory-capped
+  // container, which is the only thing this guard exists to stop.
+  const MAX_BODY_BYTES = 131_072;
+
   // Reject on the declared size before reading the body: request.json() buffers and
   // parses everything first, so a single large POST can exhaust a memory-capped
   // container. A MISSING length is rejected too — a chunked body omits it entirely, and
@@ -23,7 +30,7 @@ export async function POST(request: Request) {
     );
   }
   const bytes = Number(declaredLength);
-  if (!Number.isInteger(bytes) || bytes <= 0 || bytes > 32_768) {
+  if (!Number.isInteger(bytes) || bytes <= 0 || bytes > MAX_BODY_BYTES) {
     return NextResponse.json({ error: "That report is too large." }, { status: 413 });
   }
 

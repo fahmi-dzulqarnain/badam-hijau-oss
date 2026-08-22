@@ -1,10 +1,14 @@
 import { z } from "zod";
 
-// A NUL byte is legal JSON and passes validation, but Postgres rejects the insert
-// outright (22021), producing a 500 that no retry can clear. Strip control characters
-// while keeping newlines and tabs, which carry meaning in a pasted stack trace.
+// Postgres rejects NUL outright (22021), turning a legal JSON body into a 500 no retry can
+// clear — and this endpoint exists to receive pasted console output, where stray control
+// bytes come from. Strip the C0/C1 control block only: newline, tab and carriage return
+// carry meaning in a trace, and \p{Cf} (zero-width joiners, bidi marks) is deliberately
+// left alone — stripping it silently breaks ZWJ emoji sequences and right-to-left text.
 const stripControl = (value: string) =>
-  value.replace(/\p{C}/gu, (ch) => (ch === "\n" || ch === "\t" ? ch : ""));
+  value.replace(/\p{Cc}/gu, (ch) =>
+    ch === "\n" || ch === "\t" || ch === "\r" ? ch : "",
+  );
 
 const optionalText = (max: number) =>
   z

@@ -57,3 +57,13 @@ test("keeps newlines and tabs, which carry meaning in a pasted trace", () => {
   const parsed = bugReportInput.parse({ ...valid, summary: "line one\n\tindented" });
   expect(parsed.summary).toBe("line one\n\tindented");
 });
+
+test("keeps a zero-width joiner, so emoji sequences survive", () => {
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  expect(bugReportInput.parse({ ...valid, summary: family }).summary).toBe(family);
+});
+
+test("keeps bidi marks, so right-to-left text keeps its direction", () => {
+  const mixed = "\u200F" + "سعر: 5" + "\u200E";
+  expect(bugReportInput.parse({ ...valid, summary: mixed }).summary).toBe(mixed);
+});

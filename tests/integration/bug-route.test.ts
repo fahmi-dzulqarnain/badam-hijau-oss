@@ -85,3 +85,26 @@ test("stores a report for an authenticated reporter", async () => {
   expect(response.status).toBe(201);
   expect(await db.bugReport.count()).toBe(1);
 });
+
+test("accepts a maximum-length report in a multi-byte script", async () => {
+  const user = await db.user.create({
+    data: { email: "cjk@example.com", name: "Reporter" },
+  });
+
+  vi.resetModules();
+  vi.doMock("@/lib/auth/viewer", () => ({
+    loadViewer: async () => ({ id: user.id, isSuperAdmin: false, memberships: [] }),
+  }));
+  const { POST } = await import("@/app/api/bugs/route");
+
+  // 3 UTF-8 bytes per UTF-16 unit, so this is ~15KB of body for one 5000-unit field —
+  // legal per the schema, and what the old 32KB cap rejected once every field was full.
+  const cjk = "字".repeat(5000);
+  const response = await POST(
+    post({ ...valid, summary: cjk, expected: cjk, consoleError: cjk }),
+  );
+
+  expect(response.status).toBe(201);
+  const stored = await db.bugReport.findFirstOrThrow();
+  expect(stored.summary.length).toBe(5000);
+});
