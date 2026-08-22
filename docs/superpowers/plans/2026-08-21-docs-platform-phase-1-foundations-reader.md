@@ -3220,6 +3220,12 @@ and by actually loading the page, which is why the seed contains a page three le
 a regression to a fixed two-level render would otherwise leave that page invisible in the
 rail while still reachable by URL, with nothing failing anywhere.
 
+**Five of this task's files were later superseded — the fences below are a record of Task
+10, not of HEAD.** Task 11 rewrote `RailFoot` and `BugReportDialog` and added the compact
+trigger to `TopBar`; Tasks 11 and 12 both extended `shell.css`; Task 12 added the `doc.css`
+import to the layout. Only `NavLink.tsx`, `NavRail.tsx` and the placeholder `page.tsx` still
+match the code exactly. Read the later task for the current shape of the rest.
+
 **The test-login provider moves here, not Task 14.** Without it there is no way to
 authenticate at all — real OIDC credentials are empty — so Tasks 10, 12 and 13 would be
 built and reviewed blind, and the first sight of the running application would come four
