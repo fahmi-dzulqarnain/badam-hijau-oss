@@ -3120,10 +3120,28 @@ const closed = await getPublishedPage(stranger, {
 });
 console.log("MEMBERS page readable by a non-member:", closed !== null, "(must be false)");
 
-console.log("pages a stranger can list in engineering:", (await listSpacePages(stranger, "")).length);
+// Resolve the real space id first: passing "" would return [] trivially and prove nothing.
+const { db } = await import("@/lib/db");
+const engineering = await db.space.findUniqueOrThrow({ where: { key: "engineering" } });
+
+console.log(
+  "engineering pages a stranger can list:",
+  (await listSpacePages(stranger, engineering.id)).length,
+  "(must be 0)",
+);
+console.log(
+  "engineering pages a member can list:",
+  (await listSpacePages(
+    { id: "x", isSuperAdmin: false, memberships: [{ spaceId: engineering.id, role: "VIEWER" }] },
+    engineering.id,
+  )).length,
+  "(must be 5)",
+);
 ```
 
-Run with `npx tsx scratch-verify.ts`. Expected: `true`, `false`, `0`. If the first line is
+Run with `npx tsx scratch-verify.ts`. Expected: `true`, `false`, `0`, `5`. The last two are
+the pair that matters — a zero from both would look like success while actually meaning the
+query is broken for everyone. If the first line is
 `false`, the seed did not publish the handbook page; if the second is `true`, the
 permission predicate is not reaching the seeded data and nothing later in Phase 1 can be
 trusted.
