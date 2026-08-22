@@ -3211,11 +3211,103 @@ it disabled-free but inert so the shell can be reviewed on its own.
 - Create: `src/components/BugReportDialog.tsx` (a placeholder — Task 11 replaces it)
 - Create: `src/components/shell.css`
 
-**This task has no unit tests, by design** — it is layout, and the project has no DOM test
-environment. That means the recursive rail is verified only by the build and by Task 14's
-end-to-end run, which is exactly why the seed now contains a page three levels deep: a
-regression to a fixed two-level render would otherwise leave that page invisible in the
+**This task has no unit tests for the components, by design** — they are layout, and the
+project has no DOM test environment. The recursive rail is therefore verified by the build
+and by actually loading the page, which is why the seed contains a page three levels deep:
+a regression to a fixed two-level render would otherwise leave that page invisible in the
 rail while still reachable by URL, with nothing failing anywhere.
+
+**The test-login provider moves here, not Task 14.** Without it there is no way to
+authenticate at all — real OIDC credentials are empty — so Tasks 10, 12 and 13 would be
+built and reviewed blind, and the first sight of the running application would come four
+tasks later. That is the late-integration risk the phase ordering exists to avoid. Task 14
+then only adds the Playwright config and the specs.
+
+- [ ] **Step 0: Create the test-login provider and its flag**
+
+`src/lib/auth/test-login.ts` — the flag as a pure function, so the **negative** case is
+directly testable. Asserting that the provider *is* offered when the flag is set is the
+easy half; what actually matters is proving a passwordless login that inherits any seeded
+user's memberships — including a super admin's — is absent by default.
+
+```ts
+/**
+ * Whether the passwordless test-login provider should be registered. Gated on an exact
+ * "1" rather than any truthy string: a stray `ALLOW_TEST_LOGIN=false` in a deployed
+ * environment must not enable it.
+ */
+export function testLoginEnabled(env: Partial<NodeJS.ProcessEnv> = process.env): boolean {
+  return env.ALLOW_TEST_LOGIN === "1";
+}
+```
+
+`src/lib/auth/test-login.test.ts`:
+
+```ts
+import { expect, test } from "vitest";
+import { testLoginEnabled } from "./test-login";
+
+test("enabled only by an exact \"1\"", () => {
+  expect(testLoginEnabled({ ALLOW_TEST_LOGIN: "1" })).toBe(true);
+});
+
+test("disabled when unset — the default a deployment inherits", () => {
+  expect(testLoginEnabled({})).toBe(false);
+});
+
+test("disabled for every other value, including truthy-looking ones", () => {
+  for (const value of ["0", "", "false", "true", "yes", "on", " 1"]) {
+    expect(testLoginEnabled({ ALLOW_TEST_LOGIN: value })).toBe(false);
+  }
+});
+```
+
+Then wire it into `src/lib/auth/config.ts`. Extract the OIDC literal so both branches can
+reference it, and register the credentials provider **only** when the flag is on —
+registration is the gate, not just a check inside `authorize`:
+
+```ts
+import Credentials from "next-auth/providers/credentials";
+import { db } from "@/lib/db";
+import { testLoginEnabled } from "@/lib/auth/test-login";
+
+const allowTestLogin = testLoginEnabled();
+
+const oidcProvider = {
+  id: "company",
+  name: "Company SSO",
+  type: "oidc" as const,
+  issuer: process.env.OIDC_ISSUER,
+  clientId: process.env.OIDC_CLIENT_ID,
+  clientSecret: process.env.OIDC_CLIENT_SECRET,
+};
+
+const testProvider = Credentials({
+  id: "test-login",
+  name: "Test login",
+  credentials: { email: { label: "Email", type: "email" } },
+  async authorize(credentials) {
+    if (!allowTestLogin) return null;
+    const email = String(credentials?.email ?? "").trim().toLowerCase();
+    if (!email) return null;
+    const user = await db.user.findUnique({ where: { email } });
+    return user ? { id: user.id, email: user.email, name: user.name } : null;
+  },
+});
+```
+
+and replace the `providers` array with:
+
+```ts
+  providers: allowTestLogin ? [oidcProvider, testProvider] : [oidcProvider],
+```
+
+The `signIn` callback already short-circuits the domain allowlist for
+`account?.provider === "test-login"`, which is required because seeded users are
+`@example.com`. Do not remove that line.
+
+Set `ALLOW_TEST_LOGIN=1` in your local `.env` and add it to `.env.example` documented as
+**e2e and local development only, never a deployed environment**.
 
 - [ ] **Step 1: Create `src/components/shell.css`**
 
@@ -3580,7 +3672,25 @@ export default async function SpaceLayout({
 Run: `npm run typecheck && npm run build`
 Expected: exit 0 for both.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Actually load the page and confirm the rail renders three levels**
+
+A build proves it compiles, not that it renders. With `ALLOW_TEST_LOGIN=1`, start the dev
+server, sign in through `/api/auth/signin` as `aisyah@example.com` (an `EDITOR` member of
+`engineering`), then fetch `/engineering` and confirm in the returned HTML:
+
+- `architecture`, `architecture/mqtt-contracts` **and**
+  `architecture/mqtt-contracts/topic-registry` all appear as links. The third is the whole
+  point — it only appears if the rail recursed.
+- `Prisma migration policy` carries the `Draft` chip (it is the unpublished page).
+- The brand shows `alpha`, and the rail foot shows the build label.
+
+Then fetch `/engineering` **signed out** and confirm a redirect to
+`/api/auth/signin?callbackUrl=%2Fengineering` — the destination must survive.
+
+Paste the evidence for each. If `topic-registry` is missing, the rail is not recursing and
+the build passing means nothing.
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add -A
@@ -4521,6 +4631,11 @@ Then in the `NextAuth({ ... })` call, replace the `providers` array with:
 
 and extract the existing OIDC object literal into `const oidcProvider = { ... }` above the
 `NextAuth` call so both branches can reference it.
+
+**The test-login provider already exists** — it was moved into Task 10 so the interface
+could be seen while it was being built, along with `testLoginEnabled` and its three unit
+tests covering the negative case. This task only adds the Playwright config and specs. Do
+not create the provider again.
 
 **Two things this task must not lose.** The `signIn` callback short-circuits the domain
 allowlist for `account?.provider === "test-login"` — seeded users are `@example.com`, which
