@@ -2694,6 +2694,22 @@ git commit -m "feat: add OIDC sign-in and viewer loading"
 The Alpha badge and every bug report quote this string, so it must be correct in every
 environment including local development.
 
+**`GIT_SHA` must reach the container at runtime, not only at build time.** Spec §18.1 calls
+it a build argument, but `buildInfo` takes `env` as a parameter, so Next cannot statically
+inline it — it is a genuine runtime read. A Dockerfile that declares `ARG GIT_SHA` without
+promoting it produces `0.1.0+dev` in production: a build string that is present and wrong,
+which is worse than one that is missing, because every bug report will quote it. The
+deployment needs both:
+
+```dockerfile
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
+```
+
+**Client components must import only the type.** `RailFoot` and `BugReportDialog` use
+`import type { BuildInfo }`, which is erased at compile time. A value import would pull
+`package.json` — dependency list and all — into the client bundle.
+
 **Files:**
 - Create: `src/lib/version/build.ts`
 - Test: `src/lib/version/build.test.ts`
@@ -2727,6 +2743,20 @@ test("reports the package version", () => {
 
 test("is always marked alpha in this phase", () => {
   expect(buildInfo({}).channel).toBe("alpha");
+});
+
+test("reads the ambient environment when called with no argument", () => {
+  // Every other test passes an explicit env, so without this the default parameter is
+  // never exercised — someone could change it to `{}` and no test would notice, and the
+  // production path is precisely the one that relies on it.
+  const previous = process.env.GIT_SHA;
+  process.env.GIT_SHA = "abcdef1234567";
+  try {
+    expect(buildInfo().gitSha).toBe("abcdef1");
+  } finally {
+    if (previous === undefined) delete process.env.GIT_SHA;
+    else process.env.GIT_SHA = previous;
+  }
 });
 ```
 
@@ -2763,9 +2793,18 @@ export function buildInfo(env: NodeJS.ProcessEnv = process.env): BuildInfo {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- src/lib/version/build.test.ts`
-Expected: 5 passed.
+Expected: **6 passed.**
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Verify the typecheck and build pass**
+
+Run: `npm run typecheck && npm run build`
+Expected: both exit 0.
+
+This task introduces the project's first JSON import, so the build is where a Turbopack or
+`resolveJsonModule` problem would surface. Every other task runs it; this one previously
+did not.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/lib/version
