@@ -2706,6 +2706,13 @@ ARG GIT_SHA
 ENV GIT_SHA=$GIT_SHA
 ```
 
+**`Partial<NodeJS.ProcessEnv>`, not `NodeJS.ProcessEnv`.** Base `@types/node` declares
+`interface ProcessEnv extends Dict<string> {}`, which `{}` satisfies — but **Next augments
+that interface with a required `NODE_ENV`**, so every test that passes `{}` or
+`{ GIT_SHA }` fails with `TS2741: Property 'NODE_ENV' is missing`. Measured, by reverting
+the annotation and running the typecheck. This will recur anywhere else an env parameter is
+typed.
+
 **Client components must import only the type.** `RailFoot` and `BugReportDialog` use
 `import type { BuildInfo }`, which is erased at compile time. A value import would pull
 `package.json` — dependency list and all — into the client bundle.
@@ -2777,7 +2784,7 @@ export type BuildInfo = {
   channel: "alpha";
 };
 
-export function buildInfo(env: NodeJS.ProcessEnv = process.env): BuildInfo {
+export function buildInfo(env: Partial<NodeJS.ProcessEnv> = process.env): BuildInfo {
   const raw = env.GIT_SHA?.trim();
   const gitSha = raw && raw.length > 0 ? raw.slice(0, 7) : null;
 
