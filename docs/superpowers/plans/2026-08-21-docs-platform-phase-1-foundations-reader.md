@@ -4938,6 +4938,27 @@ Then check the failure paths, which are the ones that matter:
 Paste the evidence. If the TOC anchors do not match the body ids, the Markdown pipeline's
 sanitise-before-slug ordering has regressed and the table of contents is silently broken.
 
+**Known: a 404 renders nothing in the server HTML.** Measured against a production build —
+every 404 source returns an empty shell, `<div hidden=""><!--$--><!--/$--></div>`, with the
+not-found content present only in the RSC flight payload:
+
+| 404 source | Server HTML contains "Not found" |
+|---|---|
+| `notFound()` from the page (unpublished ADR) | no |
+| `notFound()` from the space layout (hidden space) | no |
+| Next's own unmatched route (`/totally/unrouted/thing`) | no |
+
+The third row is the point: that path never touches our code, so this is Next 16 streaming
+the not-found boundary for client hydration rather than anything this task did. A real
+browser renders it correctly after hydration; `curl` and any no-JS client see a blank page
+with a 404 status. Acceptable for an internal alpha, and **not worth fighting** — but two
+consequences to respect:
+
+- Task 14's Playwright assertion on the "Not found" heading works because it drives a real
+  browser. Do not rewrite it as an HTML fetch.
+- Task 15's smoke test asserts 404 **status codes only**, never 404 body text. Keep it that
+  way.
+
 - [ ] **Step 8: Commit**
 
 ```bash
