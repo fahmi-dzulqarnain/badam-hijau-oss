@@ -15,9 +15,11 @@ export default async function SpaceLayout({
   params: Promise<{ space: string }>;
 }) {
   const { space: spaceKey } = await params;
-  // Passing the destination is what makes a deep link from Slack or a ticket survive a
-  // cold visit. Without it the callback cookie is the bare origin and the reader lands on
-  // the placeholder home page instead of the page they asked for.
+  // Only the space key is available here, so a signed-out deep link lands on the space
+  // root rather than the requested page. Preserving the full path needs middleware, which
+  // is the only server-side place with the pathname — deferred because the credentials
+  // provider imports Prisma, so it would require splitting this config into edge-safe and
+  // node halves. Revisit if cold deep-link visits become common.
   const viewer = await requireViewer(`/${spaceKey}`);
 
   const space = await getReadableSpaceByKey(viewer, spaceKey);

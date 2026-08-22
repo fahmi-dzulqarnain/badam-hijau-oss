@@ -35,7 +35,6 @@
 .rail-l {
   position: sticky;
   top: 54px;
-  align-self: start;
   height: calc(100vh - 54px);
   overflow-y: auto;
   display: flex;
@@ -103,6 +102,19 @@
   border-radius: 5px;
 }
 .navgroup > summary::-webkit-details-marker { display: none; }
+.navgroup > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform 0.12s ease;
+}
+.navgroup[open] > summary::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .navgroup > summary::before { transition: none; }
+}
 
 .navlist {
   display: flex;
@@ -112,19 +124,27 @@
   padding: 2px 0 8px 10px;
   border-left: 1px solid var(--line);
 }
-.navlist a {
+.rail-l a {
   padding: 5px 9px;
   font-size: 13.5px;
   color: var(--ink-2);
   text-decoration: none;
   border-radius: 5px;
 }
-.navlist a:hover { color: var(--ink); background: var(--surface-2); }
-.navlist a[aria-current="page"] {
+.rail-l a:hover { color: var(--ink); background: var(--surface-2); }
+.rail-l a[aria-current="page"] {
   font-weight: 600;
   color: var(--accent-ink);
   background: var(--accent-wash);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.rail-l .navdraft {
+  display: block;
+  padding: 5px 9px;
+  font-size: 13.5px;
+  color: var(--ink-3);
+  cursor: default;
 }
 
 /* Nested groups: each level indents via its own .navlist border. */

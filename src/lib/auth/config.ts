@@ -9,6 +9,12 @@ const allowedDomains = parseAllowedDomains(process.env.ALLOWED_EMAIL_DOMAINS);
 
 const allowTestLogin = testLoginEnabled();
 
+if (allowTestLogin) {
+  console.warn(
+    "[auth] ALLOW_TEST_LOGIN=1 — passwordless test login is REGISTERED. Never in a deployed environment.",
+  );
+}
+
 const oidcProvider = {
   id: "company",
   name: "Company SSO",
@@ -47,6 +53,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   providers: allowTestLogin ? [oidcProvider, testProvider] : [oidcProvider],
   callbacks: {
+    async jwt({ token, account }) {
+      // `next-auth/jwt`'s module augmentation did not resolve under this project's
+      // module resolution, so the provider claim is typed with an inline cast instead
+      // of `declare module "next-auth/jwt" { interface JWT { prov?: string } }`.
+      const t = token as { prov?: string };
+      if (account) t.prov = account.provider;
+      // A session minted by the passwordless test login must die the moment the flag
+      // does. Without this claim a test-login token is byte-identical to an OIDC one:
+      // turning the flag off cannot revoke it, and a shared AUTH_SECRET would let a
+      // dev-minted super-admin token authenticate against production. Returning null
+      // ends the session.
+      if (t.prov === "test-login" && !allowTestLogin) return null;
+      return t;
+    },
+
     async signIn({ account, profile }) {
       // Task 14's test-login provider is already gated by ALLOW_TEST_LOGIN and resolves
       // only users the seed created, so the domain allowlist does not apply to it.
