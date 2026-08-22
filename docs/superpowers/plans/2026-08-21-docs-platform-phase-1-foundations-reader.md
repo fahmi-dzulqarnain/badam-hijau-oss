@@ -2974,7 +2974,7 @@ async function main() {
     },
   });
 
-  await db.space.upsert({
+  const handbook = await db.space.upsert({
     where: { key: "handbook" },
     update: {},
     create: {
@@ -3031,7 +3031,52 @@ async function main() {
     });
   }
 
-  console.log("Seeded 2 spaces and", ENGINEERING_PAGES.length, "pages.");
+  // The handbook needs at least one readable page, or a viewer who belongs to nothing
+  // signs in and sees an empty shell — which demonstrates the permission model badly and
+  // leaves the ALL_STAFF read path with nothing to exercise in the browser or in E2E.
+  const welcome = await db.page.upsert({
+    where: { spaceId_path: { spaceId: handbook.id, path: "welcome" } },
+    update: {},
+    create: {
+      spaceId: handbook.id,
+      slug: "welcome",
+      path: "welcome",
+      title: "Welcome",
+      position: 0,
+      ownerId: fahmi.id,
+      createdById: fahmi.id,
+      reviewedAt: new Date("2026-08-18T00:00:00Z"),
+      status: "CURRENT",
+    },
+  });
+
+  const welcomeVersion = await db.pageVersion.create({
+    data: {
+      pageId: welcome.id,
+      title: "Welcome",
+      markdown: [
+        "Everything in this space is readable by anyone who can sign in.",
+        "",
+        "## Finding things",
+        "",
+        "Spaces group documentation by the team that owns it. If a space is not listed,",
+        "you are not a member of it — ask its owner for access.",
+        "",
+      ].join("\n"),
+      status: "CURRENT",
+      authorId: fahmi.id,
+      message: "Seed",
+    },
+  });
+
+  await db.page.update({
+    where: { id: welcome.id },
+    data: { publishedVersionId: welcomeVersion.id, publishedAt: new Date() },
+  });
+
+  console.log(
+    `Seeded 2 spaces and ${ENGINEERING_PAGES.length + 1} pages.`,
+  );
 }
 
 main()
@@ -3049,11 +3094,41 @@ main()
 npm run db:seed
 ```
 
-Expected: prints `Seeded 2 spaces and 5 pages.` Running it a second time must also
+Expected: prints `Seeded 2 spaces and 6 pages.` Running it a second time must also
 succeed — the upserts make it idempotent for spaces and pages. Note that page **versions**
 are appended each run by design; that is correct behaviour for a version table.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Prove the seeded data reads back through the repository**
+
+This is the first point in the plan where the schema, the seed, the permission predicate
+and the read layer all run together, so verify the join rather than assuming it. Write a
+throwaway script, run it against the **development** database, and delete it afterwards:
+
+```ts
+// scratch-verify.ts — delete after running
+import { getPublishedPage, listSpacePages } from "@/lib/pages/repo";
+import type { Viewer } from "@/lib/authz/types";
+
+const stranger: Viewer = { id: "nobody", isSuperAdmin: false, memberships: [] };
+
+const open = await getPublishedPage(stranger, { spaceKey: "handbook", path: "welcome" });
+console.log("ALL_STAFF page readable by a non-member:", open !== null);
+
+const closed = await getPublishedPage(stranger, {
+  spaceKey: "engineering",
+  path: "architecture/mqtt-contracts",
+});
+console.log("MEMBERS page readable by a non-member:", closed !== null, "(must be false)");
+
+console.log("pages a stranger can list in engineering:", (await listSpacePages(stranger, "")).length);
+```
+
+Run with `npx tsx scratch-verify.ts`. Expected: `true`, `false`, `0`. If the first line is
+`false`, the seed did not publish the handbook page; if the second is `true`, the
+permission predicate is not reaching the seeded data and nothing later in Phase 1 can be
+trusted.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A
