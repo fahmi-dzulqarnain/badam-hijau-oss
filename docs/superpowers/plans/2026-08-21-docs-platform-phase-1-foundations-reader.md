@@ -4112,6 +4112,14 @@ export async function createBugReport(
 }
 ```
 
+**Measured cost: 5 queries per report**, including the `Space` lookup twice —
+`resolveReportContext` resolves the space, then `getPublishedPage` resolves it again. Both
+are `cache()`-wrapped, but an API route handler is not an RSC render, so that memoization is
+inert here (see Task 4's note). It also loads the page owner's name, which a report does not
+need. Left alone deliberately: bug reports are rare, and the alternative is a bespoke query
+that duplicates the permission predicate — trading five cheap queries for a second place
+the predicate could drift.
+
 `context` is a separate parameter rather than folded into `input` so the type system keeps
 the two apart: `input` is client-supplied and validated, `context` is server-derived and
 trusted. Merging them would make it possible to pass a client value where a derived one
