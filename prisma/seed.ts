@@ -69,6 +69,26 @@ const ENGINEERING_PAGES: SeedPage[] = [
     ].join("\n"),
   },
   {
+    // Three levels deep, deliberately. The navigation rail renders recursively, and
+    // nothing else in the seed goes past two levels — so without this page the recursion
+    // is unexercised and a regression to a fixed two-level render would leave this page
+    // invisible in the rail while still reachable by URL, with nothing failing.
+    slug: "topic-registry",
+    title: "Topic registry",
+    parent: "mqtt-contracts",
+    markdown: [
+      "Who owns which topic prefix.",
+      "",
+      "## Registry",
+      "",
+      "| Prefix | Owner |",
+      "| --- | --- |",
+      "| `acme/+/kiosk` | Kiosk |",
+      "| `acme/+/loyalty` | Loyalty |",
+      "",
+    ].join("\n"),
+  },
+  {
     slug: "adr-0043-prisma-migrations",
     title: "Prisma migration policy",
     parent: "decisions",
@@ -133,10 +153,16 @@ async function main() {
   });
 
   const idBySlug = new Map<string, string>();
+  // Paths are built from the parent's PATH, not its slug. Deriving from the slug only
+  // works two levels deep: a third level would get `mqtt-contracts/topic-registry`
+  // instead of `architecture/mqtt-contracts/topic-registry`, which is silently wrong and
+  // breaks every lookup for that page.
+  const pathBySlug = new Map<string, string>();
 
   for (const [index, seed] of ENGINEERING_PAGES.entries()) {
     const parentId = seed.parent ? idBySlug.get(seed.parent) : undefined;
-    const path = seed.parent ? `${seed.parent}/${seed.slug}` : seed.slug;
+    const parentPath = seed.parent ? pathBySlug.get(seed.parent) : undefined;
+    const path = parentPath ? `${parentPath}/${seed.slug}` : seed.slug;
     const status = seed.status ?? "CURRENT";
 
     const page = await db.page.upsert({
@@ -157,6 +183,7 @@ async function main() {
       },
     });
     idBySlug.set(seed.slug, page.id);
+    pathBySlug.set(seed.slug, path);
 
     if (seed.published === false) continue;
 
