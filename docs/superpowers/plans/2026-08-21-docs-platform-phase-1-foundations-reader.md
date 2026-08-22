@@ -4589,6 +4589,8 @@ git commit -m "feat: add in-product bug reporting"
 }
 .crumbs a { text-decoration: none; }
 .crumbs .sep { color: var(--line-strong); }
+.crumbs ol { display: contents; list-style: none; margin: 0; padding: 0; }
+.crumbs li { display: contents; }
 
 .doc h1 {
   margin: 0 0 10px;
@@ -4620,18 +4622,32 @@ git commit -m "feat: add in-product bug reporting"
   color: var(--ink-3);
 }
 
+.body :is(h1, h2, h3, h4) { scroll-margin-top: 72px; }
+.body h1 { margin: 34px 0 12px; font-family: var(--serif); font-size: 23px; font-weight: 500; }
 .body h2 {
   margin: 38px 0 12px;
   font-family: var(--serif);
   font-size: 23px;
   font-weight: 500;
-  scroll-margin-top: 72px;
   text-wrap: balance;
 }
 .body h2:first-child { margin-top: 0; }
+.body h3 { margin: 26px 0 8px; font-family: var(--serif); font-size: 18px; font-weight: 500; }
 .body p, .body ul, .body ol { max-width: 66ch; }
 .body li::marker { color: var(--accent); }
 .body a { color: var(--accent); }
+/* Heading anchors come from rehype-autolink-headings. Without this every section title
+   in the product paints accent-green and underlined. */
+.body :is(h1, h2, h3, h4, h5, h6) a { color: inherit; text-decoration: none; }
+.body img { max-width: 100%; height: auto; }
+.body .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 .body pre {
   overflow-x: auto;
@@ -4688,6 +4704,7 @@ git commit -m "feat: add in-product bug reporting"
   color: var(--ink-2);
   text-decoration: none;
   border-left: 2px solid var(--line);
+  overflow-wrap: anywhere;
 }
 .toc a.depth-3 { padding-left: 20px; }
 
@@ -4707,6 +4724,27 @@ git commit -m "feat: add in-product bug reporting"
 }
 .card dd { margin: 2px 0 0; font-size: 12.5px; }
 
+.body .mermaid-source {
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+}
+.body blockquote {
+  margin: 18px 0;
+  padding: 2px 0 2px 14px;
+  color: var(--ink-2);
+  border-left: 2px solid var(--line-strong);
+}
+.body hr { margin: 28px 0; border: 0; border-top: 1px solid var(--line); }
+.body .contains-task-list { list-style: none; padding-left: 0; }
+
+/* Paired with shell.css's `.shell` column collapse at the same width — change one and
+   check the other, or the right rail and the grid column it depends on fall out of sync. */
 @media (max-width: 1180px) { .rail-r { display: none; } }
 ```
 
@@ -4714,32 +4752,49 @@ git commit -m "feat: add in-product bug reporting"
 
 ```tsx
 import Link from "next/link";
+import type { Route } from "next";
+
+type Ancestor = { path: string; title: string; isLinkable: boolean };
+
+const encodePath = (path: string) =>
+  path.split("/").map(encodeURIComponent).join("/");
 
 export function Breadcrumbs({
   spaceKey,
   spaceName,
-  path,
+  ancestors,
+  title,
 }: {
   spaceKey: string;
   spaceName: string;
-  path: string;
+  ancestors: Ancestor[];
+  title: string;
 }) {
-  const segments = path.split("/");
-  const ancestors = segments.slice(0, -1);
-
   return (
     <nav className="crumbs" aria-label="Breadcrumb">
-      <Link href={`/${spaceKey}`}>{spaceName}</Link>
-      {ancestors.map((segment, index) => (
-        <span key={segment}>
-          <span className="sep"> / </span>
-          <Link href={`/${spaceKey}/${ancestors.slice(0, index + 1).join("/")}`}>
-            {segment.replace(/-/g, " ")}
-          </Link>
-        </span>
-      ))}
-      <span className="sep">/</span>
-      <span>{segments.at(-1)?.replace(/-/g, " ")}</span>
+      <ol>
+        <li>
+          <Link href={`/${encodeURIComponent(spaceKey)}` as Route}>{spaceName}</Link>
+        </li>
+        {ancestors.map((ancestor) => (
+          <li key={ancestor.path}>
+            <span className="sep">/</span>
+            {ancestor.isLinkable ? (
+              <Link
+                href={`/${encodeURIComponent(spaceKey)}/${encodePath(ancestor.path)}` as Route}
+              >
+                {ancestor.title}
+              </Link>
+            ) : (
+              <span>{ancestor.title}</span>
+            )}
+          </li>
+        ))}
+        <li>
+          <span className="sep">/</span>
+          <span aria-current="page">{title}</span>
+        </li>
+      </ol>
     </nav>
   );
 }
@@ -4771,6 +4826,8 @@ export function Toc({ headings }: { headings: Heading[] }) {
 - [ ] **Step 4: Create `src/components/PageInfoCard.tsx`**
 
 ```tsx
+import { dateFormat } from "@/lib/format";
+
 export function PageInfoCard({
   ownerName,
   reviewedAt,
@@ -4784,8 +4841,6 @@ export function PageInfoCard({
   status: string;
   versionCount: number;
 }) {
-  const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
-
   return (
     <>
       <div className="railhead">Page info</div>
@@ -4794,7 +4849,7 @@ export function PageInfoCard({
           <dt>Owner</dt>
           <dd>{ownerName ?? "Unassigned"}</dd>
           <dt>Last reviewed</dt>
-          <dd>{reviewedAt ? formatter.format(reviewedAt) : "Never"}</dd>
+          <dd>{reviewedAt ? dateFormat.format(reviewedAt) : "Never"}</dd>
           <dt>Type</dt>
           <dd>{docType}</dd>
           <dt>Lifecycle</dt>
@@ -4828,11 +4883,10 @@ export default function NotFound() {
 
 ```tsx
 import { notFound } from "next/navigation";
-import "@/components/doc.css";
-import { db } from "@/lib/db";
 import { requireViewer } from "@/lib/auth/viewer";
-import { getPublishedPage } from "@/lib/pages/repo";
+import { getPublishedPage, listSpacePages } from "@/lib/pages/repo";
 import { renderMarkdown } from "@/lib/markdown/render";
+import { dateFormat } from "@/lib/format";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageInfoCard } from "@/components/PageInfoCard";
 import { Toc } from "@/components/Toc";
@@ -4858,13 +4912,33 @@ export default async function DocPage({
 
   const { space, page, version } = result;
   const { html, headings } = await renderMarkdown(version.markdown);
-  const versionCount = await db.pageVersion.count({ where: { pageId: page.id } });
-  const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
+
+  // Cache hit: the layout already called this with the same viewer object in this render.
+  const rows = await listSpacePages(viewer, space.id);
+  const byPath = new Map(rows.map((row) => [row.path, row]));
+
+  const segments = page.path.split("/");
+  const ancestors = segments.slice(0, -1).map((_, index) => {
+    const path = segments.slice(0, index + 1).join("/");
+    const row = byPath.get(path);
+    return {
+      path,
+      title: row?.title ?? path.split("/").pop()!.replace(/-/g, " "),
+      // An unpublished ancestor would 404, exactly as NavRail's draft entries would —
+      // so it is shown as text, not offered as a link.
+      isLinkable: row?.publishedVersionId != null,
+    };
+  });
 
   return (
     <>
       <main className="doc">
-        <Breadcrumbs spaceKey={space.key} spaceName={space.name} path={page.path} />
+        <Breadcrumbs
+          spaceKey={space.key}
+          spaceName={space.name}
+          ancestors={ancestors}
+          title={page.title}
+        />
         <h1>{page.title}</h1>
 
         <div className="meta">
@@ -4873,24 +4947,27 @@ export default async function DocPage({
           </span>
           <span>
             <span className="k">Published</span>{" "}
-            {page.publishedAt ? formatter.format(page.publishedAt) : "—"}
+            {page.publishedAt ? dateFormat.format(page.publishedAt) : "—"}
           </span>
           <span>
             <span className="k">Commit</span> {version.gitSha ?? "not mirrored yet"}
           </span>
         </div>
 
+        {/* `dangerouslySetInnerHTML` is safe here only because `renderMarkdown` sanitises. If
+            that pipeline is ever changed to skip `rehype-sanitize`, this becomes stored XSS —
+            the test in Task 5 Step 2 is what guards it. */}
         <div className="body" dangerouslySetInnerHTML={{ __html: html }} />
       </main>
 
-      <aside className="rail-r">
+      <aside className="rail-r" aria-label="Page information">
         <Toc headings={headings} />
         <PageInfoCard
           ownerName={page.owner?.name ?? null}
           reviewedAt={page.reviewedAt}
           docType={page.docType}
           status={page.status}
-          versionCount={versionCount}
+          versionCount={page._count.versions}
         />
       </aside>
     </>
