@@ -1,6 +1,6 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 66 commits · **80 tests passing** · typecheck
+Branch: `phase-1-foundations-reader` · 75 commits · **105 tests passing** · typecheck
 and build clean · working tree clean
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
@@ -18,15 +18,15 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 8. Build version module | ✅ approved |
 | 9. Seed script | ✅ approved |
 | 10. Reader shell | ✅ approved |
-| **11. Bug reporting** | **next — restructured, ready to dispatch** |
-| 12. Page reader route | not started |
+| 11. Bug reporting | ✅ approved |
+| **12. Page reader route** | **next — validated, ready to dispatch** |
 | 13. Space landing | not started |
 | 14. Playwright E2E | not started |
 | 15. Cold-start smoke test | not started |
 
 ## Test suite
 
-80 tests, 11 files. 47 pure unit (no database), 33 integration against real Postgres.
+105 tests, 15 files. 55 pure unit (no database), 50 integration against real Postgres.
 
 | File | Tests |
 |---|---|
@@ -37,6 +37,10 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | `tests/integration/pages-repo.test.ts` | 8 |
 | `src/lib/version/build.test.ts` | 6 |
 | `src/lib/auth/test-login.test.ts` | 3 |
+| `src/lib/bugs/schema.test.ts` | 8 |
+| `tests/integration/bug-context.test.ts` | 5 |
+| `tests/integration/bug-route.test.ts` | 6 |
+| `tests/integration/bug-report.test.ts` | 4 |
 | `tests/integration/user-upsert.test.ts` | 4 |
 | `tests/integration/viewer.test.ts` | 4 |
 | `tests/integration/authz-where.test.ts` | 3 |
@@ -108,6 +112,19 @@ Re-running the seed updates page **markdown** (a new version is published) but n
 - **A signed-out deep link lands on the space root**, not the requested page. The layout has
   only the space key; preserving the full path needs middleware, which needs the auth config
   split into edge-safe and node halves. Deferred deliberately.
+- **Bug-report page context is derived from `routePath`, never accepted from the client.**
+  A client-supplied `pageId` could name a page in a space the reporter cannot read, which an
+  admin would then see. Deriving it also means there is nothing to validate.
+- **The bug endpoint caps on declared `Content-Length` before reading the body**, and
+  rejects a *missing* length with 411 — `Number(null)` is 0, so a numeric-only check lets a
+  chunked body through. The cap is 128KB because Zod counts UTF-16 units while
+  `Content-Length` counts UTF-8 bytes, and a max-length CJK report is ~54KB.
+- **`summary` is stored raw.** Encode at output; sanitising on write destroys the evidence.
+  The control-character strip is `\p{Cc}` only (keeping newline, tab, return) because
+  Postgres rejects NUL — `\p{C}` would also break ZWJ emoji and bidi marks.
+- **The bug dialog portals to `document.body`.** Rendered as a sibling of its trigger it sat
+  inside `.rail-l`, which is `display: none` below 860px — taking the open dialog and the
+  user's typed text with it.
 - Implementers create a **new commit**, never `--amend`.
 
 ## Working method that has earned its keep

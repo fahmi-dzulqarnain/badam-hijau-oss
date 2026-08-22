@@ -3811,6 +3811,26 @@ test("rejects a report with no route path", () => {
   const { routePath, ...withoutRoute } = valid;
   expect(bugReportInput.safeParse(withoutRoute).success).toBe(false);
 });
+
+test("strips a NUL byte, which Postgres would reject outright", () => {
+  const parsed = bugReportInput.parse({ ...valid, summary: "before\0after" });
+  expect(parsed.summary).toBe("beforeafter");
+});
+
+test("keeps newlines and tabs, which carry meaning in a pasted trace", () => {
+  const parsed = bugReportInput.parse({ ...valid, summary: "line one\n\tindented" });
+  expect(parsed.summary).toBe("line one\n\tindented");
+});
+
+test("keeps a zero-width joiner, so emoji sequences survive", () => {
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  expect(bugReportInput.parse({ ...valid, summary: family }).summary).toBe(family);
+});
+
+test("keeps bidi marks, so right-to-left text keeps its direction", () => {
+  const mixed = "\u200F" + "سعر: 5" + "\u200E";
+  expect(bugReportInput.parse({ ...valid, summary: mixed }).summary).toBe(mixed);
+});
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -3823,11 +3843,26 @@ Expected: FAIL — `Failed to resolve import "./schema"`.
 ```ts
 import { z } from "zod";
 
+// Postgres rejects NUL outright (22021), turning a legal JSON body into a 500 no retry can
+// clear — and this endpoint exists to receive pasted console output, where stray control
+// bytes come from. Strip the C0/C1 control block only: newline, tab and carriage return
+// carry meaning in a trace, and \p{Cf} (zero-width joiners, bidi marks) is deliberately
+// left alone — stripping it silently breaks ZWJ emoji sequences and right-to-left text.
+const stripControl = (value: string) =>
+  value.replace(/\p{Cc}/gu, (ch) =>
+    ch === "\n" || ch === "\t" || ch === "\r" ? ch : "",
+  );
+
 const optionalText = (max: number) =>
-  z.string().trim().max(max).nullish().transform((v) => (v ? v : null));
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((v) => (v ? stripControl(v) : null));
 
 export const bugReportInput = z.object({
-  summary: z.string().trim().min(1).max(5000),
+  summary: z.string().trim().min(1).max(5000).transform(stripControl),
   expected: optionalText(5000),
   routePath: z.string().min(1).max(2000),
   // No spaceId/pageId/versionId here, deliberately. They are derived server-side from
@@ -3955,6 +3990,13 @@ const NONE: ReportContext = { spaceId: null, pageId: null, versionId: null };
  *
  * Returns nulls rather than throwing. A report from an unrecognised route is still worth
  * keeping, and routePath is the durable breadcrumb either way.
+ *
+ * `split("/").filter(Boolean)` collapses repeated and leading/trailing slashes, so
+ * "//engineering////architecture//mqtt" and "engineering/architecture/mqtt" (no leading
+ * slash) resolve to the same context as the canonical route. The derived value is
+ * therefore "a route that normalises to this page", not "the route the reporter was on
+ * verbatim" — harmless, since the space predicate still gates everything below, but worth
+ * knowing before reading routePath as an exact match.
  */
 export async function resolveReportContext(
   viewer: Viewer,
@@ -4145,6 +4187,30 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Sign in to report a bug." }, { status: 401 });
   }
 
+  // 128KB. The schema's own limits allow ~18,100 UTF-16 code units across all fields, and
+  // Zod counts units while Content-Length counts UTF-8 BYTES — so a maximum-length report
+  // in a 3-bytes-per-unit script (CJK) is ~54KB, and a 32KB cap rejected it outright. This
+  // is still four orders of magnitude below the ~300MB that exhausts a memory-capped
+  // container, which is the only thing this guard exists to stop.
+  const MAX_BODY_BYTES = 131_072;
+
+  // Reject on the declared size before reading the body: request.json() buffers and
+  // parses everything first, so a single large POST can exhaust a memory-capped
+  // container. A MISSING length is rejected too — a chunked body omits it entirely, and
+  // Number(null) is 0, which would otherwise slip under any numeric cap. Real clients
+  // send it: a browser fetch with a JSON.stringify body sets Content-Length.
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength === null) {
+    return NextResponse.json(
+      { error: "A Content-Length header is required." },
+      { status: 411 },
+    );
+  }
+  const bytes = Number(declaredLength);
+  if (!Number.isInteger(bytes) || bytes <= 0 || bytes > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "That report is too large." }, { status: 413 });
+  }
+
   const parsed = bugReportInput.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -4167,6 +4233,7 @@ Owns the open/closed state so both placements are self-contained.
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import type { BuildInfo } from "@/lib/version/build";
 import { BugReportDialog } from "./BugReportDialog";
 
@@ -4184,7 +4251,16 @@ export function BugReportButton({
       <button type="button" className={className} onClick={() => setOpen(true)}>
         Report bug
       </button>
-      {open ? <BugReportDialog build={build} onClose={() => setOpen(false)} /> : null}
+      {/* Portalled to the body deliberately. Rendered as a sibling of the trigger, the
+          rail instance's overlay sits inside .rail-l — which is display:none below 860px,
+          taking the open dialog and the user's typed text with it, since position:fixed
+          does not escape a display:none ancestor. */}
+      {open
+        ? createPortal(
+            <BugReportDialog build={build} onClose={() => setOpen(false)} />,
+            document.body,
+          )
+        : null}
     </>
   );
 }
@@ -4361,13 +4437,15 @@ export function BugReportDialog({
 
   // Escape closes. Deliberately not a focus trap — more than an alpha needs — but a dialog
   // that cannot be dismissed from the keyboard is worse than one that is merely imperfect.
+  // Gated on state so Escape cannot unmount mid-submit: the row would still be created, the
+  // user would never see "Thanks", and the natural next move is to file it twice.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && state !== "sending") onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, state]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -4394,14 +4472,8 @@ export function BugReportDialog({
   }
 
   return (
-    <div className="bugdim" onClick={onClose}>
-      <div
-        className="bugcard"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Report a bug"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="bugdim">
+      <div className="bugcard" role="dialog" aria-label="Report a bug">
         {state === "sent" ? (
           <>
             <h2>Thanks</h2>
