@@ -4973,7 +4973,7 @@ git commit -m "feat: add page reader with breadcrumbs, toc and page info"
 **Files:**
 - Create: `src/lib/spaces/landing.ts`
 - Test: `src/lib/spaces/landing.test.ts`
-- Create: `src/app/(reader)/[space]/page.tsx`
+- Replace: `src/app/(reader)/[space]/page.tsx` (Task 10 shipped a placeholder here)
 - Modify: `src/lib/pages/repo.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -5115,10 +5115,13 @@ export const listRecentlyPublished = cache(
 
 Task 10 shipped a stub here so the shell was reachable. Overwrite it.
 
+**Do not import `doc.css` here.** Task 12 moved that import into the space layout, because
+importing it from a page route made `.doc` compute differently on a hard load than on a
+soft navigation to the same route. The layout already provides it.
+
 ```tsx
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import "@/components/doc.css";
 import { requireViewer } from "@/lib/auth/viewer";
 import {
   getReadableSpaceByKey,
