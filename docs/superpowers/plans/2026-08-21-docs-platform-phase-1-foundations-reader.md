@@ -2188,16 +2188,18 @@ the source of truth for identity, and we only need the local row for memberships
 Sessions are JWTs, so there is no session table to maintain.
 
 **Files:**
-- Create: `src/lib/users/upsert.ts`, `src/lib/users/viewer.ts`
+- Create: `src/lib/users/upsert.ts`, `src/lib/users/gate.ts`, `src/lib/users/viewer.ts`
 - Create: `src/lib/auth/config.ts`, `src/lib/auth/viewer.ts`
 - Create: `src/app/api/auth/[...nextauth]/route.ts`
-- Test: `tests/integration/user-upsert.test.ts`, `tests/integration/viewer.test.ts`
+- Test: `tests/integration/user-upsert.test.ts`, `src/lib/users/gate.test.ts`,
+  `tests/integration/viewer.test.ts`
 
-**Why the viewer lookup is split across two files.** `viewerForEmail` — the database half,
-and the only place a `Viewer` is ever constructed — lives in `src/lib/users/viewer.ts` with
-no Auth.js import. `src/lib/auth/viewer.ts` holds the thin session wiring on top. That split
-is what makes the security-relevant mapping testable without instantiating NextAuth inside
-Vitest, and keeps the module graph of an integration test free of the auth runtime.
+**Why three files under `src/lib/users/` rather than one auth module.** The two decisions
+that matter for security — *who may sign in* (`gate.ts`) and *what a signed-in person can
+see* (`viewer.ts`) — are pure and Auth.js-free, so both are testable without instantiating
+NextAuth inside Vitest. `src/lib/auth/` holds only the thin wiring on top. Verified: the
+transitive import graph of `users/viewer.ts` is `@/lib/db` → `@prisma/client` plus
+`@/lib/authz/types`, with no `next-auth` anywhere.
 
 - [ ] **Step 1: Install Auth.js**
 
@@ -2205,7 +2207,11 @@ Vitest, and keeps the module graph of an integration test free of the auth runti
 npm install next-auth@beta
 ```
 
-- [ ] **Step 2: Write the failing test**
+Installed and verified against `next-auth@5.0.0-beta.32` / `@auth/core@0.41.3`, which
+needed no API adaptation. `@auth/core`'s base `Profile` already declares
+`email_verified?: boolean | null`, so no type workaround is required for it.
+
+- [ ] **Step 2: Write the failing upsert test**
 
 `tests/integration/user-upsert.test.ts`:
 
@@ -2258,7 +2264,7 @@ test("falls back to the email local part when the provider sends no name", async
 - [ ] **Step 3: Run the test to verify it fails**
 
 Run: `npm test -- tests/integration/user-upsert.test.ts`
-Expected: FAIL — `Failed to resolve import "@/lib/users/upsert"`.
+Expected: FAIL — cannot resolve `@/lib/users/upsert`.
 
 - [ ] **Step 4: Create `src/lib/users/upsert.ts`**
 
@@ -2273,13 +2279,19 @@ export type OidcProfile = {
 
 export async function upsertUserFromProfile(profile: OidcProfile) {
   const email = profile.email.toLowerCase();
-  const name = profile.name?.trim() || (email.split("@")[0] ?? email);
+  const providedName = profile.name?.trim();
+  const fallbackName = email.split("@")[0] ?? email;
 
   return db.user.upsert({
     where: { email },
-    // isSuperAdmin is deliberately absent: it is granted in our system, not theirs.
-    update: { name, avatarUrl: profile.avatarUrl ?? undefined },
-    create: { email, name, avatarUrl: profile.avatarUrl ?? null },
+    // isSuperAdmin is deliberately absent: it is granted in our system, not theirs. Note
+    // this stops the flag being SET, but not an existing privileged row being adopted —
+    // that is what the email_verified check in the sign-in gate is for.
+    //
+    // Both fields use `undefined` to mean "leave alone", so a provider that stops sending
+    // a name or a picture preserves what we already have instead of overwriting it.
+    update: { name: providedName || undefined, avatarUrl: profile.avatarUrl ?? undefined },
+    create: { email, name: providedName || fallbackName, avatarUrl: profile.avatarUrl ?? null },
   });
 }
 ```
@@ -2289,17 +2301,148 @@ export async function upsertUserFromProfile(profile: OidcProfile) {
 Run: `npm test -- tests/integration/user-upsert.test.ts`
 Expected: 4 passed.
 
-- [ ] **Step 6: Create `src/lib/auth/config.ts`**
+- [ ] **Step 6: Create `src/lib/users/gate.ts`**
+
+This is the staff boundary. Spec §8 treats "signed in" as "staff", so whatever this admits
+can read every `ALL_STAFF` space. It is pure so that boundary is directly testable.
+
+```ts
+export type SignInClaims = {
+  email?: string | null;
+  emailVerified?: boolean | null;
+};
+
+export function parseAllowedDomains(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Whether an OIDC profile may sign in at all. This is the staff boundary: spec §8 treats
+ * "signed in" as "staff", so every ALL_STAFF space is readable by anyone this returns
+ * true for.
+ *
+ * Fails closed on an empty allowlist. OIDC_ISSUER defaults to a multi-tenant issuer, so
+ * without a domain check the boundary rests entirely on the IdP application being scoped
+ * "internal" — a setting this codebase can neither see nor test. "Nobody can sign in" is
+ * a loud failure; "everybody can" is a silent one.
+ */
+export function isAllowedSignIn(claims: SignInClaims, allowedDomains: string[]): boolean {
+  const email = claims.email?.trim().toLowerCase();
+  if (!email) return false;
+
+  // An unverified email claim is an assertion, not an identity. This matters more than it
+  // looks: the upsert matches on email, so an issuer willing to mint
+  // email_verified:false for an existing address hands over that account, including its
+  // isSuperAdmin flag. Providers that omit the claim entirely are accepted — only an
+  // explicit false is a rejection.
+  if (claims.emailVerified === false) return false;
+
+  const domain = email.split("@")[1];
+  if (!domain) return false;
+
+  return allowedDomains.includes(domain);
+}
+```
+
+- [ ] **Step 7: Write and run the gate tests**
+
+`src/lib/users/gate.test.ts`:
+
+```ts
+import { describe, expect, test } from "vitest";
+import { isAllowedSignIn, parseAllowedDomains } from "./gate";
+
+const allowed = ["company.example", "contractors.company.example"];
+
+describe("isAllowedSignIn", () => {
+  test("admits a listed domain", () => {
+    expect(isAllowedSignIn({ email: "aisyah@company.example" }, allowed)).toBe(true);
+  });
+
+  test("rejects an unlisted domain", () => {
+    expect(isAllowedSignIn({ email: "stranger@gmail.com" }, allowed)).toBe(false);
+  });
+
+  test("fails closed when the allowlist is empty", () => {
+    expect(isAllowedSignIn({ email: "aisyah@company.example" }, [])).toBe(false);
+  });
+
+  test("rejects an explicitly unverified email", () => {
+    expect(
+      isAllowedSignIn({ email: "root@company.example", emailVerified: false }, allowed),
+    ).toBe(false);
+  });
+
+  test("accepts a provider that omits email_verified", () => {
+    expect(
+      isAllowedSignIn({ email: "root@company.example", emailVerified: undefined }, allowed),
+    ).toBe(true);
+  });
+
+  test("matches domain and email case-insensitively", () => {
+    expect(isAllowedSignIn({ email: "Aisyah@Company.Example" }, allowed)).toBe(true);
+  });
+
+  test("rejects a missing or blank email", () => {
+    expect(isAllowedSignIn({ email: null }, allowed)).toBe(false);
+    expect(isAllowedSignIn({ email: "   " }, allowed)).toBe(false);
+  });
+
+  test("rejects a value with no domain part", () => {
+    expect(isAllowedSignIn({ email: "notanemail" }, allowed)).toBe(false);
+  });
+
+  test("does not match a domain by suffix", () => {
+    expect(isAllowedSignIn({ email: "x@evilcompany.example" }, allowed)).toBe(false);
+  });
+});
+
+describe("parseAllowedDomains", () => {
+  test("trims, lowercases and drops empties", () => {
+    expect(parseAllowedDomains(" Company.Example , ,contractors.co ")).toEqual([
+      "company.example",
+      "contractors.co",
+    ]);
+  });
+
+  test("an unset variable yields an empty list, which denies everyone", () => {
+    expect(parseAllowedDomains(undefined)).toEqual([]);
+  });
+});
+```
+
+Run: `npm test -- src/lib/users/gate.test.ts`
+Expected: 11 passed.
+
+- [ ] **Step 8: Create `src/lib/auth/config.ts`**
 
 A generic OIDC provider, so Google Workspace and Microsoft Entra are configuration rather
 than code (spec §19).
 
 ```ts
 import NextAuth from "next-auth";
+import { isAllowedSignIn, parseAllowedDomains } from "@/lib/users/gate";
 import { upsertUserFromProfile } from "@/lib/users/upsert";
 
+const allowedDomains = parseAllowedDomains(process.env.ALLOWED_EMAIL_DOMAINS);
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
+  // Required outside recognised platforms. Auth.js otherwise defaults trustHost to
+  // NODE_ENV !== "production", so this passes in dev and every auth endpoint returns 500
+  // UntrustedHost in the Docker deployment — where next-auth swallows the 500 and returns
+  // a null session, making the symptom "everyone is logged out" rather than an error.
+  trustHost: true,
+  session: {
+    strategy: "jwt",
+    // Auth.js re-encodes the token with a fresh expiry on every session read, so this is a
+    // rolling window, not a fixed one. At the 30-day default, an account revoked upstream
+    // keeps reading documentation for a month. Re-auth is a silent redirect through a live
+    // IdP session, so eight hours costs the user nothing.
+    maxAge: 60 * 60 * 8,
+  },
   providers: [
     {
       id: "company",
@@ -2311,12 +2454,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   ],
   callbacks: {
-    async signIn({ profile }) {
-      if (!profile?.email) return false;
+    async signIn({ account, profile }) {
+      // Task 14's test-login provider is already gated by ALLOW_TEST_LOGIN and resolves
+      // only users the seed created, so the domain allowlist does not apply to it.
+      if (account?.provider === "test-login") return true;
+
+      // Ordering is load-bearing: returning false AFTER upserting would still create the
+      // row, so the gate must come first.
+      if (!isAllowedSignIn(
+        { email: profile?.email, emailVerified: profile?.email_verified as boolean | undefined },
+        allowedDomains,
+      )) {
+        return false;
+      }
+
       await upsertUserFromProfile({
-        email: profile.email,
-        name: profile.name ?? null,
-        avatarUrl: typeof profile.picture === "string" ? profile.picture : null,
+        email: profile!.email!,
+        name: profile?.name ?? null,
+        avatarUrl: typeof profile?.picture === "string" ? profile.picture : null,
       });
       return true;
     },
@@ -2324,7 +2479,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 });
 ```
 
-- [ ] **Step 7: Create `src/app/api/auth/[...nextauth]/route.ts`**
+**`trustHost: true` is not optional.** Auth.js defaults it to `NODE_ENV !== "production"`,
+so without it dev works, all tests pass, and every auth endpoint returns 500
+`UntrustedHost` in the Docker deployment. `next-auth` then *swallows* that 500 and returns
+a null session, so the symptom is "everyone is logged out" rather than an error, and the
+real cause appears only in server logs. Measured: before, `/api/auth/providers` and
+`/api/auth/session` both 500; after, both 200.
+
+Also set `AUTH_URL` in deployment. It pins the request origin to the canonical host, so a
+forwarded `Host` header cannot rewrite the OIDC `redirect_uri` — `trustHost` alone leaves
+you trusting whatever the proxy sends.
+
+- [ ] **Step 9: Create `src/app/api/auth/[...nextauth]/route.ts`**
 
 ```ts
 import { handlers } from "@/lib/auth/config";
@@ -2332,12 +2498,10 @@ import { handlers } from "@/lib/auth/config";
 export const { GET, POST } = handlers;
 ```
 
-- [ ] **Step 8: Create `src/lib/users/viewer.ts`**
+- [ ] **Step 10: Create `src/lib/users/viewer.ts`**
 
-The database half of viewer loading, deliberately free of any Auth.js import so it can be
-tested without a session. This is the only place a `Viewer` is constructed, and it is what
-`can()` and `readableSpace()` consume, so it deserves direct tests rather than only
-end-to-end coverage through sign-in.
+The database half of viewer loading, deliberately free of any Auth.js import. This is the
+only place a `Viewer` is constructed, and it is what `can()` and `readableSpace()` consume.
 
 ```ts
 import { db } from "@/lib/db";
@@ -2365,7 +2529,7 @@ export async function viewerForEmail(email: string): Promise<Viewer | null> {
 }
 ```
 
-- [ ] **Step 9: Write and run the viewer tests**
+- [ ] **Step 11: Write and run the viewer tests**
 
 `tests/integration/viewer.test.ts`:
 
@@ -2421,7 +2585,7 @@ test("carries super-admin status through", async () => {
 Run: `npm test -- tests/integration/viewer.test.ts`
 Expected: 4 passed.
 
-- [ ] **Step 10: Create `src/lib/auth/viewer.ts`**
+- [ ] **Step 12: Create `src/lib/auth/viewer.ts`**
 
 Every server component that reads data calls `requireViewer()`. Nothing else constructs a
 `Viewer`.
@@ -2446,29 +2610,34 @@ export const loadViewer = cache(async (): Promise<Viewer | null> => {
   return viewerForEmail(email);
 });
 
-export async function requireViewer(): Promise<Viewer> {
+export async function requireViewer(callbackUrl?: string): Promise<Viewer> {
   const viewer = await loadViewer();
-  if (!viewer) redirect("/api/auth/signin");
+  if (!viewer) {
+    // Relative paths only. Auth.js clamps to the origin as well, but rejecting
+    // protocol-relative "//evil.example" belongs at the boundary we own rather than
+    // relying on a downstream library's guard.
+    const safe =
+      typeof callbackUrl === "string" &&
+      callbackUrl.startsWith("/") &&
+      !callbackUrl.startsWith("//");
+    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(safe ? callbackUrl : "/")}`);
+  }
   return viewer;
 }
 ```
 
-- [ ] **Step 11: Verify the typecheck AND the build pass**
+- [ ] **Step 13: Verify the typecheck AND the build pass**
 
 Run: `npm run typecheck && npm run build`
 Expected: both exit 0.
 
 **The build matters here specifically.** This task adds a route handler that instantiates
 NextAuth at module scope, and Next collects route modules during the build — with
-`OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` empty in `.env`. If Auth.js rejects an incomplete
-provider config eagerly, this is where it surfaces. Every other task runs the build; this
-one previously ran only the typecheck, which would have deferred the failure to Task 10.
+`OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` empty. Confirmed that `next-auth@beta.32` does
+not validate the provider eagerly, so this passes; the check stays because a version bump
+could change it, and the failure would otherwise surface in an unrelated later task.
 
-If the build does fail on the empty OIDC credentials, do not invent placeholder secrets:
-report the exact error. The likely correct fix is guarding provider construction on the
-variables being present, which is a decision to make deliberately rather than paper over.
-
-- [ ] **Step 12: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
 git add -A
