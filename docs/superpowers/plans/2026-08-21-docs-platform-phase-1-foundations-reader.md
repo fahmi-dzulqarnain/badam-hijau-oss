@@ -2923,6 +2923,26 @@ const ENGINEERING_PAGES: SeedPage[] = [
     ].join("\n"),
   },
   {
+    // Three levels deep, deliberately. The navigation rail renders recursively, and
+    // nothing else in the seed goes past two levels — so without this page the recursion
+    // is unexercised and a regression to a fixed two-level render would leave this page
+    // invisible in the rail while still reachable by URL, with nothing failing.
+    slug: "topic-registry",
+    title: "Topic registry",
+    parent: "mqtt-contracts",
+    markdown: [
+      "Who owns which topic prefix.",
+      "",
+      "## Registry",
+      "",
+      "| Prefix | Owner |",
+      "| --- | --- |",
+      "| `acme/+/kiosk` | Kiosk |",
+      "| `acme/+/loyalty` | Loyalty |",
+      "",
+    ].join("\n"),
+  },
+  {
     slug: "adr-0043-prisma-migrations",
     title: "Prisma migration policy",
     parent: "decisions",
@@ -2987,10 +3007,16 @@ async function main() {
   });
 
   const idBySlug = new Map<string, string>();
+  // Paths are built from the parent's PATH, not its slug. Deriving from the slug only
+  // works two levels deep: a third level would get `mqtt-contracts/topic-registry`
+  // instead of `architecture/mqtt-contracts/topic-registry`, which is silently wrong and
+  // breaks every lookup for that page.
+  const pathBySlug = new Map<string, string>();
 
   for (const [index, seed] of ENGINEERING_PAGES.entries()) {
     const parentId = seed.parent ? idBySlug.get(seed.parent) : undefined;
-    const path = seed.parent ? `${seed.parent}/${seed.slug}` : seed.slug;
+    const parentPath = seed.parent ? pathBySlug.get(seed.parent) : undefined;
+    const path = parentPath ? `${parentPath}/${seed.slug}` : seed.slug;
     const status = seed.status ?? "CURRENT";
 
     const page = await db.page.upsert({
@@ -3011,6 +3037,7 @@ async function main() {
       },
     });
     idBySlug.set(seed.slug, page.id);
+    pathBySlug.set(seed.slug, path);
 
     if (seed.published === false) continue;
 
@@ -3105,7 +3132,7 @@ unconditionally and `publishedVersionId` is repointed at it. So while iterating 
   `Page`, which `update: {}` leaves alone. Delete the row, or change `update`, if you need
   one of those to move.
 
-Expected: prints `Seeded 2 spaces and 6 pages.` Running it a second time must also
+Expected: prints `Seeded 2 spaces and 7 pages.` Running it a second time must also
 succeed — the upserts make it idempotent for spaces and pages. Note that page **versions**
 are appended each run by design; that is correct behaviour for a version table.
 
@@ -3143,14 +3170,19 @@ console.log(
 console.log(
   "engineering pages a member can list:",
   (await listSpacePages(
-    { id: "x", isSuperAdmin: false, memberships: [{ spaceId: engineering.id, role: "VIEWER" }] },
+    // A REAL member id. readableSpace filters on the SpaceMembership row in SQL, not on
+    // the Viewer.memberships array — a synthetic id with a self-declared membership
+    // matches nothing and returns 0, which looks identical to a broken query.
+    { id: (await db.user.findUniqueOrThrow({ where: { email: "aisyah@example.com" } })).id,
+      isSuperAdmin: false,
+      memberships: [{ spaceId: engineering.id, role: "EDITOR" }] },
     engineering.id,
   )).length,
-  "(must be 5)",
+  "(must be 6)",
 );
 ```
 
-Run with `npx tsx scratch-verify.ts`. Expected: `true`, `false`, `0`, `5`. The last two are
+Run with `npx tsx scratch-verify.ts`. Expected: `true`, `false`, `0`, `6`. The last two are
 the pair that matters — a zero from both would look like success while actually meaning the
 query is broken for everyone. If the first line is
 `false`, the seed did not publish the handbook page; if the second is `true`, the
@@ -3174,8 +3206,16 @@ it disabled-free but inert so the shell can be reviewed on its own.
 
 **Files:**
 - Create: `src/app/(reader)/[space]/layout.tsx`
-- Create: `src/components/TopBar.tsx`, `src/components/NavRail.tsx`, `src/components/RailFoot.tsx`
+- Create: `src/components/TopBar.tsx`, `src/components/NavLink.tsx`,
+  `src/components/NavRail.tsx`, `src/components/RailFoot.tsx`
+- Create: `src/components/BugReportDialog.tsx` (a placeholder — Task 11 replaces it)
 - Create: `src/components/shell.css`
+
+**This task has no unit tests, by design** — it is layout, and the project has no DOM test
+environment. That means the recursive rail is verified only by the build and by Task 14's
+end-to-end run, which is exactly why the seed now contains a page three levels deep: a
+regression to a fixed two-level render would otherwise leave that page invisible in the
+rail while still reachable by URL, with nothing failing anywhere.
 
 - [ ] **Step 1: Create `src/components/shell.css`**
 
