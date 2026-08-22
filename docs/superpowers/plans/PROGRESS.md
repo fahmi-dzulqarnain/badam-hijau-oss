@@ -22,6 +22,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 12. Page reader route | not started |
 | 13. Space landing | not started |
 | 14. Playwright E2E | not started |
+| 15. Cold-start smoke test | not started |
 
 ## Test suite
 
@@ -47,6 +48,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 npm run db:seed         # dev database only; prints "Seeded 2 spaces and 7 pages."
 npm test
 npm run typecheck && npm run build
+npm run smoke           # from Task 15: provisions, seeds, builds, serves, asserts, tears down
 ```
 
 Postgres is the local Homebrew `postgresql@16` service on port 5432 — there is no container

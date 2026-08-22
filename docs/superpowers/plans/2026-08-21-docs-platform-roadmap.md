@@ -15,6 +15,13 @@ codebase that does not exist yet produces a plan that gets rewritten.
 | **5. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
 | **6. Systems, attachments, admin** | Systems catalogue and facet filters. S3 attachments via presigned URLs. Space/member/system administration. Due-for-review workflow. | §7, §17, §12 (review) | 3 |
 
+**Phase 1 ends with a cold-start smoke test** (`npm run smoke`), not with the last feature.
+It provisions, migrates, seeds, builds, serves and exercises the running app over HTTP —
+the permission matrix, the nav depth, the draft marker, the alpha badge, and a bug report
+POST — then tears down. Every later phase should extend it rather than replace it: it is
+the one check that answers "does this work from nothing", which is the question asked
+before a deploy and after every dependency bump.
+
 ## Ordering notes
 
 - **Phase 1 is a walking skeleton, not a stub.** It carries the real schema, the real
