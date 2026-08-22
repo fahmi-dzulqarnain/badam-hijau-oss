@@ -17,8 +17,17 @@ export const loadViewer = cache(async (): Promise<Viewer | null> => {
   return viewerForEmail(email);
 });
 
-export async function requireViewer(): Promise<Viewer> {
+export async function requireViewer(callbackUrl?: string): Promise<Viewer> {
   const viewer = await loadViewer();
-  if (!viewer) redirect("/api/auth/signin");
+  if (!viewer) {
+    // Relative paths only. Auth.js clamps to the origin as well, but rejecting
+    // protocol-relative "//evil.example" belongs at the boundary we own rather than
+    // relying on a downstream library's guard.
+    const safe =
+      typeof callbackUrl === "string" &&
+      callbackUrl.startsWith("/") &&
+      !callbackUrl.startsWith("//");
+    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(safe ? callbackUrl : "/")}`);
+  }
   return viewer;
 }
