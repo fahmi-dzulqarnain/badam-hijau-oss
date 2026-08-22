@@ -3206,6 +3206,7 @@ it disabled-free but inert so the shell can be reviewed on its own.
 
 **Files:**
 - Create: `src/app/(reader)/[space]/layout.tsx`
+- Create: `src/app/(reader)/[space]/page.tsx` (a placeholder — Task 13 replaces it)
 - Create: `src/components/TopBar.tsx`, `src/components/NavLink.tsx`,
   `src/components/NavRail.tsx`, `src/components/RailFoot.tsx`
 - Create: `src/components/BugReportDialog.tsx` (a placeholder — Task 11 replaces it)
@@ -3485,9 +3486,14 @@ The rail is rendered by the space layout, which does not know which child route 
 active. Rather than thread a path down, the link reads it itself. This is the only reason
 any part of the rail is a client component.
 
+`typedRoutes: true` is on, so a bare `string` href does not satisfy `Link`. These hrefs are
+built from database values and can never be statically known literals, so the cast is forced
+rather than a shortcut — `typedRoutes` still checks every literal href elsewhere.
+
 ```tsx
 "use client";
 
+import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -3503,7 +3509,7 @@ export function NavLink({
   const pathname = usePathname();
 
   return (
-    <Link href={href} aria-current={pathname === href ? "page" : undefined}>
+    <Link href={href as Route} aria-current={pathname === href ? "page" : undefined}>
       {title}
       {isDraft ? <span className="tag-draft">Draft</span> : null}
     </Link>
@@ -3666,6 +3672,24 @@ export default async function SpaceLayout({
   );
 }
 ```
+
+- [ ] **Step 7b: Create a placeholder `src/app/(reader)/[space]/page.tsx`**
+
+Task 13 overwrites this. It ships now for the same reason the `BugReportDialog` placeholder
+does: without it the shell cannot be reached at all.
+
+```tsx
+export default function SpacePlaceholder() {
+  return <main className="doc" />;
+}
+```
+
+**A layout does not render on its own.** Measured: with no `page.tsx` matching the segment,
+Next never invokes the layout — it serves the built-in 404 in ~16 ms, far too fast for the
+Prisma queries in `getReadableSpaceByKey`, and the HTML contains neither the top bar nor the
+rail. Without a page beneath it this task would ship a shell nothing can reach and no later
+task could verify. The `doc` class arrives with Task 12's `doc.css`; an unstyled empty
+`<main>` here is intentional.
 
 - [ ] **Step 8: Verify the typecheck and build pass**
 
@@ -4500,7 +4524,9 @@ export const listRecentlyPublished = cache(
 });
 ```
 
-- [ ] **Step 6: Create `src/app/(reader)/[space]/page.tsx`**
+- [ ] **Step 6: Replace the placeholder `src/app/(reader)/[space]/page.tsx`**
+
+Task 10 shipped a stub here so the shell was reachable. Overwrite it.
 
 ```tsx
 import Link from "next/link";
