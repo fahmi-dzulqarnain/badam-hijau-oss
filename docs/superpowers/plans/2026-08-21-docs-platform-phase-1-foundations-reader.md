@@ -3094,6 +3094,17 @@ main()
 npm run db:seed
 ```
 
+**What re-running actually updates, which is not obvious.** Both upserts pass
+`update: {}`, so existing `Page` rows are never modified — but the `PageVersion` is created
+unconditionally and `publishedVersionId` is repointed at it. So while iterating on Tasks
+10–13:
+
+- Editing a page's **markdown** in the seed and re-running **does** take effect, via a new
+  published version.
+- Editing its **title**, `docType`, `status` or `position` does **not** — those live on
+  `Page`, which `update: {}` leaves alone. Delete the row, or change `update`, if you need
+  one of those to move.
+
 Expected: prints `Seeded 2 spaces and 6 pages.` Running it a second time must also
 succeed — the upserts make it idempotent for spaces and pages. Note that page **versions**
 are appended each run by design; that is correct behaviour for a version table.
@@ -4634,6 +4645,26 @@ All must hold before Phase 2 starts:
 - [ ] An unpublished page is unreachable by URL
 - [ ] The Alpha badge and `0.1.0+<sha>` build string render in the shell
 - [ ] Report bug stores a row with the route, version and viewport captured automatically
+
+## Two sources of truth for membership, deliberately
+
+`can(viewer, space, action)` reads `viewer.memberships` — the in-memory array. But
+`readableSpace(viewer)` filters on `SpaceMembership.userId` **in SQL**, ignoring that array
+entirely. Discovered when a verification script built a synthetic viewer with a
+self-declared membership and got zero rows back: a fabricated membership cannot conjure a
+readable space.
+
+For Phase 1 this is purely a strength — the read path does not trust the session's copy of
+anything, so a stale or forged `Viewer` still cannot read a space the database says it may
+not. Two consequences to carry forward:
+
+- **Testing the read path requires a real `SpaceMembership` row.** A hand-built `Viewer`
+  will silently return nothing, which reads as a broken query rather than a missing
+  fixture.
+- **Phase 2's write path is different.** `EDIT` and `PUBLISH` go through `can()`, which
+  *does* trust the array. That is safe only because `viewerForEmail` is the single
+  construction site and builds it from the database in the same request. If a second
+  construction site ever appears, the write path loses the guarantee the read path keeps.
 
 ## Offboarding, which is not what you would guess
 

@@ -73,6 +73,17 @@ Do **not** convert the index to a deferrable constraint pre-emptively: Prisma ca
 express `DEFERRABLE`, so it would be hand-written SQL that reads as permanent drift on
 every `migrate dev`, and it is no cheaper to do now than then.
 
+## Prisma 7 upgrade: two things already known
+
+Prisma 7.x is available; the project stays on 6.19.3 deliberately (it typechecks clean
+under TypeScript 7, and the upgrade is the change most likely to reintroduce that risk).
+When it is done as its own task, two items are already on the list:
+
+- `package.json#prisma` — the seed config key — is **deprecated and removed in Prisma 7**,
+  replaced by `prisma.config.ts`. The seed currently warns about this on every test run.
+- The `deepmerge-ts` advisory spans 6.13.0 through 7.10.0, so upgrading does not resolve
+  it. Re-check whether `@prisma/config` has shipped a patched dependency by then.
+
 ## Conventions fixed in phase 1
 
 These hold for every later phase. Changing one is a decision, not a detail.
