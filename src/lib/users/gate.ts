@@ -21,8 +21,12 @@ export function parseAllowedDomains(raw: string | undefined): string[] {
  * isSuperAdmin flag.
  *
  * An ABSENT claim is treated as verified. The OIDC spec makes it optional and several
- * legitimate providers never send it; rejecting absence would lock out real staff. Only an
- * explicit falsy assertion is a rejection.
+ * legitimate providers never send it; rejecting absence would lock out real staff.
+ *
+ * Precisely: only `false` and the string "false" are rejections. That covers every
+ * shape Auth.js's own provider types declare — boolean for Google, `string` for Okta,
+ * `"true" | true` for Apple. Anything else present is accepted, which is deliberate:
+ * inventing handling for shapes no provider documents would be guessing.
  */
 export function isEmailVerified(claim: unknown): boolean {
   if (claim === false) return false;

@@ -2309,7 +2309,8 @@ can read every `ALL_STAFF` space. It is pure so that boundary is directly testab
 ```ts
 export type SignInClaims = {
   email?: string | null;
-  emailVerified?: boolean | null;
+  /** Deliberately `unknown`: this claim's runtime type varies by IdP. */
+  emailVerified?: unknown;
 };
 
 export function parseAllowedDomains(raw: string | undefined): string[] {
@@ -2317,6 +2318,29 @@ export function parseAllowedDomains(raw: string | undefined): string[] {
     .split(",")
     .map((domain) => domain.trim().toLowerCase())
     .filter(Boolean);
+}
+
+/**
+ * Whether an email claim counts as verified.
+ *
+ * The claim is not universally boolean — Auth.js types Okta's as `string` and Apple's as
+ * `"true" | true` — so a strict `=== false` check would let the string "false" through as
+ * if the claim were absent. That matters because the upsert matches on email: an issuer
+ * willing to assert an unverified address hands over the matching row, including its
+ * isSuperAdmin flag.
+ *
+ * An ABSENT claim is treated as verified. The OIDC spec makes it optional and several
+ * legitimate providers never send it; rejecting absence would lock out real staff.
+ *
+ * Precisely: only `false` and the string "false" are rejections. That covers every
+ * shape Auth.js's own provider types declare — boolean for Google, `string` for Okta,
+ * `"true" | true` for Apple. Anything else present is accepted, which is deliberate:
+ * inventing handling for shapes no provider documents would be guessing.
+ */
+export function isEmailVerified(claim: unknown): boolean {
+  if (claim === false) return false;
+  if (typeof claim === "string" && claim.trim().toLowerCase() === "false") return false;
+  return true;
 }
 
 /**
@@ -2333,12 +2357,7 @@ export function isAllowedSignIn(claims: SignInClaims, allowedDomains: string[]):
   const email = claims.email?.trim().toLowerCase();
   if (!email) return false;
 
-  // An unverified email claim is an assertion, not an identity. This matters more than it
-  // looks: the upsert matches on email, so an issuer willing to mint
-  // email_verified:false for an existing address hands over that account, including its
-  // isSuperAdmin flag. Providers that omit the claim entirely are accepted — only an
-  // explicit false is a rejection.
-  if (claims.emailVerified === false) return false;
+  if (!isEmailVerified(claims.emailVerified)) return false;
 
   const domain = email.split("@")[1];
   if (!domain) return false;
@@ -2353,7 +2372,7 @@ export function isAllowedSignIn(claims: SignInClaims, allowedDomains: string[]):
 
 ```ts
 import { describe, expect, test } from "vitest";
-import { isAllowedSignIn, parseAllowedDomains } from "./gate";
+import { isAllowedSignIn, isEmailVerified, parseAllowedDomains } from "./gate";
 
 const allowed = ["company.example", "contractors.company.example"];
 
@@ -2398,6 +2417,30 @@ describe("isAllowedSignIn", () => {
   test("does not match a domain by suffix", () => {
     expect(isAllowedSignIn({ email: "x@evilcompany.example" }, allowed)).toBe(false);
   });
+
+  test("rejects the string \"false\", which Okta-shaped providers send", () => {
+    expect(isAllowedSignIn({ email: "root@company.example", emailVerified: "false" }, allowed)).toBe(false);
+  });
+
+  test("accepts the string \"true\", which Apple-shaped providers send", () => {
+    expect(isAllowedSignIn({ email: "a@company.example", emailVerified: "true" }, allowed)).toBe(true);
+  });
+});
+
+describe("isEmailVerified", () => {
+  test("only an explicit falsy assertion is a rejection", () => {
+    expect(isEmailVerified(false)).toBe(false);
+    expect(isEmailVerified("false")).toBe(false);
+    expect(isEmailVerified("FALSE")).toBe(false);
+    expect(isEmailVerified("  false  ")).toBe(false);
+  });
+
+  test("absent or affirmative claims are accepted", () => {
+    expect(isEmailVerified(undefined)).toBe(true);
+    expect(isEmailVerified(null)).toBe(true);
+    expect(isEmailVerified(true)).toBe(true);
+    expect(isEmailVerified("true")).toBe(true);
+  });
 });
 
 describe("parseAllowedDomains", () => {
@@ -2415,7 +2458,7 @@ describe("parseAllowedDomains", () => {
 ```
 
 Run: `npm test -- src/lib/users/gate.test.ts`
-Expected: 11 passed.
+Expected: 15 passed.
 
 - [ ] **Step 8: Create `src/lib/auth/config.ts`**
 
@@ -2462,7 +2505,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // Ordering is load-bearing: returning false AFTER upserting would still create the
       // row, so the gate must come first.
       if (!isAllowedSignIn(
-        { email: profile?.email, emailVerified: profile?.email_verified as boolean | undefined },
+        { email: profile?.email, emailVerified: profile?.email_verified },
         allowedDomains,
       )) {
         return false;
