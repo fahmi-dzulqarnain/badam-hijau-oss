@@ -55,7 +55,7 @@ export const getPublishedPage = cache(
         publishedAt: true,
         reviewedAt: true,
         owner: { select: { name: true } },
-        publishedVersion: { select: { markdown: true, gitSha: true } },
+        publishedVersion: { select: { id: true, markdown: true, gitSha: true } },
       },
     });
 

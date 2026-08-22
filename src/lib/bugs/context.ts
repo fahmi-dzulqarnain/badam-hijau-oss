@@ -1,4 +1,3 @@
-import { db } from "@/lib/db";
 import { getPublishedPage, getReadableSpaceByKey } from "@/lib/pages/repo";
 import type { Viewer } from "@/lib/authz/types";
 
@@ -39,18 +38,5 @@ export async function resolveReportContext(
   const found = await getPublishedPage(viewer, { spaceKey, path: rest.join("/") });
   if (!found) return { spaceId: space.id, pageId: null, versionId: null };
 
-  // getPublishedPage's `version` is a narrow, explicit select (markdown + gitSha only —
-  // see src/lib/pages/repo.ts) that deliberately does not carry the version's own id, so
-  // it is fetched here instead. found.page.id is known to have a published version
-  // because getPublishedPage already filtered on publishedVersionId being set.
-  const published = await db.page.findUnique({
-    where: { id: found.page.id },
-    select: { publishedVersionId: true },
-  });
-
-  return {
-    spaceId: space.id,
-    pageId: found.page.id,
-    versionId: published?.publishedVersionId ?? null,
-  };
+  return { spaceId: space.id, pageId: found.page.id, versionId: found.version.id };
 }
