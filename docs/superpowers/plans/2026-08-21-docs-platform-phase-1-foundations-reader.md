@@ -4653,6 +4653,12 @@ git commit -m "feat: add in-product bug reporting"
    in the product paints accent-green and underlined. */
 .body :is(h1, h2, h3, h4, h5, h6) a { color: inherit; text-decoration: none; }
 .body img { max-width: 100%; height: auto; }
+/* An unbreakable token — an autolinked URL, a long identifier — otherwise widens the whole
+   document, and because the top bar and both rails are sticky in that same scroll
+   container, they slide out of alignment with each other. `anywhere` rather than
+   `break-word` because it also constrains intrinsic sizing, which is what stops the grid
+   column being widened in the first place. `pre` already self-scrolls. */
+.body :is(p, li, dd, td, th, blockquote) { overflow-wrap: anywhere; }
 .body .sr-only {
   position: absolute;
   width: 1px;
@@ -4746,6 +4752,8 @@ git commit -m "feat: add in-product bug reporting"
   background: var(--surface-2);
   border: 1px dashed var(--line-strong);
   border-radius: 8px;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
 }
 .body blockquote {
   margin: 18px 0;
