@@ -2,6 +2,60 @@ import { PrismaClient, type DocStatus, type DocType } from "@prisma/client";
 
 const db = new PrismaClient();
 
+// Fixed, not `new Date()`. Re-running the seed must leave the database in the same state it
+// was already in, and a moving timestamp reorders "Recently published" on every run.
+const PUBLISHED_EPOCH = new Date("2026-08-20T09:00:00Z");
+const publishedAtFor = (index: number) =>
+  new Date(PUBLISHED_EPOCH.getTime() + index * 60_000);
+
+/**
+ * Publishes a version only when the content actually differs from what is already
+ * published. The naive form — always `pageVersion.create` — is not idempotent: every seed
+ * run manufactured a fresh version for all six pages, so the history filled with identical
+ * "Seed" entries and `publishedAt` jumped forward each time.
+ */
+async function publishSeedVersion(opts: {
+  pageId: string;
+  title: string;
+  markdown: string;
+  status: DocStatus;
+  authorId: string;
+  publishedAt: Date;
+}): Promise<void> {
+  const page = await db.page.findUniqueOrThrow({
+    where: { id: opts.pageId },
+    select: {
+      publishedVersion: { select: { title: true, markdown: true, status: true } },
+    },
+  });
+
+  const current = page.publishedVersion;
+  if (
+    current &&
+    current.title === opts.title &&
+    current.markdown === opts.markdown &&
+    current.status === opts.status
+  ) {
+    return;
+  }
+
+  const version = await db.pageVersion.create({
+    data: {
+      pageId: opts.pageId,
+      title: opts.title,
+      markdown: opts.markdown,
+      status: opts.status,
+      authorId: opts.authorId,
+      message: "Seed",
+    },
+  });
+
+  await db.page.update({
+    where: { id: opts.pageId },
+    data: { publishedVersionId: version.id, publishedAt: opts.publishedAt },
+  });
+}
+
 type SeedPage = {
   slug: string;
   title: string;
@@ -187,20 +241,13 @@ async function main() {
 
     if (seed.published === false) continue;
 
-    const version = await db.pageVersion.create({
-      data: {
-        pageId: page.id,
-        title: seed.title,
-        markdown: seed.markdown ?? `Pages in **${seed.title}**.`,
-        status,
-        authorId: aisyah.id,
-        message: "Seed",
-      },
-    });
-
-    await db.page.update({
-      where: { id: page.id },
-      data: { publishedVersionId: version.id, publishedAt: new Date() },
+    await publishSeedVersion({
+      pageId: page.id,
+      title: seed.title,
+      markdown: seed.markdown ?? `Pages in **${seed.title}**.`,
+      status,
+      authorId: aisyah.id,
+      publishedAt: publishedAtFor(index),
     });
   }
 
@@ -223,28 +270,21 @@ async function main() {
     },
   });
 
-  const welcomeVersion = await db.pageVersion.create({
-    data: {
-      pageId: welcome.id,
-      title: "Welcome",
-      markdown: [
-        "Everything in this space is readable by anyone who can sign in.",
-        "",
-        "## Finding things",
-        "",
-        "Spaces group documentation by the team that owns it. If a space is not listed,",
-        "you are not a member of it — ask its owner for access.",
-        "",
-      ].join("\n"),
-      status: "CURRENT",
-      authorId: fahmi.id,
-      message: "Seed",
-    },
-  });
-
-  await db.page.update({
-    where: { id: welcome.id },
-    data: { publishedVersionId: welcomeVersion.id, publishedAt: new Date() },
+  await publishSeedVersion({
+    pageId: welcome.id,
+    title: "Welcome",
+    markdown: [
+      "Everything in this space is readable by anyone who can sign in.",
+      "",
+      "## Finding things",
+      "",
+      "Spaces group documentation by the team that owns it. If a space is not listed,",
+      "you are not a member of it — ask its owner for access.",
+      "",
+    ].join("\n"),
+    status: "CURRENT",
+    authorId: fahmi.id,
+    publishedAt: publishedAtFor(ENGINEERING_PAGES.length),
   });
 
   console.log(

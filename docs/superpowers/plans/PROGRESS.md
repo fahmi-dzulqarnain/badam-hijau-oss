@@ -65,6 +65,7 @@ npm run db:seed         # dev database only; prints "Seeded 2 spaces and 7 pages
 npm test
 npm run test:e2e       # 8 Playwright specs; builds and serves on 3100 itself
 npm run typecheck && npm run build
+npm run plan:check      # reports plan fences that no longer match the code they quote
 npm run smoke           # cold start: provisions, seeds, builds, serves, asserts, tears down
 ```
 
@@ -90,8 +91,14 @@ Two spaces, seven pages, three users.
 - `aisyah@example.com` EDITOR · `efcorporates@gmail.com` super-admin ·
   `stranger@example.com` member of nothing.
 
-Re-running the seed updates page **markdown** (a new version is published) but not page
-**titles** — `update: {}` leaves existing `Page` rows alone.
+**The seed is idempotent.** Re-running it publishes a new `PageVersion` only when the title,
+markdown or status actually differs from what is already published; an unchanged page is left
+entirely alone, `publishedAt` included. It did not start that way — the original always called
+`pageVersion.create`, so every run added six identical "Seed" versions (58 had accumulated) and
+pushed `publishedAt` to "now", which also reshuffled "Recently published" on each run. Publish
+timestamps are now fixed (`2026-08-20T09:00Z` plus a minute per page) rather than `new Date()`,
+so a fresh database is reproducible. Page **titles** are still not updated on re-run —
+`update: {}` leaves existing `Page` rows alone.
 
 ## Decisions that should not be relitigated
 
@@ -169,6 +176,8 @@ Re-running the seed updates page **markdown** (a new version is published) but n
 - **E2E and smoke runs write to the dev database.** The bug-reporting checks insert a real
   row; delete it after. Only these two suites touch `badam` — everything else uses
   `badam_test`.
+- **The seed must stay idempotent.** `npm run smoke` and the E2E suite both re-seed the dev
+  database, so anything that writes unconditionally there accumulates on every run.
 - Implementers create a **new commit**, never `--amend`.
 
 ## Working method that has earned its keep
@@ -188,7 +197,15 @@ Re-running the seed updates page **markdown** (a new version is published) but n
 
   And sync **only whole-file fences**. Some steps show a fragment — "append this function
   to the file" — and a blind sync replaces the fragment with the entire file, turning an
-  append step into a replace step. Done once, caught by eye.
+  append step into a replace step. Done once, caught by eye — which is not a control, so
+  `npm run plan:check` now encodes it: a fence that appears verbatim *inside* the file it
+  quotes is a FRAGMENT and is never a sync candidate.
+
+  It also reports the standing backlog: **19 fences no longer match the file they quote**,
+  all of them earlier tasks' snapshots of files that later tasks changed. That is the
+  "leave it, note the supersession" direction, and the notes were never written. Clearing it
+  means deciding per fence whether it is a historical snapshot or the file's only
+  description — do not bulk-sync it, which is the mistake that motivated the tool.
   Syncing after a task's first commit is not enough — most tasks here needed two or three
   fix rounds, and each one moves the code out from under the plan.
 - **A forward plan edit is not a code change.** Amending the plan to specify something new
