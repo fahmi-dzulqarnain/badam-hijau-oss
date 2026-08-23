@@ -5436,7 +5436,7 @@ test of its own.
 - Already done in earlier tasks, do **not** redo: the test-login provider in
   `src/lib/auth/config.ts` (Task 10) and the `ALLOW_TEST_LOGIN` entry in `.env.example`
 
-- [ ] **Step 1: Install Playwright**
+- [x] **Step 1: Install Playwright**
 
 ```bash
 npm install -D @playwright/test
@@ -5500,7 +5500,7 @@ one this step appends, plus the note that `AUTH_SECRET` must be distinct per env
 Running the original `printf >> .env.example` would append a weaker duplicate. Verify with
 `grep -n ALLOW_TEST_LOGIN .env.example` and move on.
 
-- [ ] **Step 4: Create `playwright.config.ts`**
+- [x] **Step 4: Create `playwright.config.ts`**
 
 Port 3100 is confirmed free on this machine and approved for use (other local services
 occupy 80, 3317, 5432, 8080).
@@ -5509,6 +5509,10 @@ occupy 80, 3317, 5432, 8080).
 `include` only covers `src/**` and `tests/**`, so it can never import a Playwright spec —
 `test()` called outside Playwright's runner throws an opaque error, and this separation is
 what prevents it. Do not move E2E files under `tests/`.
+
+One addition beyond the original: `webServer.timeout`. The command builds before it serves
+and a cold Next build here exceeds Playwright's 60s default, which fails the whole run
+before a single test starts.
 
 ```ts
 import { defineConfig } from "@playwright/test";
@@ -5520,18 +5524,21 @@ export default defineConfig({
     command: "npm run build && npx next start --port 3100",
     port: 3100,
     reuseExistingServer: false,
+    // The command builds before it serves, and a cold Next build here takes longer than
+    // the 60s default — which fails the whole run before a single test starts.
+    timeout: 300_000,
     env: { ALLOW_TEST_LOGIN: "1", GIT_SHA: "df0ef11abc" },
   },
 });
 ```
 
-- [ ] **Step 5: Add the e2e script to `package.json`**
+- [x] **Step 5: Add the e2e script to `package.json`**
 
 ```json
     "test:e2e": "playwright test"
 ```
 
-- [ ] **Step 6: Write the failing tests**
+- [x] **Step 6: Write the failing tests**
 
 `e2e/reader.spec.ts`:
 
@@ -5648,7 +5655,7 @@ test("the alpha badge and build string are visible, and a bug can be reported", 
 });
 ```
 
-- [ ] **Step 7: Add the negative unit test that no Playwright test can cover**
+- [x] **Step 7: Add the negative unit test that no Playwright test can cover**
 
 The prose at the top of this task calls this "the piece that actually guards against
 shipping a passwordless super-admin login", and then no step creates it. Playwright cannot:
@@ -5656,22 +5663,48 @@ shipping a passwordless super-admin login", and then no step creates it. Playwri
 The three existing tests in `src/lib/auth/test-login.test.ts` cover the flag *parser*, not
 the `providers` array.
 
-Add a vitest test that clears `ALLOW_TEST_LOGIN`, imports the auth config **fresh**
-(`vi.resetModules()` — the module reads the flag at import time, so a cached module keeps
-the old value), and asserts `test-login` is absent from the providers array while `company`
-is still present. Assert the positive case in the same file so the pair reads together.
+Shipped as `src/lib/auth/providers.test.ts` — three tests. Two things had to be discovered
+to make it work, both worth carrying forward:
 
-- [ ] **Step 8: Run the tests**
+- **`next-auth` must be inlined for vitest.** It imports `next/server`, which Vite's node
+  resolution cannot satisfy from an externalised dependency, so the auth config is otherwise
+  unimportable from a test. `vitest.config.ts` now carries
+  `server: { deps: { inline: ["next-auth", "@auth/core"] } }`.
+- **Clearing the env var does not work, and fails *open*.** `config.ts` imports the Prisma
+  client, and **importing Prisma loads `.env` into `process.env`** — which sets
+  `ALLOW_TEST_LOGIN=1` straight back, after the test deleted it and before the config reads
+  it. The test then passes for the wrong reason on a broken build. Measured, not assumed.
+  The flag-off case therefore stubs the helper module (`vi.doMock("./test-login", …)`)
+  rather than the environment. The `"true"` case can still go through the environment,
+  because dotenv does not overwrite a variable that is already set.
+
+  Generalise this: **any test that clears an env var also present in `.env` and then imports
+  anything touching Prisma has the same hole.**
+
+Verified to fail: making the providers array unconditional kills both negative tests, with
+`expected [ 'company', 'test-login' ] to not include 'test-login'`.
+
+- [x] **Step 8: Run the tests**
 
 ```bash
 npm run db:seed
 npm run test:e2e
 ```
 
-Expected: 8 passed. If sign-in times out, confirm `ALLOW_TEST_LOGIN=1` reached the server
-process — it is set by `webServer.env`, not by `.env`.
+Result: **8 passed** in 4.9s against a production build, and the vitest suite went 125 → 128.
 
-- [ ] **Step 9: Commit**
+Two notes from the run:
+- The `Not found` heading assertion **passes**. The 404 body is an empty shell in the initial
+  HTML, so this was flagged as uncertain above; the client render supplies the heading.
+- The overflow guard was verified to fail: forcing a wide element produced
+  `/engineering scrolls horizontally by 1026px`, naming the offending route.
+- The bug-reporting spec inserts a real `BugReport` row into the **dev** database. Delete it
+  after a run — `delete from "BugReport" where summary = '…'` — or the row accumulates.
+
+If sign-in times out, confirm `ALLOW_TEST_LOGIN=1` reached the server process — it is set by
+`webServer.env`, not by `.env`.
+
+- [x] **Step 9: Commit**
 
 Stage explicit paths only — `git add -A` once swept a live subagent's in-flight work into an
 unrelated commit on this project.
@@ -5698,6 +5731,13 @@ non-zero on the first failure.
 **Files:**
 - Create: `scripts/smoke.sh`
 - Modify: `package.json` (add `npm run smoke`)
+
+**What it does to the dev database.** This is the one test that deliberately writes to
+`badam` rather than `badam_test`, because a cold start is what it is testing. It runs
+`setup-db.sh`, `migrate deploy` and the seed, then files a bug report. Two consequences:
+re-running the seed publishes a **new `PageVersion`** for each page, so version counts grow
+with every run while the 2-spaces/7-pages invariant holds; and the bug report must be
+cleaned up, which the Teardown step below does.
 
 - [ ] **Step 1: Create `scripts/smoke.sh`**
 
@@ -5797,6 +5837,14 @@ code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/bugs"
   -d '"'"'{"summary":"smoke test","routePath":"/engineering","appVersion":"0.0.0","userAgent":"smoke","viewport":"800x600"}'"'"')
 [ "$code" = "201" ] && ok "bug report accepted" || fail "bug report POST returned $code"
 
+step "Teardown"
+# The bug-reporting check above inserts a real row. Remove it, or every smoke run leaves
+# one behind. Scoped to this run's summary rather than a TRUNCATE, so a developer's own
+# reports survive.
+printf "delete from \"BugReport\" where summary = 'smoke test';" \
+  | npx --no prisma db execute --stdin > /dev/null 2>&1 \
+  && ok "removed the smoke bug report" || fail "could not clean up the smoke bug report"
+
 step "Result"
 if [ "$FAILURES" -eq 0 ]; then
   printf "\n\033[32mSMOKE PASSED\033[0m\n"
@@ -5831,8 +5879,11 @@ passes again. Paste both outcomes.
 
 - [ ] **Step 5: Commit**
 
+Stage explicit paths only — `git add -A` once swept a live subagent's in-flight work into an
+unrelated commit on this project.
+
 ```bash
-git add -A
+git add scripts/smoke.sh package.json
 git commit -m "test: add cold-start smoke test"
 ```
 

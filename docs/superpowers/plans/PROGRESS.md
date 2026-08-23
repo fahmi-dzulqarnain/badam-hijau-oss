@@ -1,7 +1,7 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 95 commits · **125 tests passing** · typecheck
-and build clean · working tree clean
+Branch: `phase-1-foundations-reader` · 97 commits · **128 vitest tests + 8 Playwright
+tests passing** · typecheck and build clean · working tree clean
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
 · Roadmap: [`2026-08-21-docs-platform-roadmap.md`](2026-08-21-docs-platform-roadmap.md)
@@ -21,12 +21,13 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 11. Bug reporting | ✅ approved |
 | 12. Page reader route | ✅ approved |
 | 13. Space landing | ✅ approved |
-| **14. Playwright E2E** | **next — plan re-diffed against HEAD, ready to dispatch** |
-| 15. Cold-start smoke test | not started |
+| 14. Playwright E2E | ✅ approved |
+| **15. Cold-start smoke test** | **next — plan re-diffed against HEAD, ready to dispatch** |
 
 ## Test suite
 
-125 tests, 17 files. 85 pure unit (no database), 40 integration against real Postgres.
+128 vitest tests, 18 files: 88 pure unit (no database), 40 integration against real
+Postgres. Plus 8 Playwright specs in `e2e/`, run separately with `npm run test:e2e`.
 
 | File | Tests |
 |---|---|
@@ -46,6 +47,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | `tests/integration/bug-report.test.ts` | 4 |
 | `tests/integration/authz-where.test.ts` | 3 |
 | `src/lib/auth/test-login.test.ts` | 3 |
+| `src/lib/auth/providers.test.ts` | 3 |
 | `tests/integration/spaces.test.ts` | 2 |
 
 ## Running it
@@ -54,6 +56,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 ./scripts/setup-db.sh   # idempotent: creates the badam role, both databases, and .env.test
 npm run db:seed         # dev database only; prints "Seeded 2 spaces and 7 pages."
 npm test
+npm run test:e2e       # 8 Playwright specs; builds and serves on 3100 itself
 npm run typecheck && npm run build
 npm run smoke           # from Task 15: provisions, seeds, builds, serves, asserts, tears down
 ```
@@ -150,6 +153,15 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   the path-encoding rule were each honoured by the nav rail and the breadcrumbs and then
   quietly dropped by the third link site to be written. Both times the fix was to make the
   rule a shared function rather than a habit.
+- **Importing the Prisma client loads `.env` into `process.env`.** A test that clears an
+  env var and then imports anything touching Prisma gets the file's value back — and for
+  `ALLOW_TEST_LOGIN` that fails *open*: the test passes against a build that registers the
+  passwordless login unconditionally. Stub the module, not the environment.
+- **`next-auth` must be inlined for vitest** (`server.deps.inline`). It imports
+  `next/server`, which Vite's node resolution cannot satisfy from an externalised dep.
+- **E2E and smoke runs write to the dev database.** The bug-reporting checks insert a real
+  row; delete it after. Only these two suites touch `badam` — everything else uses
+  `badam_test`.
 - Implementers create a **new commit**, never `--amend`.
 
 ## Working method that has earned its keep
