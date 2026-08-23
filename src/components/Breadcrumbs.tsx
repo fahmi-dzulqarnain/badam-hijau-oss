@@ -1,10 +1,7 @@
 import Link from "next/link";
-import type { Route } from "next";
+import { pageHref } from "@/lib/pages/href";
 
 type Ancestor = { path: string; title: string; isLinkable: boolean };
-
-const encodePath = (path: string) =>
-  path.split("/").map(encodeURIComponent).join("/");
 
 export function Breadcrumbs({
   spaceKey,
@@ -21,17 +18,13 @@ export function Breadcrumbs({
     <nav className="crumbs" aria-label="Breadcrumb">
       <ol>
         <li>
-          <Link href={`/${encodeURIComponent(spaceKey)}` as Route}>{spaceName}</Link>
+          <Link href={pageHref(spaceKey)}>{spaceName}</Link>
         </li>
         {ancestors.map((ancestor) => (
           <li key={ancestor.path}>
             <span className="sep">/</span>
             {ancestor.isLinkable ? (
-              <Link
-                href={`/${encodeURIComponent(spaceKey)}/${encodePath(ancestor.path)}` as Route}
-              >
-                {ancestor.title}
-              </Link>
+              <Link href={pageHref(spaceKey, ancestor.path)}>{ancestor.title}</Link>
             ) : (
               <span>{ancestor.title}</span>
             )}

@@ -1,5 +1,6 @@
 import type { TreeNode } from "@/lib/pages/tree";
 import type { BuildInfo } from "@/lib/version/build";
+import { pageHref } from "@/lib/pages/href";
 import { NavLink } from "./NavLink";
 import { RailFoot } from "./RailFoot";
 
@@ -12,13 +13,7 @@ type Props = {
 
 function NavNode({ spaceKey, node }: { spaceKey: string; node: TreeNode }) {
   const isDraft = node.publishedVersionId === null;
-  // `Page.path` has no format constraint, so a slug containing `#`, `?` or a space would
-  // silently produce a broken link without this — one the `Route` cast in NavLink makes
-  // untypecheckable, since the string is opaque to typedRoutes either way.
-  const href = `/${spaceKey}/${node.path
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")}`;
+  const href = pageHref(spaceKey, node.path);
 
   // A draft has no published version, so getPublishedPage would 404 it. Show that the
   // page exists — members should know a draft is in flight — but do not offer a link

@@ -176,3 +176,14 @@
 /* Paired with shell.css's `.shell` column collapse at the same width — change one and
    check the other, or the right rail and the grid column it depends on fall out of sync. */
 @media (max-width: 1180px) { .rail-r { display: none; } }
+
+/* Space landing. Scoped to `.landing` rather than `.doc` so `.k` here cannot outrank
+   `.meta .k` on the page reader route, which has the same specificity and comes earlier. */
+.landing .k { color: var(--ink-3); font-size: 13px; }
+/* `.doc` is not `.body`, so these list items miss the markdown pipeline's overflow guard —
+   and an unbreakable page title would widen the document and slide the sticky rails apart. */
+.landing li { overflow-wrap: anywhere; }
+/* A draft module is inert text, matching the nav rail. `.navdraft` is scoped to `.rail-l`
+   and carries rail padding, so the landing states its own muted colour instead of reusing
+   it; `.tag-draft` is global and is shared as-is. */
+.landing .landingdraft { color: var(--ink-3); }

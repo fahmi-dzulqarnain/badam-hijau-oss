@@ -88,16 +88,26 @@ export const listSpacePages = cache(async (viewer: Viewer, spaceId: string) => {
 
 export const listRecentlyPublished = cache(
   async (viewer: Viewer, spaceId: string, limit = 5) => {
-  return db.page.findMany({
-    where: { spaceId, publishedAt: { not: null }, space: readableSpace(viewer) },
-    orderBy: { publishedAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      title: true,
-      path: true,
-      publishedAt: true,
-      publishedVersion: { select: { author: { select: { name: true } } } },
-    },
-  });
-});
+    return db.page.findMany({
+      // `publishedAt` and `publishedVersionId` are two independent nullable columns with no
+      // constraint tying them together, so "published" has to be stated as both. Filtering
+      // on the timestamp alone would survive an unpublish or a rollback (Phase 2) and yield
+      // a row whose link 404s and whose byline has no author.
+      where: {
+        spaceId,
+        publishedAt: { not: null },
+        publishedVersionId: { not: null },
+        space: readableSpace(viewer),
+      },
+      orderBy: { publishedAt: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        title: true,
+        path: true,
+        publishedAt: true,
+        publishedVersion: { select: { author: { select: { name: true } } } },
+      },
+    });
+  },
+);

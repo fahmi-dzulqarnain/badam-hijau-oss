@@ -1,6 +1,11 @@
 import { beforeEach, expect, test } from "vitest";
 import { db, resetDb } from "../setup/reset";
-import { getPublishedPage, getReadableSpaceByKey, listSpacePages } from "@/lib/pages/repo";
+import {
+  getPublishedPage,
+  getReadableSpaceByKey,
+  listRecentlyPublished,
+  listSpacePages,
+} from "@/lib/pages/repo";
 import type { Viewer } from "@/lib/authz/types";
 
 beforeEach(resetDb);
@@ -36,6 +41,45 @@ async function fixture(visibility: "MEMBERS" | "ALL_STAFF") {
     data: { publishedVersionId: version.id, publishedAt: new Date() },
   });
   return { author, space, page, version };
+}
+
+/**
+ * A second page in an existing space. `withVersion: false` leaves `publishedVersionId`
+ * null while still allowing a `publishedAt` — the shape an unpublish or a rollback leaves
+ * behind, and the reason "published" cannot be read off the timestamp alone.
+ */
+async function addPage(
+  spaceId: string,
+  authorId: string,
+  opts: { slug: string; publishedAt: Date | null; withVersion?: boolean },
+) {
+  const page = await db.page.create({
+    data: {
+      spaceId,
+      slug: opts.slug,
+      path: `architecture/${opts.slug}`,
+      title: opts.slug,
+      createdById: authorId,
+      status: "CURRENT",
+    },
+  });
+  const version =
+    opts.withVersion === false
+      ? null
+      : await db.pageVersion.create({
+          data: {
+            pageId: page.id,
+            title: opts.slug,
+            markdown: "Body.",
+            status: "CURRENT",
+            authorId,
+          },
+        });
+  await db.page.update({
+    where: { id: page.id },
+    data: { publishedVersionId: version?.id ?? null, publishedAt: opts.publishedAt },
+  });
+  return page;
 }
 
 const stranger: Viewer = { id: "u-stranger", isSuperAdmin: false, memberships: [] };
@@ -128,4 +172,58 @@ test("listSpacePages returns every page including unpublished ones", async () =>
 test("listSpacePages returns nothing for a space the viewer cannot read", async () => {
   const { space } = await fixture("MEMBERS");
   expect(await listSpacePages(stranger, space.id)).toEqual([]);
+});
+
+test("listRecentlyPublished returns nothing for a space the viewer cannot read", async () => {
+  const { space } = await fixture("MEMBERS");
+  expect(await listRecentlyPublished(stranger, space.id)).toEqual([]);
+});
+
+test("listRecentlyPublished carries the published version's author", async () => {
+  const { space } = await fixture("ALL_STAFF");
+  const rows = await listRecentlyPublished(stranger, space.id);
+  expect(rows.map((r) => r.publishedVersion?.author.name)).toEqual(["Aisyah R."]);
+});
+
+test("listRecentlyPublished excludes a page whose publishedVersionId is null", async () => {
+  const { space, author } = await fixture("ALL_STAFF");
+  // Timestamp set, version pointer cleared: what an unpublish or a rollback leaves behind.
+  // Filtering on publishedAt alone lists it, and its link 404s for everyone.
+  await addPage(space.id, author.id, {
+    slug: "rolled-back",
+    publishedAt: new Date("2026-08-22T09:00:00Z"),
+    withVersion: false,
+  });
+  // And the plain never-published case, which has neither column set.
+  await addPage(space.id, author.id, {
+    slug: "never-published",
+    publishedAt: null,
+    withVersion: false,
+  });
+
+  const rows = await listRecentlyPublished(stranger, space.id);
+  expect(rows.map((r) => r.title)).toEqual(["MQTT contracts"]);
+});
+
+test("listRecentlyPublished orders by publishedAt descending and respects limit", async () => {
+  const { space, author } = await fixture("ALL_STAFF");
+  // The fixture page publishes at `new Date()`, so it is always the most recent.
+  await addPage(space.id, author.id, {
+    slug: "oldest",
+    publishedAt: new Date("2026-01-01T00:00:00Z"),
+  });
+  await addPage(space.id, author.id, {
+    slug: "newest",
+    publishedAt: new Date("2026-08-01T00:00:00Z"),
+  });
+  await addPage(space.id, author.id, {
+    slug: "middle",
+    publishedAt: new Date("2026-06-01T00:00:00Z"),
+  });
+
+  const all = await listRecentlyPublished(stranger, space.id);
+  expect(all.map((r) => r.title)).toEqual(["MQTT contracts", "newest", "middle", "oldest"]);
+
+  const top = await listRecentlyPublished(stranger, space.id, 2);
+  expect(top.map((r) => r.title)).toEqual(["MQTT contracts", "newest"]);
 });

@@ -4,6 +4,12 @@ export type ModuleSummary = {
   id: string;
   title: string;
   path: string;
+  /**
+   * The module itself has no published version. `getPublishedPage` requires one, so a link
+   * to it would 404 for everyone including admins — the landing page renders it as inert
+   * text, exactly as the nav rail does.
+   */
+  isDraft: boolean;
   pageCount: number;
   draftCount: number;
 };
@@ -31,6 +37,7 @@ export function summariseModules(tree: TreeNode[]): ModuleSummary[] {
       id: module.id,
       title: module.title,
       path: module.path,
+      isDraft: module.publishedVersionId === null,
       pageCount: counts.published,
       draftCount: counts.drafts,
     };
