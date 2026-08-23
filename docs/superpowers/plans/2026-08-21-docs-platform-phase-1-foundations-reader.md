@@ -59,6 +59,11 @@ npm install -D typescript @types/node @types/react @types/react-dom vitest
 
 Also set `"private": true` and `"version": "0.1.0"` — Task 8 reads that version string.
 
+> **Superseded snapshot.** Later tasks add to this file — the markdown pipeline (5),
+> OIDC (7), the seed (9), Playwright (14) and the smoke test (15). Read `package.json`
+> for the current version. Syncing this fence forward would have Task 1 install tools it
+> has no use for yet.
+
 ```json
 {
   "name": "badam",
@@ -87,10 +92,14 @@ fails at build.
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["dom", "dom.iterable", "ES2024"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "ES2024"
+    ],
     "module": "esnext",
     "moduleResolution": "bundler",
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
@@ -100,11 +109,27 @@ fails at build.
     "resolveJsonModule": true,
     "isolatedModules": true,
     "allowJs": false,
-    "plugins": [{ "name": "next" }],
-    "paths": { "@/*": ["./src/*"] }
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
 ```
 
@@ -122,6 +147,9 @@ export default nextConfig;
 ```
 
 - [ ] **Step 5: Create `vitest.config.ts`**
+
+> **Superseded snapshot.** Task 2 adds `globalSetup` and `fileParallelism`; Task 14 adds
+> the `next-auth` inline entry. Read `vitest.config.ts` for the current version.
 
 ```ts
 import { defineConfig } from "vitest/config";
@@ -146,6 +174,7 @@ query, which would render one theme's text on the other theme's background.
 
 ```css
 :root {
+  color-scheme: light dark;
   --ground: #F7F9F6;
   --surface: #FFFFFF;
   --surface-2: #F1F5F0;
@@ -161,10 +190,13 @@ query, which would render one theme's text on the other theme's background.
   --amber-wash: #FAF0DD;
   --code-bg: #F1F5F0;
 
-  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --serif: "Newsreader", ui-serif, Georgia, serif;
-  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --sans: var(--font-plex-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --serif: var(--font-newsreader), ui-serif, Georgia, serif;
+  --mono: var(--font-plex-mono), ui-monospace, Menlo, monospace;
 }
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -228,12 +260,18 @@ a { color: inherit; }
   :root:not([data-theme="light"]) .shiki span {
     color: var(--shiki-dark) !important;
     background-color: var(--shiki-dark-bg) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+    text-decoration: var(--shiki-dark-text-decoration) !important;
   }
 }
 :root[data-theme="dark"] .shiki,
 :root[data-theme="dark"] .shiki span {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
 }
 ```
 
@@ -241,7 +279,28 @@ a { color: inherit; }
 
 ```tsx
 import type { Metadata } from "next";
+import { IBM_Plex_Mono, IBM_Plex_Sans, Newsreader } from "next/font/google";
 import "./globals.css";
+
+const plexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-plex-sans",
+  display: "swap",
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
+  display: "swap",
+});
+
+const newsreader = Newsreader({
+  subsets: ["latin"],
+  variable: "--font-newsreader",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Badam",
@@ -250,13 +309,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <head>
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap"
-        />
-      </head>
+    <html
+      lang="en"
+      className={`${plexSans.variable} ${plexMono.variable} ${newsreader.variable}`}
+    >
       <body>{children}</body>
     </html>
   );
@@ -406,6 +462,9 @@ working around a compiler incompatibility.
 `BugReport` is here rather than in a later task because §18 makes bug reporting part of the
 alpha from day one, and adding it now avoids a second migration.
 
+> **Superseded snapshot.** Task 4 adds `Page`, `PageVersion`, `DocType` and `DocStatus`.
+> Read `prisma/schema.prisma` for the current version.
+
 ```prisma
 generator client {
   provider = "prisma-client-js"
@@ -539,7 +598,7 @@ import { execSync } from "node:child_process";
 import { config } from "dotenv";
 
 export default function setup() {
-  if (config({ path: ".env.test", override: true }).error) {
+  if (config({ path: ".env.test", override: true, quiet: true }).error) {
     throw new Error(
       ".env.test not found. Refusing to migrate: falling back to .env would run " +
         "migrations against the development database. Create it with:\n" +
@@ -554,10 +613,10 @@ export default function setup() {
     );
   }
 
-  // `--no` stops npx fetching an arbitrary Prisma from the registry if node_modules is
-  // stale - that version would decide which migrations run. Do not pass an `env` option
-  // here: execSync already defaults to process.env, so setting DATABASE_URL to its own
-  // value is inert, and inert code that looks like a safeguard is worse than none.
+  // `--no` stops npx fetching an arbitrary Prisma version from the registry if
+  // node_modules is stale — that version would decide which migrations run.
+  // The `env` option that used to be here was inert: execSync already defaults to
+  // process.env, so setting DATABASE_URL to its own value did nothing.
   execSync("npx --no prisma migrate deploy", { stdio: "inherit" });
 }
 ```
@@ -571,7 +630,7 @@ import { config } from "dotenv";
 // globalSetup mutates process.env in the main Vitest process and workers inherit it;
 // this call covers the case where this module is what first constructs the client.
 // Deleting either one as "duplication" silently retargets the whole suite.
-if (config({ path: ".env.test", override: true }).error) {
+if (config({ path: ".env.test", override: true, quiet: true }).error) {
   throw new Error(
     ".env.test not found. Refusing to run integration tests: falling back to .env " +
       "would TRUNCATE the development database. Create it with:\n" +
@@ -588,6 +647,8 @@ if (!new URL(databaseUrl).pathname.endsWith("_test")) {
   throw new Error(`Refusing to run integration tests against ${databaseUrl}`);
 }
 
+// Dynamic import so the environment above is in place before PrismaClient is
+// constructed. Defence in depth, not the primary guarantee — see the comment above.
 const { db } = await import("@/lib/db");
 
 export { db };
@@ -596,6 +657,8 @@ let verifiedDatabase = false;
 let tables: string[] | undefined;
 
 export async function resetDb() {
+  // Last line of defence: the client could have been constructed from a stale
+  // DATABASE_URL before this module evaluated. Checked once per worker.
   if (!verifiedDatabase) {
     const rows = await db.$queryRaw<{ current_database: string }[]>`
       SELECT current_database()`;
@@ -606,6 +669,8 @@ export async function resetDb() {
     verifiedDatabase = true;
   }
 
+  // Introspected rather than hardcoded, so a task that adds a table cannot forget to
+  // add it here — the old failure mode was a test that passes alone and fails in a suite.
   tables ??= (
     await db.$queryRaw<{ tablename: string }[]>`
       SELECT tablename FROM pg_tables
@@ -925,9 +990,9 @@ import type { Viewer } from "./types";
 
 /**
  * The readability predicate alone. Deliberately NOT exported: it contains a top-level
- * `OR`, so spreading it into a caller's `where` that also has `OR` would silently delete
- * one of them — a total authorization bypass that neither tsc nor Prisma can detect.
- * Compose through `readableSpace` instead.
+ * `OR`, so spreading it into a caller's `where` that also has `OR` would silently
+ * delete one of them — a total authorization bypass that neither tsc nor Prisma can
+ * detect. Compose through `readableSpace` instead.
  */
 function readableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
   if (viewer.isSuperAdmin) return {};
@@ -1026,6 +1091,8 @@ async function fixture() {
 test("a caller's own OR cannot displace the permission predicate", async () => {
   await fixture();
 
+  // The natural way to write space search. Written as a spread of a bare `OR` fragment,
+  // this returned the MEMBERS space to a non-member.
   const rows = await db.space.findMany({
     where: readableSpace(stranger, {
       OR: [{ name: { contains: "planning" } }, { key: { contains: "planning" } }],
@@ -1242,6 +1309,9 @@ the first thing to check — but it should need no maintenance.
 
 `tests/integration/pages-repo.test.ts`:
 
+> **Superseded snapshot.** Task 13 adds the `listRecentlyPublished` tests. Read
+> `tests/integration/pages-repo.test.ts` for the current version.
+
 ```ts
 import { beforeEach, expect, test } from "vitest";
 import { db, resetDb } from "../setup/reset";
@@ -1382,6 +1452,9 @@ Run: `npm test -- tests/integration/pages-repo.test.ts`
 Expected: FAIL — `Failed to resolve import "@/lib/pages/repo"`.
 
 - [ ] **Step 7: Create `src/lib/pages/repo.ts`**
+
+> **Superseded snapshot.** Task 12 narrows the select; Task 13 appends
+> `listRecentlyPublished`. Read `src/lib/pages/repo.ts` for the current version.
 
 ```ts
 import { cache } from "react";
@@ -2467,6 +2540,9 @@ Expected: 15 passed.
 A generic OIDC provider, so Google Workspace and Microsoft Entra are configuration rather
 than code (spec §19).
 
+> **Superseded snapshot.** Task 10 adds the test-login provider and the `prov` JWT claim
+> that revokes its sessions. Read `src/lib/auth/config.ts` for the current version.
+
 ```ts
 import NextAuth from "next-auth";
 import { isAllowedSignIn, parseAllowedDomains } from "@/lib/users/gate";
@@ -3362,6 +3438,9 @@ Set `ALLOW_TEST_LOGIN=1` in your local `.env` and add it to `.env.example` docum
 
 Every colour comes from the tokens defined in Task 1.
 
+> **Superseded snapshot.** Task 11 appends the bug-reporting styles and Task 12 the
+> reader-route rules. Read `src/components/shell.css` for the current version.
+
 ```css
 .topbar {
   position: sticky;
@@ -3513,6 +3592,9 @@ Every colour comes from the tokens defined in Task 1.
 
 - [ ] **Step 2: Create `src/components/TopBar.tsx`**
 
+> **Superseded snapshot.** Task 11 adds the compact bug button; its fence in that task is
+> the current file.
+
 ```tsx
 import type { BuildInfo } from "@/lib/version/build";
 
@@ -3567,6 +3649,9 @@ by URL** — nothing errors, nothing logs, the page is simply invisible. That is
 failure mode available in a documentation reader. A group node also links to itself, since
 group pages carry their own content (the seed's `architecture` page does) and would
 otherwise be unreachable from the rail.
+
+> **Superseded snapshot.** Task 13 replaces the inline path encoder with the shared
+> `pageHref`. Read `src/components/NavRail.tsx` for the current version.
 
 ```tsx
 import type { TreeNode } from "@/lib/pages/tree";
@@ -3635,6 +3720,10 @@ export function NavRail({ spaceKey, spaceName, tree, build }: Props) {
 
 - [ ] **Step 5: Create `src/components/RailFoot.tsx`**
 
+> **Superseded snapshot.** Task 11 extracts the button into `BugReportButton` so the
+> dialog state lives in one client component; the shipped `RailFoot` renders that instead
+> of owning `useState` itself. Read `src/components/RailFoot.tsx` for the current version.
+
 ```tsx
 "use client";
 
@@ -3663,6 +3752,9 @@ export function RailFoot({ build }: { build: BuildInfo }) {
 
 Task 11 replaces this file entirely. It exists now so the shell typechecks.
 
+> **Superseded snapshot** — a placeholder, so the shell has something to render. Task 11
+> ships the real dialog and its fence there is the current file.
+
 ```tsx
 "use client";
 
@@ -3680,6 +3772,9 @@ export function BugReportDialog({ onClose }: { build: BuildInfo; onClose: () => 
 ```
 
 - [ ] **Step 7: Create `src/app/(reader)/[space]/layout.tsx`**
+
+> **Superseded snapshot.** Task 12 revises this layout. Read
+> `src/app/(reader)/[space]/layout.tsx` for the current version.
 
 ```tsx
 import { notFound } from "next/navigation";
@@ -4810,6 +4905,9 @@ git commit -m "feat: add in-product bug reporting"
 ```
 
 - [ ] **Step 2: Create `src/components/Breadcrumbs.tsx`**
+
+> **Superseded snapshot.** Task 13 replaces the local encoder with the shared `pageHref`.
+> Read `src/components/Breadcrumbs.tsx` for the current version.
 
 ```tsx
 import Link from "next/link";

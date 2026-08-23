@@ -201,11 +201,16 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   `npm run plan:check` now encodes it: a fence that appears verbatim *inside* the file it
   quotes is a FRAGMENT and is never a sync candidate.
 
-  It also reports the standing backlog: **19 fences no longer match the file they quote**,
-  all of them earlier tasks' snapshots of files that later tasks changed. That is the
-  "leave it, note the supersession" direction, and the notes were never written. Clearing it
-  means deciding per fence whether it is a historical snapshot or the file's only
-  description — do not bulk-sync it, which is the mistake that motivated the tool.
+  The backlog it first reported — 20 fences that no longer matched the file they quoted —
+  is cleared, and `plan:check` now reports **0 drifted**. Git history decided each one:
+  **7 had drifted from their own task's fix rounds and were synced**; **13 were snapshots a
+  later task changed and are now annotated** with what changed and where to read the current
+  version. Syncing those 13 would have been actively wrong — it would have put Playwright in
+  Task 1's scaffold and Task 4's models in Task 2's schema.
+
+  Keep that split when new drift appears: **`git log -- <file>` tells you which it is.** If
+  every commit touching the file belongs to the fence's own task, sync it; if a later task
+  changed it, annotate instead.
   Syncing after a task's first commit is not enough — most tasks here needed two or three
   fix rounds, and each one moves the code out from under the plan.
 - **A forward plan edit is not a code change.** Amending the plan to specify something new
@@ -221,6 +226,12 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   narrow (a byte cap derived from character counts; an image-only fix for a general overflow
   class). Too broad gets caught, because it breaks something visible. **Too narrow does
   not** — the reported case genuinely disappears and the class stays open.
+- **A bucket for "cannot classify" must be printed, not just counted.** The fence checker
+  quietly binned anything whose first line disagreed with its file, and a stale `RailFoot`
+  snapshot — rewritten enough that even its first line changed — sat in that bucket
+  reported as a number. It surfaced only once the tool used the plan's own "Step N: Create
+  `x`" wording to decide when a fence *claims* to be a whole file. Same failure shape as the
+  three mis-sized fixes: too narrow, and silent about it.
 - **Only ever stage explicit paths while a subagent is live.** A `git add -A` once swept an
   implementer's in-flight work into an unrelated commit.
 - **Ask a reviewer to name which mutant each test kills.** It is the only question that has

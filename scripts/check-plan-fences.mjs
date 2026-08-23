@@ -25,12 +25,30 @@ const PLAN_DIR = join(ROOT, "docs/superpowers/plans");
 const CODE_LANGS = new Set(["ts", "tsx", "js", "mjs", "json", "css", "prisma"]);
 const LOOKBACK = 12;
 
-/** Fences are matched to files by the last backticked path written above them. */
+/**
+ * Fences are matched to files by the path written above them, and the plan's own step
+ * wording says whether the fence is meant to be the *whole* file: "Step 4: Create `x`" or
+ * "Replace `x`" promises the entire file, while "add", "append" and "extend" introduce a
+ * fragment. That distinction is the whole point — a fence promising a whole file that no
+ * longer matches it is drift, and must not be allowed to hide.
+ */
 function findQuotedPath(lines, fenceLine) {
+  const exists = (p) => (existsSync(join(ROOT, p)) ? p : null);
+
+  for (let i = fenceLine - 1; i >= Math.max(0, fenceLine - LOOKBACK); i--) {
+    const directive = lines[i].match(
+      /\*\*Step \d+:\s*(Create|Replace|Rewrite)[^`]*`([^`\s]+\.[a-z]{2,6})`/i,
+    );
+    if (directive) {
+      const p = exists(directive[2].replace(/^\.\//, ""));
+      if (p) return { path: p, wholeFile: true };
+    }
+  }
+
   for (let i = fenceLine - 1; i >= Math.max(0, fenceLine - LOOKBACK); i--) {
     for (const m of lines[i].matchAll(/`([^`\s]+\.[a-z]{2,6})`/g)) {
-      const candidate = m[1].replace(/^\.\//, "");
-      if (existsSync(join(ROOT, candidate))) return candidate;
+      const p = exists(m[1].replace(/^\.\//, ""));
+      if (p) return { path: p, wholeFile: false };
     }
   }
   return null;
@@ -74,21 +92,23 @@ for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
       results.skipped++;
       continue;
     }
-    const quoted = findQuotedPath(lines, fence.openLine);
-    if (!quoted) {
+    const match = findQuotedPath(lines, fence.openLine);
+    if (!match) {
       results.skipped++;
       continue;
     }
+    const quoted = match.path;
 
     const fileText = readFileSync(join(ROOT, quoted), "utf8");
     const a = fence.body.trim();
     const b = fileText.trim();
 
-    // The path above a fence is a hint, not a declaration — prose mentions paths too, and a
-    // fence can sit under a paragraph naming an unrelated file. Only claim a match when the
-    // two agree on their first line; otherwise the "drift" is really a mis-match.
+    // A fence under "Create `x`" claims to BE x, so a mismatch is always reportable — even
+    // when it has diverged so far that the first lines differ. That case is exactly how a
+    // stale RailFoot snapshot hid here once. Only a loosely-matched fence, where the path
+    // came from surrounding prose rather than a step directive, may be dismissed.
     const firstLine = (s) => (s.split("\n").find((l) => l.trim()) ?? "").trim();
-    if (a !== b && !b.includes(a) && firstLine(a) !== firstLine(b)) {
+    if (!match.wholeFile && a !== b && !b.includes(a) && firstLine(a) !== firstLine(b)) {
       results.unmatched++;
       continue;
     }
