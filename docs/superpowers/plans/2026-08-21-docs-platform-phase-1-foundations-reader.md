@@ -4728,6 +4728,10 @@ git commit -m "feat: add in-product bug reporting"
 
 - [ ] **Step 1: Create `src/components/doc.css`**
 
+> **Superseded snapshot.** Task 13 appended the `.landing` rules and Phase 2's Task 8 appended
+> a heading overflow guard, so the fence below is a prefix of the shipped file, not all of it.
+> Read `src/components/doc.css` for the current version.
+
 ```css
 .doc { min-width: 0; max-width: 820px; padding: 30px 44px 72px; }
 

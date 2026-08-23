@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **322 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **351 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -23,8 +23,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 5. Draft autosave endpoint | ✅ |
 | 6. Creating a page | ✅ |
 | 7. The editor (CodeMirror 6) | ✅ |
-| **8. Server-rendered preview** | **next** |
-| 9–15 | not started |
+| 8. Server-rendered preview | ✅ |
+| **9. Publishing** | **next** |
+| 10–15 | not started |
 
 Findings already worth carrying:
 
@@ -203,6 +204,12 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   string. Deriving labels from slugs disagreed with the nav rail beside it, and linking every
   ancestor prefix offered links to unpublished pages that 404 — the exact links the rail
   refuses to render.
+- **A guard that asserts a class over a fixed corpus is testing the corpus.** The Playwright
+  test "no page scrolls horizontally, whatever the content" was green for all of Phase 1 while
+  the reader overflowed **4,660px** on a long heading — `doc.css`'s `overflow-wrap` guard
+  stopped short of headings, and no seeded page has an unbreakable one. Found only when Phase
+  2's preview pane rendered hostile content. Fixed in `doc.css`, not in the pane. Test a class
+  by **injecting** the hostile case, not by hoping the fixtures contain it.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in

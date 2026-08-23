@@ -116,7 +116,7 @@ for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
 
     if (a === b) {
       results.synced++;
-    } else if (b.includes(a)) {
+    } else if (b.includes(a) && !match.wholeFile) {
       // A verbatim slice of the file: an "append this" or "add this block" step.
       // Correct as-is, and the one shape a whole-file sync would destroy.
       results.fragment++;

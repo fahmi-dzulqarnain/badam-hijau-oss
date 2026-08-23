@@ -648,13 +648,13 @@ either direction.
 
 ---
 
-## Task 8: Server-rendered preview
+## Task 8: Server-rendered preview ✅
 
 **Files:**
 - Create: `src/app/api/preview/route.ts`
 - Modify: `src/components/Editor.tsx`
 
-- [ ] **Step 1: `POST` returning rendered HTML**
+- [x] **Step 1: `POST` returning rendered HTML**
 
 Call `renderMarkdown` from Phase 1 — the same function the reader uses, not a copy. The whole
 value of this route is that preview and published output cannot disagree.
@@ -662,11 +662,34 @@ value of this route is that preview and published output cannot disagree.
 Requires `EDIT` on the page's space. The route renders arbitrary caller-supplied Markdown, so
 without that check it is an open HTML-rendering endpoint for anyone with a session.
 
-- [ ] **Step 2: Wire it in**
+- [x] **Step 2: Wire it in**
 
 Debounced, same 2 s tick as autosave, rendered beside the editor. Reuse `.doc .body` so the
-preview inherits the reader's typography, and confirm the preview pane cannot scroll the page
-horizontally — the Playwright guard covers reader routes, and this adds a new one.
+preview inherits the reader's typography.
+
+Use a **second `createSaveScheduler`**, not a fresh timer: every property that module encodes
+is one preview wants too — armed by the first edit so steady typing does not starve it, never
+two in flight, an edit mid-flight re-arms. Preview is deliberately independent of saving, so
+it keeps rendering while autosave is suspended behind an unanswered conflict.
+
+**This step found a Phase 1 reader bug, and how it hid is the point.** Checking the preview
+pane for horizontal overflow turned up a 4,660-pixel overflow **on the reader itself** from a
+single long heading: `doc.css`'s `overflow-wrap` guard covered `p, li, dd, td, th, blockquote`
+and stopped short of headings. Measured directly — a 300-character token in an `<h2>` gives
+4,660px, the same token in a `<p>` gives 0.
+
+The Playwright test named *"no page scrolls horizontally, whatever the content"* never saw it,
+because **it only measures the content that happens to be seeded**, and no seeded page has an
+unbreakable heading. A guard that asserts a class over a fixed corpus is testing the corpus.
+
+Fixed in `doc.css`, not in the preview pane — a pane-scoped fix would have left the bug on the
+surface everyone actually reads, which is the "too narrow, and silent about it" failure this
+project has now hit four times.
+
+**Task 14 must close the guard, not just re-run it:** keep the route loop, and add a
+DOM-injection probe to the *reader* spec — append an `h2`, a `p` and a `pre` each carrying a
+300-character unbreakable token, assert zero overflow, remove them. No database writes, and it
+would have caught this.
 
 ---
 
@@ -873,6 +896,12 @@ must preserve that.
 - [ ] A `VIEWER` sees no edit affordance and cannot reach `/edit/[pageId]` by URL.
 - [ ] No editor route scrolls horizontally — the guard that has caught three regressions in
       three different shapes.
+- [ ] **Close the guard's real gap.** Add a DOM-injection probe to the reader spec: append an
+      `h2`, a `p` and a `pre` each carrying a 300-character unbreakable token, assert zero
+      overflow, remove them. Task 8 found a 4,660px reader overflow from a long heading that
+      this suite had been green over for the whole of Phase 1, because it only measures seeded
+      content. Injecting hostile content writes nothing to the database and tests the class
+      the suite claims to test.
 
 ---
 
