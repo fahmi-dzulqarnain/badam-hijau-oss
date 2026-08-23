@@ -1,0 +1,231 @@
+/*
+ * The editing surface. Every class is prefixed `ed-` (or is `.ed` itself) and styled nowhere
+ * else, which is what keeps this clear of Phase 1's `doc.css` hazard: that bug was a class
+ * defined in two stylesheets whose load order differed between a hard load and a soft
+ * navigation, so `.doc` computed a different `max-width` depending on how you arrived.
+ *
+ * Imported by the (editor) layout, never by the page route, for the same reason.
+ *
+ * The `.cm-*` rules at the bottom are CodeMirror's own class names. They are the exception
+ * to the prefix rule and they are unavoidable: CodeMirror injects a base theme through a
+ * StyleModule at view-construction time, and the only way to reach it is by its own
+ * selectors. They are scoped under `.ed-surface` so they cannot leak into a future route.
+ */
+
+.ed {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  padding: 0 20px 64px;
+}
+
+/*
+ * Sticky under the 54px top bar so the save indicator is on screen while you type. `min-width:
+ * 0` is load-bearing on every flex child in this file: without it a long path or a long
+ * status string sets the flex base size to its content width and pushes the page wider than
+ * the viewport, which is the horizontal-scroll class this project has fixed three times.
+ */
+.ed-bar {
+  position: sticky;
+  top: 54px;
+  z-index: 4;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 14px 0 12px;
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+}
+
+.ed-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.ed-space {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.ed-path {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  /* A path is a single unbroken token by construction, so it needs the guard by name. */
+  overflow-wrap: anywhere;
+}
+
+.ed-chip {
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.ed-status {
+  flex: none;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* Never invisible, never silent. An error keeps its own colour until it is resolved. */
+.ed-status-saving { color: var(--ink-3); }
+.ed-status-dirty { color: var(--amber); }
+.ed-status-error {
+  padding: 2px 8px;
+  color: var(--amber);
+  background: var(--amber-wash);
+  border-radius: 4px;
+  /* The one status long enough to need wrapping rather than a nowrap that widens the page. */
+  white-space: normal;
+}
+
+.ed-conflict {
+  margin: 16px 0 0;
+  padding: 13px 15px;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 8px;
+}
+
+.ed-conflict-lead { margin: 0; font-size: 13.5px; }
+.ed-conflict-body { margin: 7px 0 0; font-size: 12.5px; color: var(--ink-2); }
+
+.ed-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.ed-conflict-actions button {
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.ed-conflict-actions button:hover {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+.ed-label {
+  display: block;
+  margin: 18px 0 5px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ed-title {
+  display: block;
+  width: 100%;
+  padding: 9px 11px;
+  font: inherit;
+  font-family: var(--serif);
+  font-size: 19px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.ed-surface {
+  /*
+   * `min-width: 0` plus `overflow: hidden` is the pair that stops the editor widening the
+   * page. CodeMirror measures its own content and will happily size its scroller to the
+   * longest line; wrapping is enabled in the view so it should never want to, and this is
+   * the guard for when something in the document defeats that.
+   */
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+
+.ed-hint {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.ed-denied {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: 40px 20px 64px;
+}
+
+.ed-denied h1 {
+  margin: 0 0 10px;
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.ed-denied p { margin: 0; color: var(--ink-2); }
+
+/* --- CodeMirror's own classes, scoped so they cannot escape this surface. --- */
+
+.ed-surface .cm-editor {
+  max-width: 100%;
+  min-height: 55vh;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.ed-surface .cm-editor.cm-focused {
+  /* CodeMirror draws its own focus ring on the wrong element; the surface takes it instead. */
+  outline: none;
+}
+
+.ed-surface:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.ed-surface .cm-scroller {
+  font-family: inherit;
+  line-height: 1.65;
+  /* Vertical only. The horizontal axis is handled by wrapping, not by a scrollbar. */
+  overflow-x: hidden;
+}
+
+.ed-surface .cm-content { padding: 12px 0; caret-color: var(--ink); }
+.ed-surface .cm-line { padding: 0 12px; }
+
+.ed-surface .cm-gutters {
+  color: var(--ink-3);
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+}
+
+.ed-surface .cm-activeLine { background: var(--accent-wash); }
+.ed-surface .cm-activeLineGutter { background: var(--accent-wash); color: var(--ink-2); }
+.ed-surface .cm-selectionBackground,
+.ed-surface .cm-content ::selection { background: var(--accent-wash); }
+.ed-surface .cm-cursor { border-left-color: var(--ink); }
+.ed-surface .cm-panels { color: var(--ink); background: var(--surface-2); }
+.ed-surface .cm-panels input { font: inherit; color: var(--ink); background: var(--surface); }

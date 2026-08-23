@@ -1,0 +1,93 @@
+import { db } from "@/lib/db";
+import { can } from "@/lib/authz/can";
+import { readableSpace } from "@/lib/authz/where";
+import { visiblePage } from "@/lib/pages/visible";
+import type { DocStatus, DocType } from "@prisma/client";
+import type { Viewer } from "@/lib/authz/types";
+
+/**
+ * Everything the editor route needs in one read: what to put in the document, what the
+ * chrome says, and the timestamp the first autosave must send as `seen`.
+ */
+export type EditablePage = {
+  id: string;
+  path: string;
+  docType: DocType;
+  status: DocStatus;
+  space: { key: string; name: string };
+  /**
+   * The text to load into the editor. From the draft when there is one; otherwise from the
+   * published version, so opening a published page starts from what readers currently see
+   * rather than from a blank document.
+   */
+  text: { title: string; markdown: string };
+  /**
+   * The draft's `updatedAt`, or **null when there is no draft row**. Null is not a missing
+   * value here — it is the claim the first save makes, and it is what routes that save to
+   * the create branch instead of a conflict against a row that does not exist.
+   */
+  seen: Date | null;
+};
+
+export type EditablePageResult =
+  | { ok: true; page: EditablePage }
+  /**
+   * The page does not exist, is soft-deleted, or lives in a space this viewer cannot read.
+   * One answer for all three, and the route renders it as the reader's own not-found —
+   * never a 403, which would confirm the page exists. `saveDraft` and `createPage` draw the
+   * same line and the three must not diverge.
+   */
+  | { ok: false; reason: "not-found" }
+  /**
+   * Readable but not editable — a `VIEWER` in the space, or anyone in an `ALL_STAFF` space
+   * they do not belong to. Safe to be specific: they can already see the page.
+   */
+  | { ok: false; reason: "forbidden" };
+
+/**
+ * Loads a page for editing under the same permission rules the autosave endpoint enforces.
+ *
+ * This is NOT the authorisation for the writes that follow it. `saveDraft` re-resolves the
+ * page and re-checks `EDIT` on every save, because a route that authorises once at render
+ * time authorises for as long as the tab stays open — and a membership revoked at 09:00
+ * must not keep writing until lunch.
+ */
+export async function getPageForEditing(
+  viewer: Viewer,
+  pageId: string,
+): Promise<EditablePageResult> {
+  const page = await db.page.findFirst({
+    // Both helpers return COMPLETE `where` objects and neither is spread: `visiblePage`
+    // owns the top level and `readableSpace` is passed whole as the `space` relation filter.
+    where: visiblePage({ id: pageId, space: readableSpace(viewer) }),
+    // Explicit select, never `include`.
+    select: {
+      id: true,
+      title: true,
+      path: true,
+      docType: true,
+      status: true,
+      space: { select: { id: true, key: true, name: true, visibility: true } },
+      draft: { select: { title: true, markdown: true, updatedAt: true } },
+      publishedVersion: { select: { markdown: true } },
+    },
+  });
+  if (!page) return { ok: false, reason: "not-found" };
+
+  if (!can(viewer, page.space, "EDIT")) return { ok: false, reason: "forbidden" };
+
+  return {
+    ok: true,
+    page: {
+      id: page.id,
+      path: page.path,
+      docType: page.docType,
+      status: page.status,
+      space: { key: page.space.key, name: page.space.name },
+      text: page.draft
+        ? { title: page.draft.title, markdown: page.draft.markdown }
+        : { title: page.title, markdown: page.publishedVersion?.markdown ?? "" },
+      seen: page.draft?.updatedAt ?? null,
+    },
+  };
+}

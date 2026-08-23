@@ -76,6 +76,16 @@ const MODULES: Record<
     // Queries Space, which has no `deletedAt`.
     exempt: ["listEditableSpaces"],
   },
+  "src/lib/pages/editable.ts": {
+    load: () => import("@/lib/pages/editable"),
+    // Soft-delete tests: tests/integration/page-editable.test.ts —
+    //   "a soft-deleted page is not editable, and reads as not-found" covers the read, and
+    //   "a super admin still cannot open a soft-deleted page" pins that the permission
+    //   bypass is not also a soft-delete bypass. The two predicates are independent and the
+    //   one viewer who skips the first must not skip the second.
+    covered: ["getPageForEditing"],
+    exempt: [],
+  },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),
     // Soft-delete tests: tests/integration/drafts-repo.test.ts
