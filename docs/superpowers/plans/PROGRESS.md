@@ -1,7 +1,14 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 97 commits · **128 vitest tests + 8 Playwright
-tests passing** · typecheck and build clean · working tree clean
+**Phase 1 is complete.** Branch: `phase-1-foundations-reader` · 99 commits ·
+**128 vitest + 8 Playwright tests passing**, cold-start smoke green · typecheck and build
+clean · working tree clean
+
+All 15 tasks approved and every Phase 1 exit criterion verified — see the end of the
+[phase-1 plan](2026-08-21-docs-platform-phase-1-foundations-reader.md). Next: Phase 2, whose
+first landmine is already written up in the
+[roadmap](2026-08-21-docs-platform-roadmap.md) — the page-move unique index that can never
+be deferred.
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
 · Roadmap: [`2026-08-21-docs-platform-roadmap.md`](2026-08-21-docs-platform-roadmap.md)
@@ -22,7 +29,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 12. Page reader route | ✅ approved |
 | 13. Space landing | ✅ approved |
 | 14. Playwright E2E | ✅ approved |
-| **15. Cold-start smoke test** | **next — plan re-diffed against HEAD, ready to dispatch** |
+| 15. Cold-start smoke test | ✅ approved |
 
 ## Test suite
 
@@ -58,7 +65,7 @@ npm run db:seed         # dev database only; prints "Seeded 2 spaces and 7 pages
 npm test
 npm run test:e2e       # 8 Playwright specs; builds and serves on 3100 itself
 npm run typecheck && npm run build
-npm run smoke           # from Task 15: provisions, seeds, builds, serves, asserts, tears down
+npm run smoke           # cold start: provisions, seeds, builds, serves, asserts, tears down
 ```
 
 Postgres is the local Homebrew `postgresql@16` service on port 5432 — there is no container

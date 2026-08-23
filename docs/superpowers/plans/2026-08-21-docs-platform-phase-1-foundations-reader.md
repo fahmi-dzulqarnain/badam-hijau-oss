@@ -5739,7 +5739,13 @@ re-running the seed publishes a **new `PageVersion`** for each page, so version 
 with every run while the 2-spaces/7-pages invariant holds; and the bug report must be
 cleaned up, which the Teardown step below does.
 
-- [ ] **Step 1: Create `scripts/smoke.sh`**
+- [x] **Step 1: Create `scripts/smoke.sh`**
+
+**Two defects were baked into the fence below when it was first written**, both now fixed in
+it: three lines carried `'"'"'`-style shell-escaping artifacts left over from the heredoc that
+generated them, so the script would not parse at all; and `prisma db execute --stdin` needs
+`--schema prisma/schema.prisma`, or it exits with "Either --url or --schema must be
+provided". The fence is now byte-identical to the shipped `scripts/smoke.sh`.
 
 ```bash
 #!/usr/bin/env bash
@@ -5778,13 +5784,13 @@ expect_status() { # url expected label
 
 expect_body() { # url needle label
   curl -s -b "$JAR" "$BASE$1" | grep -q -- "$2" \
-    && ok "$3" || fail "$3 (no match for '"'"'$2'"'"' at $1)"
+    && ok "$3" || fail "$3 (no match for '$2' at $1)"
 }
 
 sign_in() { # email
   : > "$JAR"
   local csrf
-  csrf=$(curl -s -c "$JAR" "$BASE/api/auth/csrf" | sed -n '"'"'s/.*"csrfToken":"\([^"]*\)".*/\1/p'"'"')
+  csrf=$(curl -s -c "$JAR" "$BASE/api/auth/csrf" | sed -n 's/.*"csrfToken":"\([^"]*\)".*/\1/p')
   curl -s -b "$JAR" -c "$JAR" -o /dev/null -X POST "$BASE/api/auth/callback/test-login" \
     -d "email=$1" -d "csrfToken=$csrf" -d "json=true"
   curl -s -b "$JAR" "$BASE/api/auth/session" | grep -q "$1" \
@@ -5834,7 +5840,7 @@ step "Bug reporting"
 sign_in "aisyah@example.com"
 code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/bugs" \
   -H "Content-Type: application/json" \
-  -d '"'"'{"summary":"smoke test","routePath":"/engineering","appVersion":"0.0.0","userAgent":"smoke","viewport":"800x600"}'"'"')
+  -d '{"summary":"smoke test","routePath":"/engineering","appVersion":"0.0.0","userAgent":"smoke","viewport":"800x600"}')
 [ "$code" = "201" ] && ok "bug report accepted" || fail "bug report POST returned $code"
 
 step "Teardown"
@@ -5842,7 +5848,7 @@ step "Teardown"
 # one behind. Scoped to this run's summary rather than a TRUNCATE, so a developer's own
 # reports survive.
 printf "delete from \"BugReport\" where summary = 'smoke test';" \
-  | npx --no prisma db execute --stdin > /dev/null 2>&1 \
+  | npx --no prisma db execute --stdin --schema prisma/schema.prisma > /dev/null 2>&1 \
   && ok "removed the smoke bug report" || fail "could not clean up the smoke bug report"
 
 step "Result"
@@ -5856,28 +5862,38 @@ fi
 
 Make it executable: `chmod +x scripts/smoke.sh`
 
-- [ ] **Step 2: Add the script to `package.json`**
+- [x] **Step 2: Add the script to `package.json`**
 
 ```json
     "smoke": "./scripts/smoke.sh"
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 ```bash
 npm run smoke
 ```
 
-Expected: every check `ok`, ending in `SMOKE PASSED`.
+Result: every check `ok`, ending in `SMOKE PASSED`, exit 0. Fifteen checks across provision,
+seed, build, serve, signed-out redirect, member reads, non-member 404-not-403 with no title
+leak, bug reporting, and teardown.
 
-- [ ] **Step 4: Prove it can fail**
+- [x] **Step 4: Prove it can fail**
 
-A smoke test that has never failed is not evidence. Break one thing deliberately and
-confirm the run reports it and exits non-zero — for example temporarily change the
-stranger's expected status from 404 to 200, or stop Postgres. Restore, re-run, confirm it
-passes again. Paste both outcomes.
+A smoke test that has never failed is not evidence. Done: inverting the stranger's expected
+status from 404 to 200 produced
 
-- [ ] **Step 5: Commit**
+```
+  FAIL members-only space hidden (404, not 403) (/engineering -> 404, wanted 200)
+
+SMOKE FAILED: 1 check(s)
+```
+
+and **exit code 1**. Restored, re-run, `SMOKE PASSED` and exit code 0. The exit code is the
+part that matters for CI and is easy to lose to a pipe — `npm run smoke | tail` reports
+tail's status, not the script's.
+
+- [x] **Step 5: Commit**
 
 Stage explicit paths only — `git add -A` once swept a live subagent's in-flight work into an
 unrelated commit on this project.
@@ -5889,17 +5905,28 @@ git commit -m "test: add cold-start smoke test"
 
 ## Phase 1 exit criteria
 
-All must hold before Phase 2 starts:
+All verified on 23 Aug 2026, at commit `77b64f6`:
 
-- [ ] `npm test` — unit and integration suites pass
-- [ ] `npm run test:e2e` — 8 end-to-end tests pass
-- [ ] `npm run smoke` — cold-start smoke test passes end to end
-- [ ] `npm run typecheck && npm run build` — clean
-- [ ] A member reads a seeded page with navigation, breadcrumbs, TOC and page info
-- [ ] A non-member receives **404** for that same page, and its title appears nowhere in the response
-- [ ] An unpublished page is unreachable by URL
-- [ ] The Alpha badge and `0.1.0+<sha>` build string render in the shell
-- [ ] Report bug stores a row with the route, version and viewport captured automatically
+- [x] `npm test` — **128 passing, 18 files** (88 unit, 40 integration)
+- [x] `npm run test:e2e` — **8 passing** against a production build on port 3100
+- [x] `npm run smoke` — **15 checks, `SMOKE PASSED`, exit 0** from a cold start
+- [x] `npm run typecheck && npm run build` — both exit 0
+- [x] A member reads a seeded page with navigation, breadcrumbs, TOC and page info
+- [x] A non-member receives **404** for that same page, and its title appears nowhere in
+      the response
+- [x] An unpublished page is unreachable by URL, including by an editor
+- [x] The Alpha badge and `0.1.0+df0ef11` build string render in the shell
+- [x] Report bug stores a row with the route, version and viewport captured automatically —
+      confirmed by inspecting the stored row: `routePath /engineering/architecture/
+      mqtt-contracts`, `appVersion 0.1.0`, `viewport 1280x720`, the browser's real user
+      agent, the signed-in reporter, and a `pageId` the **server** resolved from the route
+      to "MQTT contracts". Nothing in that row came from a client-supplied identifier.
+
+Two guards were additionally proven able to fail, since a green test that cannot fail is
+not evidence: registering `test-login` unconditionally kills the provider tests, and forcing
+a wide element produces `/engineering scrolls horizontally by 1026px`.
+
+**Phase 1 is complete.**
 
 ## Two sources of truth for membership, deliberately
 
