@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "vitest";
 import { db, resetDb } from "../setup/reset";
-import { getPageForEditing } from "@/lib/pages/editable";
+import { canEditPage, getPageForEditing } from "@/lib/pages/editable";
 import type { EditablePageResult } from "@/lib/pages/editable";
 import type { Viewer } from "@/lib/authz/types";
 
@@ -192,4 +192,83 @@ test("a super admin still cannot open a soft-deleted page", async () => {
   await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
   const admin: Viewer = { id: "u-admin", isSuperAdmin: true, memberships: [] };
   expect(await getPageForEditing(admin, page.id)).toEqual({ ok: false, reason: "not-found" });
+});
+
+// --- canEditPage: the preview endpoint's authorisation ----------------------------------
+
+test("canEditPage says yes to an editor without loading the page's text", async () => {
+  const { page, asEditor } = await fixture();
+  expect(await canEditPage(asEditor, page.id)).toEqual({ ok: true });
+});
+
+/**
+ * The soft-delete test this module's second entry in `src/lib/pages/visible.test.ts` points
+ * at, and it guards something `getPageForEditing`'s version does not: without
+ * `visiblePage()` here, a deleted page keeps working as a Markdown-rendering endpoint for
+ * anyone who kept its id, long after every read path stopped admitting it exists.
+ */
+test("a soft-deleted page cannot be previewed either", async () => {
+  const { page, asEditor } = await fixture();
+  await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
+
+  expect(await canEditPage(asEditor, page.id)).toEqual({ ok: false, reason: "not-found" });
+});
+
+test("a super admin cannot preview a soft-deleted page", async () => {
+  // As above: the permission predicate and the soft-delete predicate are independent, and
+  // the one viewer who bypasses the first must not bypass the second.
+  const { page } = await fixture();
+  await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
+  const admin: Viewer = { id: "u-admin", isSuperAdmin: true, memberships: [] };
+
+  expect(await canEditPage(admin, page.id)).toEqual({ ok: false, reason: "not-found" });
+});
+
+/**
+ * Two functions, one rule. `canEditPage` exists only because it is cheaper, and a cheap
+ * copy of an authorisation that drifts into being a *permissive* copy is the failure this
+ * pins — every viewer that `getPageForEditing` refuses must be refused here, for the same
+ * stated reason, including the two whose distinction is the 404-not-403 line.
+ *
+ * Kills: dropping `visiblePage()` from the lean query; checking `READ` instead of `EDIT`;
+ * answering `forbidden` where the loader answers `not-found`.
+ */
+test("canEditPage and getPageForEditing refuse the same viewers for the same reasons", async () => {
+  const { space, page, aisyah, asEditor, asViewer } = await fixture();
+  const deleted = await db.page.create({
+    data: {
+      spaceId: space.id,
+      slug: "retired-note",
+      path: "architecture/retired-note",
+      title: "Retired note",
+      createdById: aisyah.id,
+      status: "DRAFT",
+      deletedAt: new Date(),
+    },
+  });
+
+  const cases: Array<[string, Viewer, string]> = [
+    ["an editor", asEditor, page.id],
+    ["a viewer", asViewer, page.id],
+    ["a stranger", stranger, page.id],
+    ["a super admin", { id: "u-admin", isSuperAdmin: true, memberships: [] }, page.id],
+    ["an editor on a deleted page", asEditor, deleted.id],
+    ["an editor on a page id that never existed", asEditor, "no-such-page-id"],
+  ];
+
+  for (const [who, viewer, pageId] of cases) {
+    const loader = await getPageForEditing(viewer, pageId);
+    const lean = await canEditPage(viewer, pageId);
+    expect(lean.ok, `${who}: allowed by one and not the other`).toBe(loader.ok);
+    if (!lean.ok && !loader.ok) {
+      expect(lean.reason, `${who}: refused for a different reason`).toBe(loader.reason);
+    }
+  }
+});
+
+test("a stranger cannot tell a real unreadable page from an imaginary one through canEditPage", async () => {
+  const { page } = await fixture("MEMBERS");
+  expect(await canEditPage(stranger, page.id)).toEqual(
+    await canEditPage(stranger, "no-such-page-id"),
+  );
 });

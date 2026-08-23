@@ -91,3 +91,41 @@ export async function getPageForEditing(
     },
   };
 }
+
+/**
+ * Whether this viewer may edit this page, without loading a word of its text.
+ *
+ * The preview endpoint's authorisation. It renders caller-supplied Markdown into HTML, so
+ * without an `EDIT` check it is an open HTML-rendering service for anyone holding a session
+ * — and it fires on the same two-second tick as autosave, so paying for the draft and the
+ * published version on every keystroke-batch to learn one boolean would be wasteful as well
+ * as wrong. `getPageForEditing` above answers a different question and reads five more
+ * columns to do it.
+ *
+ * The two refusals are the same two, drawn in the same place, for the same reasons: a page
+ * the viewer cannot READ is `not-found` and never `forbidden`, or the 403 itself tells a
+ * stranger the page is real.
+ */
+export type EditAccessResult =
+  | { ok: true }
+  | { ok: false; reason: "not-found" }
+  | { ok: false; reason: "forbidden" };
+
+export async function canEditPage(
+  viewer: Viewer,
+  pageId: string,
+): Promise<EditAccessResult> {
+  const page = await db.page.findFirst({
+    // Both helpers return COMPLETE `where` objects and neither is spread. `visiblePage` is
+    // not decoration here: a soft-deleted page must not be previewable, or a deleted page
+    // stays a working Markdown renderer for as long as someone keeps its id.
+    where: visiblePage({ id: pageId, space: readableSpace(viewer) }),
+    // Explicit select, never `include`. Only what `can()` needs.
+    select: { space: { select: { id: true, visibility: true } } },
+  });
+  if (!page) return { ok: false, reason: "not-found" };
+
+  if (!can(viewer, page.space, "EDIT")) return { ok: false, reason: "forbidden" };
+
+  return { ok: true };
+}

@@ -187,3 +187,26 @@
    and carries rail padding, so the landing states its own muted colour instead of reusing
    it; `.tag-draft` is global and is shared as-is. */
 .landing .landingdraft { color: var(--ink-3); }
+
+/*
+ * The fourth shape of the horizontal-scroll class, found by Task 8's preview pane and fixed
+ * here rather than there.
+ *
+ * The rule above guards `p, li, dd, td, th, blockquote` and stops at headings, so a heading
+ * carrying one unbreakable token — a URL, a `path/like/this`, a long identifier — still
+ * widens the document and slides the sticky top bar and rails out of alignment. Measured on
+ * `/engineering/architecture/mqtt-contracts` at 1280px with a 300-character `## Heading…`
+ * appended to `.body`: **4759px of horizontal overflow on the reader itself**, before any of
+ * Phase 2 existed. The Playwright guard did not catch it because no seeded page has such a
+ * heading; it asserts the class on the pages it visits, not on the content it does not have.
+ *
+ * It belongs in `doc.css` and not in the preview pane's stylesheet: the preview shares this
+ * file precisely so that the two surfaces cannot disagree, and a pane-scoped fix would leave
+ * the reader — the surface everyone actually reads — with the bug. That is the "too narrow,
+ * and silent about it" mistake this project has now made three times.
+ *
+ * It sits at the bottom of the file rather than beside its sibling because a Phase 1 whole-
+ * file fence quotes everything above; appending keeps that fence a verbatim prefix instead of
+ * putting it into drift. The same rule collision that sent `stripControl` to its own module.
+ */
+.body :is(h1, h2, h3, h4, h5, h6) { overflow-wrap: anywhere; }

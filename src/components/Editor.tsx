@@ -50,14 +50,37 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+/**
+ * The preview pane's contents.
+ *
+ * `html` is kept through a failure on purpose: a pane that empties itself the moment a
+ * render fails throws away the last true thing it had to show, and the failures here are
+ * mostly transient. It is labelled stale instead — an old preview the reader is told is old
+ * beats a blank rectangle, and beats a fresh-looking one that is silently out of date.
+ */
+type PreviewState = { html: string; pending: boolean; error: string | null };
+
 export function Editor({ page }: { page: EditorPage }) {
   const [state, dispatch] = useReducer(editorReducer, initialEditorState(page.updatedAt));
   const [title, setTitle] = useState(page.title);
   const [hydrated, setHydrated] = useState(false);
+  const [preview, setPreview] = useState<PreviewState>({
+    html: "",
+    pending: true,
+    error: null,
+  });
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const schedulerRef = useRef<SaveScheduler | null>(null);
+  const previewRef = useRef<SaveScheduler | null>(null);
+  /**
+   * Which preview render is the current one. The scheduler below guarantees its own renders
+   * never overlap, but the render on mount is fired outside it, so two answers can still be
+   * in flight at once — and the older one arriving second would leave the pane showing text
+   * the document no longer contains.
+   */
+  const previewTicket = useRef(0);
 
   /**
    * Refs, not dependencies. Everything below is read from inside a CodeMirror listener, a
@@ -141,6 +164,71 @@ export function Editor({ page }: { page: EditorPage }) {
   }, [save]);
 
   /**
+   * One preview render, on the server, through the reader's own pipeline.
+   *
+   * The route calls `renderMarkdown` — the function the reader calls — which is the whole
+   * reason this is a round trip rather than a Markdown parser in the bundle. A client-side
+   * approximation would be faster and would let the preview and the published page disagree
+   * for exactly the documents nobody thought to test.
+   *
+   * Deliberately independent of saving. Preview must keep working while autosave is
+   * suspended behind an unanswered conflict, and must not stop because a save failed: they
+   * answer different questions and one being broken is not a reason to blind the other.
+   */
+  const renderPreview = useCallback(
+    async (markdown: string) => {
+      const ticket = ++previewTicket.current;
+      const stale = () => ticket !== previewTicket.current;
+      const failed = (message: string) =>
+        setPreview((current) => ({ html: current.html, pending: false, error: message }));
+
+      setPreview((current) => ({ ...current, pending: true }));
+
+      let response: Response;
+      try {
+        response = await fetch("/api/preview", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pageId: page.id, markdown }),
+        });
+      } catch {
+        if (stale()) return;
+        failed("Preview unavailable — the browser could not reach the server.");
+        return;
+      }
+      if (stale()) return;
+
+      if (!response.ok) {
+        // The 403 is worth its own sentence: it means the membership was revoked while this
+        // tab stayed open, so the next autosave is about to fail too, and "preview failed"
+        // on its own would send someone hunting for a rendering bug.
+        failed(
+          response.status === 403
+            ? "Preview stopped — you no longer have permission to edit this page."
+            : response.status === 413
+              ? "This document is too large to preview."
+              : "Preview failed. Saving is unaffected.",
+        );
+        return;
+      }
+
+      const body = await response.json().catch(() => null);
+      if (stale()) return;
+      if (typeof body?.html !== "string") {
+        failed("Preview failed. Saving is unaffected.");
+        return;
+      }
+      setPreview({ html: body.html, pending: false, error: null });
+    },
+    [page.id],
+  );
+
+  const renderPreviewRef = useRef(renderPreview);
+  useEffect(() => {
+    renderPreviewRef.current = renderPreview;
+  }, [renderPreview]);
+
+  /**
    * The scheduler, built once per page. It calls through a ref so that rebuilding `save`
    * never rebuilds the scheduler — a fresh scheduler would drop the pending save with it.
    */
@@ -170,6 +258,48 @@ export function Editor({ page }: { page: EditorPage }) {
   }, [page.id]);
 
   /**
+   * The preview clock. Deliberately `createSaveScheduler` again rather than a second timer:
+   * "same 2 s tick as autosave" is not a coincidence to be re-implemented, and every rule
+   * that module encodes is a rule the preview wants too — armed by the first edit so steady
+   * typing still refreshes rather than starving, never two requests in flight, and an edit
+   * that lands mid-request re-arms so the pane cannot settle on stale HTML. Only the work it
+   * schedules is different.
+   */
+  useEffect(() => {
+    const scheduler = createSaveScheduler({
+      delayMs: AUTOSAVE_MS,
+      save: async () => {
+        const view = viewRef.current;
+        if (!view) return;
+        // Read out of the view at the moment it fires, exactly as the save does. React never
+        // holds a copy of the document.
+        await renderPreviewRef.current(view.state.doc.toString());
+      },
+    });
+    previewRef.current = scheduler;
+    return () => {
+      // No flush here, unlike the save scheduler: an unmounting preview has nothing to
+      // persist, and firing a render into a component that is going away only spends a
+      // request. Losing an unsaved *save* is data loss; losing an unrendered preview is not.
+      scheduler.stop();
+      previewRef.current = null;
+    };
+  }, [page.id]);
+
+  /**
+   * The first render, so the pane is populated before anyone types.
+   *
+   * From `page.markdown` — the same seed the view is built from — and keyed on the page id
+   * alone for the same reason the view is: a router refresh that brings newer server text
+   * must not repaint the preview out from under a document the editor is still holding, or
+   * the two panes would disagree, which is the one thing this feature exists to prevent.
+   */
+  useEffect(() => {
+    void renderPreviewRef.current(page.markdown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page.id]);
+
+  /**
    * The `EditorView`, built ONCE and keyed on the page id.
    *
    * This is the rule the whole component is arranged around. A view rebuilt on render loses
@@ -196,6 +326,11 @@ export function Editor({ page }: { page: EditorPage }) {
             // Our own document replacement is not an edit. See `FromServer`.
             if (update.transactions.some((tr) => tr.annotation(FromServer))) return;
             schedulerRef.current?.edited();
+            // The preview is armed here and NOT on a title change: the title is rendered by
+            // the reader outside `.body`, from its own column, so retyping it changes
+            // nothing in the rendered document and a render per keystroke there would be
+            // pure cost.
+            previewRef.current?.edited();
             dispatch({ type: "edited" });
           }),
           EditorView.domEventHandlers({
@@ -203,6 +338,7 @@ export function Editor({ page }: { page: EditorPage }) {
             // take those two seconds with it.
             blur: () => {
               schedulerRef.current?.flush();
+              previewRef.current?.flush();
               return false;
             },
           }),
@@ -247,6 +383,10 @@ export function Editor({ page }: { page: EditorPage }) {
     });
     setTitle(theirs.title);
     titleRef.current = theirs.title;
+    // The `FromServer` annotation makes the update listener ignore this transaction, which
+    // is right for saving — we must not write their text back at them — and wrong for the
+    // preview, which would otherwise keep showing the document that was just replaced.
+    previewRef.current?.edited();
     dispatch({ type: "load-theirs" });
   };
 
@@ -351,14 +491,57 @@ export function Editor({ page }: { page: EditorPage }) {
         onBlur={() => schedulerRef.current?.flush()}
       />
 
-      <label className="ed-label" htmlFor="ed-doc">
-        Markdown
-      </label>
-      {/*
-        CodeMirror owns everything inside this element. React must never render children
-        into it — the two would fight over the same DOM nodes on the first re-render.
-      */}
-      <div className="ed-surface" id="ed-doc" ref={hostRef} />
+      <div className="ed-split">
+        <section className="ed-pane">
+          <div className="ed-panehead">
+            <label className="ed-label" htmlFor="ed-doc">
+              Markdown
+            </label>
+          </div>
+          {/*
+            CodeMirror owns everything inside this element. React must never render children
+            into it — the two would fight over the same DOM nodes on the first re-render.
+          */}
+          <div className="ed-surface" id="ed-doc" ref={hostRef} />
+        </section>
+
+        <section className="ed-pane" aria-label="Preview">
+          <div className="ed-panehead">
+            <span className="ed-label">Preview</span>
+            {/*
+              Only an error is announced. "Rendering…" every two seconds beside a save
+              indicator that is already saying "Saving…" on the same tick is noise, and it is
+              the one message nobody needs read aloud.
+            */}
+            <span className="ed-preview-state" role="status" aria-live="polite">
+              {preview.error}
+            </span>
+            {preview.error === null && preview.pending ? (
+              <span className="ed-preview-state" aria-hidden="true">
+                Rendering&hellip;
+              </span>
+            ) : null}
+          </div>
+          <div className={`ed-preview${preview.error ? " ed-preview-stale" : ""}`}>
+            {preview.html === "" && !preview.pending && preview.error === null ? (
+              <p className="ed-preview-empty">Nothing to preview yet.</p>
+            ) : (
+              /*
+                Rendered with `dangerouslySetInnerHTML` for exactly the reason the reader
+                route is, and safe for exactly the same one and no other: `renderMarkdown`
+                sanitises, and `/api/preview` calls it rather than a variant of it. If that
+                route ever stops going through the shared pipeline, this line becomes an XSS
+                sink reflected off the caller's own body.
+
+                `.body` is the reader's own class, from `doc.css`, imported by the (editor)
+                layout — never by this route — so the preview inherits the reader's
+                typography instead of an approximation of it.
+              */
+              <div className="body" dangerouslySetInnerHTML={{ __html: preview.html }} />
+            )}
+          </div>
+        </section>
+      </div>
 
       <p className="ed-hint">
         {shouldAutosave(state)

@@ -13,7 +13,12 @@
  */
 
 .ed {
-  width: min(900px, 100%);
+  /*
+   * Wider than a single column since Task 8: the source and the preview sit side by side,
+   * and 900px split in two leaves neither pane able to show a table. `min(..., 100%)` is what
+   * keeps this from being the horizontal-scroll bug for the fourth time.
+   */
+  width: min(1400px, 100%);
   margin: 0 auto;
   padding: 0 20px 64px;
 }
@@ -136,6 +141,81 @@
   font-size: 13px;
   font-weight: 500;
 }
+
+/*
+ * Source and preview, side by side.
+ *
+ * `minmax(0, 1fr)` twice, not `1fr` twice, and this is the single most load-bearing
+ * declaration in the file. A bare `1fr` track is `minmax(auto, 1fr)`, whose floor is the
+ * item's MIN-CONTENT width — so one unbreakable 3000-character URL in the preview sets a
+ * floor wider than the viewport, the grid obeys it, and the page scrolls sideways with the
+ * sticky bar sliding out from under everything. `.shell` in shell.css carries the same guard
+ * for the same reason; this project has now had that bug in four shapes.
+ */
+.ed-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+/* Stacked rather than squeezed: two 400px panes are worse than one 800px one. */
+@media (max-width: 1080px) {
+  .ed-split { grid-template-columns: minmax(0, 1fr); }
+}
+
+.ed-pane { min-width: 0; }
+
+.ed-panehead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin: 18px 0 5px;
+}
+
+.ed-panehead .ed-label { margin: 0; }
+
+.ed-preview-state {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The preview surface.
+ *
+ * `overflow-x: auto` is the pane's own promise, not decoration: the preview renders whatever
+ * Markdown someone is typing, and `doc.css` already gives `pre` and `.table-scroll` their own
+ * scrollers but leaves headings and raw text to `overflow-wrap`. Anything those two rules do
+ * not catch scrolls THIS box rather than the document — the page never gains a horizontal
+ * scrollbar, and the reader's typography is inherited unchanged rather than being overridden
+ * pane-side, which would be a preview/published divergence arriving by stylesheet.
+ */
+.ed-preview {
+  min-width: 0;
+  max-height: calc(100vh - 200px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+
+/* Last good render, kept and labelled rather than blanked. See `PreviewState`. */
+.ed-preview-stale { opacity: 0.55; }
+
+.ed-preview-empty { margin: 0; font-size: 13px; color: var(--ink-3); }
+
+/*
+ * The pane is narrower than the reader's 820px column, and `.body p, .body ul, .body ol` cap
+ * at 66ch there. Left alone that cap is inert here — 66ch exceeds the pane — so nothing is
+ * overridden and the preview stays the reader's own measure at any width the pane can reach.
+ */
+.ed-preview .body { min-width: 0; }
 
 .ed-title {
   display: block;

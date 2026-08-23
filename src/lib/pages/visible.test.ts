@@ -83,7 +83,14 @@ const MODULES: Record<
     //   "a super admin still cannot open a soft-deleted page" pins that the permission
     //   bypass is not also a soft-delete bypass. The two predicates are independent and the
     //   one viewer who skips the first must not skip the second.
-    covered: ["getPageForEditing"],
+    //
+    //   `canEditPage` is the preview endpoint's authorisation and carries the same two
+    //   predicates on its own query rather than borrowing them:
+    //   "a soft-deleted page cannot be previewed either" covers the soft-delete filter, and
+    //   "canEditPage and getPageForEditing refuse the same viewers for the same reasons"
+    //   pins the two answers together so the cheap read cannot quietly become the permissive
+    //   one.
+    covered: ["getPageForEditing", "canEditPage"],
     exempt: [],
   },
   "src/lib/drafts/repo.ts": {
