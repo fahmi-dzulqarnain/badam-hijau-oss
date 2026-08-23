@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { readableSpace } from "@/lib/authz/where";
+import { visiblePage } from "@/lib/pages/visible";
 import type { Viewer } from "@/lib/authz/types";
 
 /**
@@ -14,6 +15,8 @@ import type { Viewer } from "@/lib/authz/types";
  */
 export const getReadableSpaceByKey = cache(async (viewer: Viewer, key: string) => {
   return db.space.findFirst({
+    // No `visiblePage()` here, deliberately: this queries Space, which has no `deletedAt`.
+    // Listed as exempt in the soft-delete guard test rather than simply omitted from it.
     where: readableSpace(viewer, { key }),
     select: {
       id: true,
@@ -37,12 +40,15 @@ export const getPublishedPage = cache(
     if (!space) return null;
 
     const page = await db.page.findFirst({
-      where: {
+      // Both helpers return COMPLETE `where` objects and neither is spread: `visiblePage`
+      // owns the top level, and `readableSpace` is passed whole as the `space` relation
+      // filter beside the other conditions. Spreading either one silently drops it.
+      where: visiblePage({
         spaceId: space.id,
         path: params.path,
         publishedVersionId: { not: null },
         space: readableSpace(viewer),
-      },
+      }),
       // Explicit select, never `include`. Prisma expands `include: true` into a column
       // list at generation time, so `include` would silently start shipping every column
       // a later phase adds — starting with Phase 2's cached render on PageVersion.
@@ -71,7 +77,7 @@ export const getPublishedPage = cache(
 
 export const listSpacePages = cache(async (viewer: Viewer, spaceId: string) => {
   return db.page.findMany({
-    where: { spaceId, space: readableSpace(viewer) },
+    where: visiblePage({ spaceId, space: readableSpace(viewer) }),
     orderBy: [{ position: "asc" }, { title: "asc" }],
     select: {
       id: true,
@@ -93,12 +99,12 @@ export const listRecentlyPublished = cache(
       // constraint tying them together, so "published" has to be stated as both. Filtering
       // on the timestamp alone would survive an unpublish or a rollback (Phase 2) and yield
       // a row whose link 404s and whose byline has no author.
-      where: {
+      where: visiblePage({
         spaceId,
         publishedAt: { not: null },
         publishedVersionId: { not: null },
         space: readableSpace(viewer),
-      },
+      }),
       orderBy: { publishedAt: "desc" },
       take: limit,
       select: {

@@ -227,3 +227,51 @@ test("listRecentlyPublished orders by publishedAt descending and respects limit"
   const top = await listRecentlyPublished(stranger, space.id, 2);
   expect(top.map((r) => r.title)).toEqual(["MQTT contracts", "newest"]);
 });
+
+/**
+ * Soft delete. One test per query listed in COVERED in `src/lib/pages/visible.test.ts` —
+ * that guard fails if a reader is added here without one of these.
+ */
+
+test("getPublishedPage returns null for a soft-deleted page", async () => {
+  const { page } = await fixture("ALL_STAFF");
+  const args = { spaceKey: "engineering", path: "architecture/mqtt-contracts" };
+  // Readable first, so the null below is the deletion and not a broken fixture.
+  expect(await getPublishedPage(stranger, args)).not.toBeNull();
+
+  await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
+
+  // `null`, not a throw: the reader route turns this into the same 404 an unreadable page
+  // gets. A distinct error would tell an outsider that the page exists and was deleted.
+  expect(await getPublishedPage(stranger, args)).toBeNull();
+});
+
+test("listSpacePages omits a soft-deleted page and keeps its siblings", async () => {
+  const { space, author, page } = await fixture("ALL_STAFF");
+  await addPage(space.id, author.id, {
+    slug: "still-here",
+    publishedAt: new Date("2026-08-01T00:00:00Z"),
+  });
+  expect(await listSpacePages(stranger, space.id)).toHaveLength(2);
+
+  await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
+
+  // Asserted as the surviving titles rather than a count, so a filter that dropped both
+  // pages cannot pass as a filter that dropped the right one.
+  const rows = await listSpacePages(stranger, space.id);
+  expect(rows.map((r) => r.title)).toEqual(["still-here"]);
+});
+
+test("listRecentlyPublished omits a soft-deleted page and keeps its siblings", async () => {
+  const { space, author, page } = await fixture("ALL_STAFF");
+  await addPage(space.id, author.id, {
+    slug: "still-here",
+    publishedAt: new Date("2026-08-01T00:00:00Z"),
+  });
+  expect(await listRecentlyPublished(stranger, space.id)).toHaveLength(2);
+
+  await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
+
+  const rows = await listRecentlyPublished(stranger, space.id);
+  expect(rows.map((r) => r.title)).toEqual(["still-here"]);
+});
