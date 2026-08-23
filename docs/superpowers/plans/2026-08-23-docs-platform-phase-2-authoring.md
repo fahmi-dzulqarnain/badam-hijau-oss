@@ -69,26 +69,26 @@ From Phase 1's PROGRESS.md — these are settled, not open:
 
 ---
 
-## Task 1: Schema for drafts, redirects, audit and soft delete
+## Task 1: Schema for drafts, redirects, audit and soft delete ✅
 
 **Files:**
 - Modify: `prisma/schema.prisma`
 - Create: a migration under `prisma/migrations/`
 
-- [ ] **Step 1: Add `deletedAt` to `Page`**
+- [x] **Step 1: Add `deletedAt` to `Page`**
 
 ```prisma
   deletedAt          DateTime?
 ```
 
-and an index that matches how it will be queried — every read filters on it alongside the
-space:
+and an index — but **read Step 5 before assuming why**. The obvious justification, "every read
+filters on it alongside the space", turned out to be wrong when measured:
 
 ```prisma
   @@index([spaceId, deletedAt])
 ```
 
-- [ ] **Step 2: Add the three new models**
+- [x] **Step 2: Add the three new models**
 
 `PageDraft` follows the spec sketch (§5.2) exactly, with `frontmatter` left in place for
 Phase 3 to populate — it is written as `{}` until then rather than added later, because
@@ -146,12 +146,12 @@ the thing it describes; a `Restrict` would block deletes and a `Cascade` would e
 record of the delete, which is the one row you most want afterwards. Same reasoning for
 `spaceId`.
 
-- [ ] **Step 3: Add the back-relations to `Page`, `PageVersion`, `Space` and `User`**
+- [x] **Step 3: Add the back-relations to `Page`, `PageVersion`, `Space` and `User`**
 
 Prisma requires both sides. Missing one fails `prisma validate` with a clear message, so let
 it tell you rather than guessing the names.
 
-- [ ] **Step 4: Migrate**
+- [x] **Step 4: Migrate**
 
 ```bash
 npx prisma migrate dev --name authoring_drafts_redirects_audit
