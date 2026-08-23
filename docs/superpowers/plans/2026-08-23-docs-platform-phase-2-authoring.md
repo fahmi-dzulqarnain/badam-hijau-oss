@@ -533,20 +533,28 @@ cannot discover the space exists by trying.
 
 ---
 
-## Task 7: The editor
+## Task 7: The editor ✅
 
 **Files:**
 - Create: `src/app/(editor)/edit/[pageId]/page.tsx`, `src/components/Editor.tsx`,
   `src/components/editor.css`
-- Modify: `package.json`
+- Modify: `package.json`, `src/app/(editor)/layout.tsx` — `editor.css` is imported by the
+  layout, never by a page route (Phase 1 measured `.doc` computing differently on a hard load
+  versus a soft navigation when a page imported its own CSS)
+- Create: `src/lib/pages/editable.ts` + `tests/integration/page-editable.test.ts` — loading the
+  page belongs in a module, not the route file: the soft-delete sweep would trip on a `Page`
+  query in the route either way, and a route file is not integration-testable
+- Create: `src/lib/editor/state.ts`, `scheduler.ts`, `save.ts` (+ tests) — the save-state
+  machine, the autosave clock and the response-to-action mapping, pulled out of the component
+  so they are testable without a browser
 
-- [ ] **Step 1: Install CodeMirror 6**
+- [x] **Step 1: Install CodeMirror 6**
 
 ```bash
 npm install codemirror @codemirror/lang-markdown @codemirror/state @codemirror/view
 ```
 
-- [ ] **Step 2: The client component**
+- [x] **Step 2: The client component**
 
 A controlled CodeMirror instance is the part most likely to go wrong. Two rules:
 
@@ -560,16 +568,32 @@ A controlled CodeMirror instance is the part most likely to go wrong. Two rules:
 Show save state — `Saving…` / `Saved 14:22` / `Unsaved changes` — and never leave it blank
 after a failure; a silent failure that looks like an idle editor is how work gets lost.
 
-- [ ] **Step 3: The conflict banner**
+Two bugs found here that the plan did not anticipate, both worth stating as rules:
+
+- **Autosave must suspend while a conflict is unanswered.** It kept firing and produced a
+  second 409 for the same unresolved conflict. A `shouldAutosave` flag existed but was wired
+  only to the hint text, not to the scheduler.
+- **An edit must not overwrite an error status.** The next keystroke replaced a 403's
+  explanation with "Unsaved changes" — and nothing retries a 403, so that message was the only
+  account the person would ever get. Errors clear on a successful save or an explicit
+  resolution, never on typing.
+
+**The autosave timer is armed by the first edit and deliberately not re-armed by later ones.**
+A textbook debounce means steady typing never saves at all.
+
+- [x] **Step 3: The conflict banner**
 
 On 409, show the other editor's name and timestamp, with **Keep mine** and **Load theirs**.
 Keep mine re-sends with their `updatedAt` as `seen`, so it is an explicit overwrite of a
 version the user has been shown. Load theirs dispatches their text into the view. Do not
 auto-resolve, and do not dismiss the banner on the next keystroke.
 
-- [ ] **Step 4: Manual verification**
+- [x] **Step 4: Manual verification**
 
-Two browser profiles, same page. Type in both. Confirm: the second save conflicts, the banner
+Two browser profiles are not available with this tooling; two tabs share a cookie jar, so a
+genuinely different editor name needs a second actor driven from a script. Both were used.
+
+Type in both. Confirm: the second save conflicts, the banner
 names the first editor, Load theirs replaces the text, Keep mine wins, and no save is lost in
 either direction.
 
@@ -619,6 +643,14 @@ Steps 1–3 and 7 of spec §9, all or nothing, in one `db.$transaction`:
 3. Update `Page`: `title`, `status`, `publishedVersionId`, `publishedAt`.
 4. Delete the `PageDraft` — the published version is now the source, and a draft identical to
    what is published is a confusing thing to reopen.
+
+   **This step is what makes the `vanished` case real, so read that first.** Until publish
+   deletes drafts, no draft ever disappears under a live editor. Once it does, every open
+   editor on that page is holding a `seen` for a row that no longer exists, and
+   `decideSave` must answer `vanished` — not `create`. If it answers `create`, the next
+   autosave silently resurrects the draft with pre-publish text over the version that was
+   just published, and nobody is told. Task 7 found this before it could happen; do not
+   reintroduce it by treating "no row" as "first save".
 5. Write `AuditLog`.
 
 Steps 4, 5, 6 and 8 of the spec belong to Phases 3–6 and are **not** stubbed. Leave a
