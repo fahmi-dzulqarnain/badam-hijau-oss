@@ -80,7 +80,7 @@ function fences(text) {
   return { lines, out };
 }
 
-const results = { synced: 0, fragment: 0, superseded: 0, skipped: 0, unmatched: 0, drift: [] };
+const results = { synced: 0, fragment: 0, superseded: 0, skipped: 0, unmatched: 0, unmatchedAt: [], drift: [] };
 
 for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
   const path = join(PLAN_DIR, name);
@@ -110,6 +110,7 @@ for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
     const firstLine = (s) => (s.split("\n").find((l) => l.trim()) ?? "").trim();
     if (!match.wholeFile && a !== b && !b.includes(a) && firstLine(a) !== firstLine(b)) {
       results.unmatched++;
+      results.unmatchedAt.push({ plan: relative(ROOT, path), line: fence.openLine + 1, guess: quoted });
       continue;
     }
 
@@ -131,11 +132,21 @@ for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
   }
 }
 
-const { synced, fragment, superseded, skipped, unmatched, drift } = results;
+const { synced, fragment, superseded, skipped, unmatched, unmatchedAt, drift } = results;
 console.log(
   `${synced} in sync · ${fragment} fragment · ${superseded} superseded · ` +
     `${unmatched} unmatched · ${skipped} not code · ${drift.length} drifted`,
 );
+
+// "unmatched" is the bin for fences this tool cannot classify, and a bin reported only as a
+// number is where a stale fence hides — a RailFoot snapshot did exactly that. `--verbose`
+// prints them so the bin can be audited rather than trusted.
+if (unmatched > 0) {
+  console.log("  (run with --verbose to list the unmatched fences)");
+  if (process.argv.includes("--verbose")) {
+    for (const u of unmatchedAt) console.log(`    ${u.plan}:${u.line}  nearest path: ${u.guess}`);
+  }
+}
 
 if (drift.length > 0) {
   console.log("\nFences that no longer match the file they quote:\n");

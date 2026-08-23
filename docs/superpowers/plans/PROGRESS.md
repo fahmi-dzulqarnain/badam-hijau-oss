@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **178 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **207 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -19,10 +19,11 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 1. Schema: drafts, redirects, audit, soft delete | ✅ |
 | 2. Soft-delete predicate + enumeration guard | ✅ |
 | 3. Slug and path rules | ✅ |
-| **4. Draft repo and the conflict contract** | **next** |
-| 5–15 | not started |
+| 4. Draft repo and the conflict contract | ✅ |
+| **5. Draft autosave endpoint** | **next** |
+| 6–15 | not started |
 
-Two findings already worth carrying:
+Findings already worth carrying:
 
 - **The `deletedAt` index does not help the read path.** Measured at 60k rows: live pages are
   ~70% of the table, so the planner seq-scans with or without it. It is kept for the inverse
@@ -32,6 +33,16 @@ Two findings already worth carrying:
   fails with `exceeds btree version 4 maximum 2704`). `validatePath` guards the assembled
   path; create and move both call it. **Probe with incompressible text** — `repeat('x', 3000)`
   inserted happily because it compressed, and suggested there was no limit at all.
+- **A concurrency test that never blocks is not testing a write predicate.** The obvious
+  shape — fire two saves with `Promise.all`, assert exactly one wins — reads like a race test
+  and is not one: with a real connection pool they stagger, so the loser re-reads, takes the
+  conflict branch, and the write's `WHERE updatedAt = ?` is never consulted. Measured: with
+  that predicate deleted, the `Promise.all` test passed 3 runs out of 3. Testing it needs the
+  interleaving staged deterministically with a held row lock.
+- **A coverage guard scoped to one file stops covering as soon as the thing it guards moves.**
+  The soft-delete guard enumerated one module's exports; `saveDraft` queries `Page` from a
+  different module and was invisible to it. It is now a filesystem sweep of `src/` for
+  `db.page.*`, with the per-module enumeration inside. Both escape routes mutation-verified.
 
 ## Phase 1 — foundations and reader
 

@@ -1,44 +1,102 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import { expect, test } from "vitest";
-import * as repo from "@/lib/pages/repo";
 import { visiblePage } from "@/lib/pages/visible";
 
 /**
- * Every exported page reader must be listed here with a soft-delete test below. Adding a
- * query without adding its test fails this, which is the point: a missing `deletedAt` filter
- * is invisible until a deleted page reappears in someone's nav rail.
+ * The soft-delete guard.
  *
- * `getReadableSpaceByKey` queries Space, not Page, so it is listed as deliberately exempt
- * rather than omitted — an omission reads as an oversight.
+ * A missing `deletedAt` filter is invisible until a deleted page reappears in someone's nav
+ * rail, so the filter cannot be left to reviewer attention. This file fails when a query on
+ * `Page` exists anywhere in `src/` without a soft-delete test behind it.
  *
- * The soft-delete tests themselves live in `tests/integration/pages-repo.test.ts`, because
- * proving a row is excluded needs a real database and a real deleted row. This file owns
- * only the enumeration: which functions are required to have one.
+ * It began as an enumeration of one module's exports, which had a blind spot large enough to
+ * matter: `saveDraft` in `src/lib/drafts/repo.ts` queries `Page` and was completely invisible
+ * to it. Phase 2 adds page queries in at least four more places, several in new modules. So
+ * the outer guard is now a **filesystem sweep** — a new module that queries `Page` fails this
+ * file until someone registers it and says where its tests are.
  */
-const COVERED = new Set([
-  "getPublishedPage",
-  "listSpacePages",
-  "listRecentlyPublished",
-]);
-const EXEMPT = new Set(["getReadableSpaceByKey"]);
 
-test("every exported page reader has a soft-delete test", () => {
-  const exported = Object.keys(repo).filter((k) => typeof (repo as never)[k] === "function");
-  const uncovered = exported.filter((k) => !COVERED.has(k) && !EXEMPT.has(k));
-  expect(uncovered, "add a soft-delete test for these, then list them in COVERED").toEqual([]);
-});
+const SRC = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+const ROOT = join(SRC, "..");
+
+/** Any Prisma read or write against the Page model. */
+const PAGE_QUERY = /\bdb\.page\.\w+/;
+
+function sweepForPageQueries(dir: string, found: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      sweepForPageQueries(full, found);
+    } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+      if (PAGE_QUERY.test(readFileSync(full, "utf8"))) found.push(relative(ROOT, full));
+    }
+  }
+  return found;
+}
 
 /**
- * The inverse of the guard above: it can only be trusted while the names in COVERED are
- * real exports. A renamed query would otherwise leave a stale name covering nothing and the
- * new name unlisted — and the first half of that mistake would be silent.
+ * Every module that queries `Page`, with the exported readers each one owns.
+ *
+ * `covered` means "a test somewhere proves this excludes soft-deleted rows".
+ * `exempt` means "this does not read Page rows, and here is why" — listed rather than omitted,
+ * because an omission reads as an oversight.
  */
-test("every name in COVERED and EXEMPT is still an export of the module", () => {
-  const exported = new Set(
-    Object.keys(repo).filter((k) => typeof (repo as never)[k] === "function"),
-  );
-  const stale = [...COVERED, ...EXEMPT].filter((k) => !exported.has(k));
-  expect(stale, "these are listed but no longer exported — rename or drop them").toEqual([]);
+const MODULES: Record<
+  string,
+  { load: () => Promise<Record<string, unknown>>; covered: string[]; exempt: string[] }
+> = {
+  "src/lib/pages/repo.ts": {
+    load: () => import("@/lib/pages/repo"),
+    // Soft-delete tests: tests/integration/pages-repo.test.ts
+    covered: ["getPublishedPage", "listSpacePages", "listRecentlyPublished"],
+    // Queries Space, which has no `deletedAt`.
+    exempt: ["getReadableSpaceByKey"],
+  },
+  "src/lib/drafts/repo.ts": {
+    load: () => import("@/lib/drafts/repo"),
+    // Soft-delete tests: tests/integration/drafts-repo.test.ts
+    covered: ["saveDraft"],
+    exempt: [],
+  },
+};
+
+test("every module that queries Page is registered in this guard", () => {
+  const found = sweepForPageQueries(SRC).sort();
+  expect(
+    found,
+    "a module queries Page but is not registered above — add it, with soft-delete tests",
+  ).toEqual(Object.keys(MODULES).sort());
 });
+
+test.each(Object.entries(MODULES))(
+  "%s: every exported reader has a soft-delete test",
+  async (_path, mod) => {
+    const loaded = await mod.load();
+    const exported = Object.keys(loaded).filter((k) => typeof loaded[k] === "function");
+    const uncovered = exported.filter(
+      (k) => !mod.covered.includes(k) && !mod.exempt.includes(k),
+    );
+    expect(uncovered, "add a soft-delete test for these, then list them in `covered`").toEqual(
+      [],
+    );
+  },
+);
+
+/**
+ * The inverse: the guard above is only trustworthy while the names in it are real exports. A
+ * renamed query would otherwise leave a stale name covering nothing and the new name
+ * unlisted — and the first half of that mistake is silent.
+ */
+test.each(Object.entries(MODULES))(
+  "%s: every name listed in the guard is still exported",
+  async (_path, mod) => {
+    const loaded = await mod.load();
+    const exported = new Set(Object.keys(loaded).filter((k) => typeof loaded[k] === "function"));
+    const stale = [...mod.covered, ...mod.exempt].filter((k) => !exported.has(k));
+    expect(stale, "these are listed but no longer exported — rename or drop them").toEqual([]);
+  },
+);
 
 test("visiblePage excludes soft-deleted rows and nests its extra conditions", () => {
   expect(visiblePage()).toEqual({ AND: [{ deletedAt: null }] });

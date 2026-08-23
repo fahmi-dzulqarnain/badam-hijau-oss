@@ -178,7 +178,7 @@ should measure first: at this shape, the read path never uses it.
 
 ---
 
-## Task 2: The soft-delete predicate, and a test that notices a query without it
+## Task 2: The soft-delete predicate, and a test that notices a query without it ✅
 
 This task is the reason soft delete is affordable. Adding `deletedAt: null` to four queries
 is trivial; *keeping* it on every query added over the next four phases is not, and the
@@ -189,7 +189,9 @@ failure is silent — a deleted page quietly reappears in a nav rail or a search
 - Modify: `src/lib/pages/repo.ts`
 - Modify: `tests/integration/pages-repo.test.ts`
 
-- [ ] **Step 1: Write the predicate, in the same shape as `readableSpace`**
+- [x] **Step 1: Write the predicate, in the same shape as `readableSpace`**
+
+`src/lib/pages/visible.ts`:
 
 ```ts
 import type { Prisma } from "@prisma/client";
@@ -211,13 +213,13 @@ export function visiblePage(
 }
 ```
 
-- [ ] **Step 2: Apply it to all four queries in `repo.ts`**
+- [x] **Step 2: Apply it to all four queries in `repo.ts`**
 
 `getPublishedPage`, `listSpacePages`, `listRecentlyPublished`, and — indirectly —
 `getReadableSpaceByKey`, which queries `Space` and therefore does not need it. Say so in a
 comment there, or the next reader will wonder whether it was forgotten.
 
-- [ ] **Step 3: The guard test**
+- [x] **Step 3: The guard test**
 
 This is the substance of the task. A test that soft-deleted pages are excluded from the
 three queries that exist today is worth little; the queries that matter have not been
@@ -253,7 +255,18 @@ test("every exported page reader has a soft-delete test", () => {
 the test names it, remove it. A guard that cannot fail is worse than no guard — Phase 1 shipped
 one of those and only found it by mutation testing.
 
-- [ ] **Step 4: One integration test per covered query**
+**Generalised after Task 4, which walked straight through it.** As first written this
+enumerated the exports of `src/lib/pages/repo` only, so `saveDraft` — which queries `Page`
+from `src/lib/drafts/repo.ts` — was invisible to it. Tasks 6, 9, 10 and 12 all add page
+queries and several land in new modules, so the outer guard is now a **filesystem sweep** of
+`src/` for `db.page.*`: a module that queries `Page` and is not registered fails the test.
+The per-module export enumeration sits inside that. Both escape routes are mutation-verified —
+a new unregistered module, and a new export in a registered one.
+
+The lesson generalises past this guard: **a coverage check scoped to one file silently stops
+covering as soon as the thing it guards moves.**
+
+- [x] **Step 4: One integration test per covered query**
 
 Soft-delete a seeded page, then assert it is absent from each. For `getPublishedPage`, assert
 `null` rather than a thrown error — the reader route turns that into the same 404 an
@@ -331,7 +344,7 @@ check the longest resulting descendant, not just the page being moved.
 
 ---
 
-## Task 4: Draft repository and the conflict contract
+## Task 4: Draft repository and the conflict contract ✅
 
 **Files:**
 - Create: `src/lib/drafts/repo.ts`, `src/lib/drafts/conflict.ts`, `src/lib/drafts/conflict.test.ts`
@@ -342,7 +355,9 @@ The conflict rule from spec §9, stated precisely because everything else depend
 name, their timestamp, and both texts; a save is never silently discarded and never silently
 overwrites.*
 
-- [ ] **Step 1: The pure decision, separated from the database**
+- [x] **Step 1: The pure decision, separated from the database**
+
+`src/lib/drafts/conflict.ts`:
 
 ```ts
 export type SaveDecision =
@@ -374,7 +389,7 @@ Note the third line. A client that sends no `seen` while a draft **does** exist 
 first save — it is a client that lost track, and the safe answer is a conflict, not an
 overwrite. Test that case explicitly; it is the one a naive implementation gets wrong.
 
-- [ ] **Step 2: `saveDraft(viewer, pageId, input)`**
+- [x] **Step 2: `saveDraft(viewer, pageId, input)`**
 
 Permission first: `can(viewer, space, "EDIT")`, and a viewer who cannot **read** the space
 gets the same `null`/404 an unreadable page gets — never a 403, which would confirm the page
@@ -385,13 +400,30 @@ Use an atomic `updateMany` with `updatedAt` in the `where` rather than read-then
 two saves arriving together must not both read the same `updatedAt` and both decide "update".
 The row count tells you which one lost.
 
-- [ ] **Step 3: Integration tests**
+- [x] **Step 3: Integration tests**
 
 Cover: create; update with the correct `seen`; conflict with a stale `seen`; conflict with a
-missing `seen` against an existing draft; a viewer with only `VIEWER` role rejected; a
-non-member getting the not-found shape rather than a permission error; and **two concurrent
-saves where exactly one wins** — run them with `Promise.all` and assert one succeeded and one
-conflicted, rather than asserting on timing.
+missing `seen` against an existing draft; a viewer with only `VIEWER` role rejected; and a
+non-member getting the not-found shape rather than a permission error.
+
+**On testing the atomic write — this instruction was wrong, and the correction is the most
+useful thing in this task.** It originally said to fire two saves with `Promise.all` and
+assert exactly one wins. That test reads like a race test and is not one: with a real
+connection pool the two saves reliably stagger, so the loser's read already returns the
+winner's `updatedAt`, `decideSave` returns `conflict`, and **the write predicate is never
+consulted**. Verified by removing `updatedAt` from the `updateMany` where clause — the
+`Promise.all` test passed three runs out of three with the atomicity guarantee gone.
+
+Keep that test: it pins the outcome contract and it does kill the `>=` comparison. But the
+guarantee needs the interleaving **staged deterministically**: hold an interactive transaction
+open with an uncommitted `UPDATE` on the row, let `saveDraft` read the pre-update version
+under MVCC and decide `update` on a timestamp that is about to stop being true, and let its
+own `UPDATE` block until the other commits — Postgres then re-evaluates the predicate against
+the new row version. Waits stage the interleaving and nothing is asserted about them; a wait
+that is too short only makes the test agree with the one above, and can never make a broken
+predicate pass.
+
+Generalise it: **a concurrency test that never blocks is not testing a write predicate.**
 
 ---
 
