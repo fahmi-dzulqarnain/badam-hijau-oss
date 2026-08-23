@@ -8,11 +8,31 @@
  * rule and once for path encoding.
  */
 
-/** Longest slug accepted. A `Page.path` is built by joining these, and a btree index on
- * `(spaceId, path)` has a hard size limit, so the bound has to live somewhere. */
+/** Longest slug accepted. Keeps a single path segment sane in a URL and in the nav rail.
+ * It does **not** bound the assembled path — see `MAX_PATH_BYTES` and `validatePath`. */
 export const SLUG_MAX_LENGTH = 80;
 
+/**
+ * Longest assembled `Page.path`, in bytes.
+ *
+ * Measured, because the per-slug cap does not imply this one: nesting depth is unbounded, so
+ * 33 levels of legal 80-character slugs breach the index while every individual slug passes.
+ * On Postgres 16 the btree index row limit is **2704 bytes**, and
+ * `create unique index on t(a, b)` refused an insert at a 2700-byte second column with
+ * `index row size 2744 exceeds btree version 4 maximum 2704`. The failure arrives as a raw
+ * constraint violation at INSERT time, which is not a message anyone can act on.
+ *
+ * 2000 leaves room for the `spaceId` in the same index, per-tuple overhead, and a future
+ * third column, while still allowing far deeper nesting than any real document tree.
+ *
+ * A caution for whoever re-measures this: probe with **incompressible** text. A first pass
+ * using `repeat('x', 3000)` inserted happily and suggested there was no limit at all.
+ */
+export const MAX_PATH_BYTES = 2000;
+
 /** Why a slug was rejected. Callers switch on this; the `message` is what a human reads. */
+export type PathErrorCode = "path-too-long";
+
 export type SlugErrorCode =
   | "empty"
   | "reserved-prefix"
@@ -31,7 +51,7 @@ export type SlugErrorCode =
  */
 export type FieldError<Field extends string = string> = {
   field: Field;
-  code: SlugErrorCode;
+  code: SlugErrorCode | PathErrorCode;
   message: string;
 };
 
@@ -162,4 +182,39 @@ export function descendantPaths(
     return newPrefix + path.slice(oldPrefix.length);
   }
   return path;
+}
+
+export type PathValidation =
+  | { ok: true; path: string }
+  | { ok: false; error: FieldError<"slug"> };
+
+/**
+ * Checks an **assembled** path, which `validateSlug` cannot: it sees one segment at a time
+ * and depth is unbounded. Both the create path and the move path must call this after
+ * building the new path and before writing it, or a deep tree fails at the index with a
+ * constraint violation instead of a field message.
+ *
+ * The move case matters more than create: moving a subtree under a deeper parent lengthens
+ * every descendant at once, so a move that looks small can breach the limit for a page the
+ * user was not even looking at. Check the longest resulting descendant, not just the page
+ * being moved.
+ *
+ * Attributed to the slug field because that is the only part of the path the user can
+ * shorten from the form they are looking at.
+ */
+export function validatePath(path: string): PathValidation {
+  const bytes = new TextEncoder().encode(path).length;
+  if (bytes > MAX_PATH_BYTES) {
+    return {
+      ok: false,
+      error: {
+        field: "slug",
+        code: "path-too-long",
+        message:
+          `The full path would be ${bytes} bytes, over the ${MAX_PATH_BYTES}-byte limit. ` +
+          "Use a shorter slug, or move this page nearer the top of the space.",
+      },
+    };
+  }
+  return { ok: true, path };
 }

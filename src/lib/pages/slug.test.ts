@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
+  MAX_PATH_BYTES,
   SLUG_MAX_LENGTH,
   childPath,
   descendantPaths,
+  validatePath,
   validateSlug,
   type FieldError,
 } from "./slug";
@@ -367,5 +369,39 @@ describe("descendantPaths", () => {
     expect(descendantPaths(OLD, NEW, childPath(OLD, "topic-registry"))).toBe(
       childPath(moved, "topic-registry"),
     );
+  });
+});
+
+describe("validatePath", () => {
+  // Kills: dropping the assembled-path check entirely, on the assumption that an 80-char
+  // per-slug cap bounds the path. It does not — depth is unbounded.
+  test("accepts a deep path built from legal slugs", () => {
+    const path = Array.from({ length: 20 }, (_, i) => `level-${i}`).join("/");
+    expect(validatePath(path).ok).toBe(true);
+  });
+
+  // Kills: the exact gap the per-slug cap leaves. Every segment here passes validateSlug.
+  test("rejects a path whose segments are each legal but whose total is not", () => {
+    const segment = "a".repeat(SLUG_MAX_LENGTH);
+    for (const s of [segment]) expect(validateSlug(s).ok).toBe(true);
+    const path = Array.from({ length: 33 }, () => segment).join("/");
+    const result = validatePath(path);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("path-too-long");
+  });
+
+  // Kills: measuring length in UTF-16 code units instead of bytes. Slugs are ASCII today,
+  // but the limit Postgres enforces is bytes, and this function must not have to change if
+  // the slug charset ever widens.
+  test("measures bytes, not characters", () => {
+    const multibyte = "é".repeat(MAX_PATH_BYTES - 10);
+    expect(multibyte.length).toBeLessThan(MAX_PATH_BYTES);
+    expect(validatePath(multibyte).ok).toBe(false);
+  });
+
+  // Kills: an off-by-one that rejects exactly-at-the-limit paths.
+  test("accepts a path exactly at the limit and rejects one byte more", () => {
+    expect(validatePath("a".repeat(MAX_PATH_BYTES)).ok).toBe(true);
+    expect(validatePath("a".repeat(MAX_PATH_BYTES + 1)).ok).toBe(false);
   });
 });

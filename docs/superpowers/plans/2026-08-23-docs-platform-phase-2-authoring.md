@@ -261,7 +261,7 @@ unreadable page gets, and the two must stay indistinguishable.
 
 ---
 
-## Task 3: Slug and path rules
+## Task 3: Slug and path rules ✅
 
 Pure module, no database. Everything here is a rule the rest of the phase depends on, and all
 of it is cheap to test exhaustively.
@@ -269,7 +269,7 @@ of it is cheap to test exhaustively.
 **Files:**
 - Create: `src/lib/pages/slug.ts`, `src/lib/pages/slug.test.ts`
 
-- [ ] **Step 1: `validateSlug(slug)`**
+- [x] **Step 1: `validateSlug(slug)`**
 
 Rejects, each with a distinct message the editor can show against the field:
 
@@ -286,13 +286,13 @@ Rejects, each with a distinct message the editor can show against the field:
 
 Accepts `a`, `adr-0042-mqtt-topic-naming`, `v2`, `2026-08-23`.
 
-- [ ] **Step 2: `childPath(parentPath, slug)`**
+- [x] **Step 2: `childPath(parentPath, slug)`**
 
 Returns `slug` when `parentPath` is null, else `${parentPath}/${slug}`. Phase 1's seed got
 this wrong once by deriving from the parent's **slug** rather than its **path**, which is
 silently correct two levels deep and wrong at three. Test the three-level case explicitly.
 
-- [ ] **Step 3: `descendantPaths(oldPrefix, newPrefix, path)`**
+- [x] **Step 3: `descendantPaths(oldPrefix, newPrefix, path)`**
 
 The pure half of the move: given a path, return what it becomes. Test that
 `architecture/mqtt-contracts` moving to `platform/mqtt-contracts` takes
@@ -300,6 +300,34 @@ The pure half of the move: given a path, return what it becomes. Test that
 `architecture/mqtt-contracts-v2` — a **prefix that is not a path boundary** — is left alone.
 That off-by-one is the whole reason this is a tested function rather than a string
 concatenation inline in the move.
+
+- [x] **Step 4: `validatePath(path)` — added after Step 1's cap turned out not to guard what it claimed**
+
+The `> 80` per-slug cap was justified above as protecting the btree index. Reviewing the
+shipped module showed that reasoning does not hold: the index limit applies to the **whole**
+`Page.path`, and nesting depth is unbounded, so 33 levels of perfectly legal 80-character
+slugs breach it while every individual slug passes.
+
+Measured on Postgres 16 with a `unique index on (a, b)` mirroring `(spaceId, path)`:
+
+```
+  2600 bytes  INSERT 0 1
+  2700 bytes  ERROR: index row size 2744 exceeds btree version 4 maximum 2704
+```
+
+**Probe with incompressible text.** A first attempt using `repeat('x', 3000)` inserted
+happily and suggested there was no limit at all — the value compressed. That false negative
+is the more useful half of this finding.
+
+So `slug.ts` now also exports `MAX_PATH_BYTES = 2000` and `validatePath(path)`, returning the
+same `FieldError` shape so it renders against the slug field like every other rejection.
+The per-slug cap stays — it keeps a URL and a nav entry sane — but it is no longer claimed to
+do a job it cannot do.
+
+**Task 6 and Task 10 must both call it**, and their sections say so. The move case is the
+sharper one: moving a subtree under a deeper parent lengthens every descendant at once, so a
+move that looks small can breach the limit for a page the user was not even looking at —
+check the longest resulting descendant, not just the page being moved.
 
 ---
 
@@ -418,7 +446,8 @@ next save must send.
 - [ ] **Step 1: `createPage(viewer, { spaceId, parentId, slug, title, docType })`**
 
 In one transaction: validate the slug (Task 3), resolve the parent's path, build the child
-path, **reject an occupied path up front** with a field-level message, create the `Page` with
+path, **run `validatePath` on the assembled result** — the per-slug cap does not bound it —
+then **reject an occupied path up front** with a field-level message, create the `Page` with
 `status: DRAFT` and no `publishedVersionId`, create its `PageDraft`, and write an `AuditLog`
 row.
 
@@ -557,6 +586,9 @@ In one transaction, in this order:
 2. Resolve the new path. **Reject a cycle** — a page cannot move under its own descendant.
    Compute this from the path prefix, not by walking parents, which is a loop waiting to
    happen on data that already has a cycle.
+2b. **Run `validatePath` on the longest resulting descendant path**, not just on the moved
+   page. Moving a subtree deeper lengthens every descendant at once, and the btree index
+   rejects the overflow as a raw constraint violation that names no field.
 3. Reject an occupied target path up front.
 4. One `$executeRaw` rewriting the subtree.
 5. Insert a `Redirect` for every old path, and delete any `Redirect` whose `fromPath` equals a
