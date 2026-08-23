@@ -1,6 +1,6 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 83 commits · **105 tests passing** · typecheck
+Branch: `phase-1-foundations-reader` · 87 commits · **105 tests passing** · typecheck
 and build clean · working tree clean
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
@@ -19,7 +19,7 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 9. Seed script | ✅ approved |
 | 10. Reader shell | ✅ approved |
 | 11. Bug reporting | ✅ approved |
-| 12. Page reader route | implemented; fixes applied, re-review running |
+| 12. Page reader route | ✅ approved |
 | **13. Space landing** | **next — validated, ready to dispatch** |
 | 14. Playwright E2E | not started |
 | 15. Cold-start smoke test | not started |
@@ -129,6 +129,11 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   string. Deriving labels from slugs disagreed with the nav rail beside it, and linking every
   ancestor prefix offered links to unpublished pages that 404 — the exact links the rail
   refuses to render.
+- **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
+  long mermaid identifier, a wide image — widens the document, and because the top bar and
+  both rails are sticky in that scroll container they slide apart. Fixed three times in
+  three shapes before being guarded as a class by a Playwright assertion on
+  `scrollWidth === clientWidth`.
 - **The bug dialog portals to `document.body`.** Rendered as a sibling of its trigger it sat
   inside `.rail-l`, which is `display: none` below 860px — taking the open dialog and the
   user's typed text with it.
@@ -158,6 +163,11 @@ Re-running the seed updates page **markdown** (a new version is published) but n
 - **Mutation-test any test whose job is to catch a catastrophic failure.** The tree builder's
   cycle tests could not detect a cyclic result until they were mutation-tested; the helper's
   docstring claimed a property it did not check.
+- **Reproduce the class, not the instance.** Three fixes this session were mis-sized: one
+  too broad (`\p{C}` for a NUL problem, which mangled emoji and bidi text) and two too
+  narrow (a byte cap derived from character counts; an image-only fix for a general overflow
+  class). Too broad gets caught, because it breaks something visible. **Too narrow does
+  not** — the reported case genuinely disappears and the class stays open.
 - **Only ever stage explicit paths while a subagent is live.** A `git add -A` once swept an
   implementer's in-flight work into an unrelated commit.
 
