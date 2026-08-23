@@ -9,7 +9,7 @@ codebase that does not exist yet produces a plan that gets rewritten.
 | Phase | Deliverable | Spec sections | Depends on |
 |---|---|---|---|
 | **1. Foundations & reader** | Signed-in staff read seeded published docs: space nav, breadcrumbs, TOC, page info card. Forbidden spaces 404. | §5.1–5.2, §8, §11 (read routes), §12 | — |
-| **2. Authoring** | Editors create, draft, preview and publish pages in the browser. Conflict detection on concurrent drafts. Move and delete with redirects. | §5.3, §9, §14 | 1 |
+| **2. Authoring** (plan: [phase-2](2026-08-23-docs-platform-phase-2-authoring.md)) | Editors create, draft, preview and publish pages in the browser. Conflict detection on concurrent drafts. Move and delete with redirects. | §5.3, §9, §14 | 1 |
 | **3. Doc types & lifecycle** | ADR/RFC/runbook templates with validated frontmatter. Status vocabularies, typed relations, publish cascades, retired-document banner, generated indexes. | §6, §5.2 (`PageRelation`) | 2 |
 | **4. Search & diagrams** | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
 | **5. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
@@ -97,7 +97,10 @@ These hold for every later phase. Changing one is a decision, not a detail.
 
 - **npm**, TypeScript strict, Next.js App Router, React Server Components for reads.
 - **Vitest** for unit and integration tests; **Playwright** for end-to-end.
-- Integration tests run against a **real Postgres** in Docker, never a mock or SQLite.
+- Integration tests run against a **real Postgres**, never a mock or SQLite. There is no
+  container runtime on this machine, so that is the local Homebrew `postgresql@16` service
+  on port 5432; the harness refuses to run unless `DATABASE_URL` names a database ending
+  `_test`.
 - Permission checks live in the **data-access layer** and compile to SQL, never a filter
   applied after fetching.
 - Pure logic (permissions, tree building, lifecycle rules) lives in modules that take
