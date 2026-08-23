@@ -154,39 +154,6 @@ export async function createPage(
     });
   }
 
-  // The parent's **path**, never its **slug**: at depth two a parent's path *is* its slug, so
-  // deriving from the slug is indistinguishable from correct until depth three. `childPath`
-  // exists for that reason and is given the path.
-  //
-  // `spaceId` in the filter is not redundant with the space check above. Without it a parent
-  // id from any other readable space would be accepted, and the child would be created in
-  // *this* space carrying the other space's path prefix.
-  let parentPath: string | null = null;
-  if (input.parentId !== null) {
-    const parent = await db.page.findFirst({
-      where: visiblePage({
-        id: input.parentId,
-        spaceId: space.id,
-        space: readableSpace(viewer),
-      }),
-      select: { path: true },
-    });
-    if (!parent) {
-      return invalid({
-        field: "parentId",
-        code: "parent-not-found",
-        message:
-          "That parent page is no longer available in this space. Pick another, or create this page at the top level.",
-      });
-    }
-    parentPath = parent.path;
-  }
-
-  const path = childPath(parentPath, slug.slug);
-
-  const bounded = validatePath(path);
-  if (!bounded.ok) return invalid(bounded.error);
-
   return db.$transaction(async (tx) => {
     // Serialises every write to this space's path namespace. Without it the check below is
     // advisory only: at READ COMMITTED a concurrent create — or a Task 10 move, which
@@ -199,6 +166,45 @@ export async function createPage(
     // against themselves but not against each other. A hash collision between two space ids
     // costs a little needless serialisation and nothing else.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${space.id}))`;
+
+    // Read INSIDE the lock, and this is not fussiness. The parent's `path` is what the
+    // child's path is built from, and Task 10's move rewrites a whole subtree of paths under
+    // this same lock — so reading the parent outside it would let a move land between the
+    // read and the insert, and the child would be created carrying its parent's old prefix.
+    // A page whose path disagrees with its parent's is reachable by URL and absent from the
+    // rail, which is the quietest possible way to lose a page.
+    //
+    // The parent's **path**, never its **slug**: at depth two a parent's path *is* its slug,
+    // so deriving from the slug is indistinguishable from correct until depth three.
+    //
+    // `spaceId` in the filter is not redundant with the space check above. Without it a
+    // parent id from any other readable space would be accepted, and the child would be
+    // created in *this* space carrying the other space's path prefix.
+    let parentPath: string | null = null;
+    if (input.parentId !== null) {
+      const parent = await tx.page.findFirst({
+        where: visiblePage({
+          id: input.parentId,
+          spaceId: space.id,
+          space: readableSpace(viewer),
+        }),
+        select: { path: true },
+      });
+      if (!parent) {
+        return invalid({
+          field: "parentId",
+          code: "parent-not-found",
+          message:
+            "That parent page is no longer available in this space. Pick another, or create this page at the top level.",
+        });
+      }
+      parentPath = parent.path;
+    }
+
+    const path = childPath(parentPath, slug.slug);
+
+    const bounded = validatePath(path);
+    if (!bounded.ok) return invalid(bounded.error);
 
     // **Deliberately not wrapped in `visiblePage()`.** Every other page read in this codebase
     // excludes soft-deleted rows; this one must not, because the unique index on
