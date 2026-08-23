@@ -5444,6 +5444,28 @@ test("table of contents anchors reach their heading", async ({ page }) => {
   await expect(page.locator("#subscribing")).toBeInViewport();
 });
 
+test("no page scrolls horizontally, whatever the content", async ({ page }) => {
+  // A layout regression no unit test can catch: an unbreakable token — an autolinked URL,
+  // a long identifier in a mermaid block, a wide image — widens the document, and because
+  // the top bar and both rails are sticky in that same scroll container they slide out of
+  // alignment. Images, paragraphs and the mermaid placeholder were each fixed separately
+  // after the first two were found by hand; this asserts the class, not the instances.
+  await signIn(page, "aisyah@example.com");
+
+  for (const path of [
+    "/engineering",
+    "/engineering/architecture/mqtt-contracts",
+    "/engineering/architecture/mqtt-contracts/topic-registry",
+    "/handbook/welcome",
+  ]) {
+    await page.goto(path);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow, `${path} scrolls horizontally by ${overflow}px`).toBe(0);
+  }
+});
+
 test("a non-member gets not-found rather than forbidden", async ({ page }) => {
   await signIn(page, "stranger@example.com");
   const response = await page.goto("/engineering/architecture/mqtt-contracts");
@@ -5482,7 +5504,7 @@ npm run db:seed
 npm run test:e2e
 ```
 
-Expected: 7 passed. If sign-in times out, confirm `ALLOW_TEST_LOGIN=1` reached the server
+Expected: 8 passed. If sign-in times out, confirm `ALLOW_TEST_LOGIN=1` reached the server
 process — it is set by `webServer.env`, not by `.env`.
 
 - [ ] **Step 8: Commit**
@@ -5652,7 +5674,7 @@ git commit -m "test: add cold-start smoke test"
 All must hold before Phase 2 starts:
 
 - [ ] `npm test` — unit and integration suites pass
-- [ ] `npm run test:e2e` — 7 end-to-end tests pass
+- [ ] `npm run test:e2e` — 8 end-to-end tests pass
 - [ ] `npm run smoke` — cold-start smoke test passes end to end
 - [ ] `npm run typecheck && npm run build` — clean
 - [ ] A member reads a seeded page with navigation, breadcrumbs, TOC and page info
