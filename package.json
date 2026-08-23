@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "smoke": "./scripts/smoke.sh",
     "db:seed": "tsx prisma/seed.ts"
   },
   "prisma": { "seed": "tsx prisma/seed.ts" },
