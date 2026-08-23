@@ -153,6 +153,10 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   | Plan specifies something not yet built | Dispatch it, or mark it pending |
   | Code changed by the task's **own** fix rounds | Sync the fence |
   | Code replaced by a **later** task | Leave it; note the supersession |
+
+  And sync **only whole-file fences**. Some steps show a fragment — "append this function
+  to the file" — and a blind sync replaces the fragment with the entire file, turning an
+  append step into a replace step. Done once, caught by eye.
   Syncing after a task's first commit is not enough — most tasks here needed two or three
   fix rounds, and each one moves the code out from under the plan.
 - **A forward plan edit is not a code change.** Amending the plan to specify something new
