@@ -41,14 +41,27 @@ export type SaveDraftResult =
       ok: false;
       reason: "conflict";
       /**
-       * Null only when the draft disappeared while this save was in flight — published
-       * (Task 9) or the page deleted (Task 12). There is then no "theirs" to offer, but the
-       * save is still refused rather than silently recreated, and `mine` still carries the
-       * text so nothing is discarded.
+       * Null only when the draft disappeared between the refused write and the read that
+       * describes it — the narrow race version of `vanished` below. There is then no
+       * "theirs" to offer, but the save is still refused rather than silently recreated, and
+       * `mine` still carries the text so nothing is discarded.
        */
       theirs: OtherEdit | null;
       mine: DraftText;
-    };
+    }
+  /**
+   * The client sent a `seen` and there is no draft row at all: the draft it was editing was
+   * published (Task 9) or its page deleted (Task 12) while the tab stayed open.
+   *
+   * Its own reason rather than a `conflict` with a null `theirs`, because the two are
+   * different events and only one of them is a race: this one is the ordinary consequence of
+   * a publish, and it is decided before any query, so there is nothing to look up and no
+   * "theirs" that could exist. **Nothing is written.** Recreating the row here is exactly the
+   * silent resurrection of pre-publish text over a just-published version that `decideSave`
+   * refuses; `mine` comes back untouched so the caller can hand the text back to the person
+   * who typed it.
+   */
+  | { ok: false; reason: "vanished"; mine: DraftText };
 
 /**
  * Saves a page's draft under the conflict contract of spec §9: every save sends the
@@ -84,6 +97,17 @@ export async function saveDraft(
   const decision = decideSave({ current, seen: input.seen });
 
   if (decision.kind === "conflict") return conflictWith(viewer, pageId, input);
+
+  // No row to describe and none to create. Returning before any write is the whole fix: a
+  // create here would put the editor's pre-publish text back as a draft on top of the
+  // version that was just published, answer 201, and tell nobody.
+  if (decision.kind === "vanished") {
+    return {
+      ok: false,
+      reason: "vanished",
+      mine: { title: input.title, markdown: input.markdown },
+    };
+  }
 
   if (decision.kind === "create") {
     try {

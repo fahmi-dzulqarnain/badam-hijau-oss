@@ -95,17 +95,29 @@ export async function PUT(
     // Both texts, per spec §9. The banner cannot offer "load theirs" without theirs, and
     // cannot offer "keep mine" without mine having survived the refusal.
     //
-    // `theirs` is NULL when the draft vanished between the failed write and the read that
-    // describes it — a concurrent publish (Task 9) or page delete (Task 12) removed the row.
+    // `theirs` is NULL when there is no other draft to offer: either the repository decided
+    // `vanished` — the client holds a `seen` for a draft a publish (Task 9) or a page delete
+    // (Task 12) removed, and nothing was written — or the row disappeared between the failed
+    // write and the read that describes it. Two events, one answer on the wire, deliberately:
+    // the client's situation is identical in both, and a second error code would earn the
+    // editor a second banner saying the same sentence.
+    //
     // The key is still emitted rather than omitted, so a client can tell "no other draft"
     // from a truncated body, and the status stays 409: the save was refused, and refusing is
     // the point. What the client shows in that case is a banner with ONE action instead of
     // two — no "load theirs" to offer, so: "This page's draft was published or removed while
     // you were editing. Your text is below and has not been saved; copy it somewhere before
     // reloading." `mine` is what makes that promise keepable.
+    //
+    // One construction site for both, so the two cannot drift into two shapes.
     case "conflict":
+    case "vanished":
       return NextResponse.json(
-        { error: "conflict", theirs: result.theirs, mine: result.mine },
+        {
+          error: "conflict",
+          theirs: result.reason === "vanished" ? null : result.theirs,
+          mine: result.mine,
+        },
         { status: 409 },
       );
   }

@@ -4,18 +4,30 @@ import { decideSave } from "@/lib/drafts/conflict";
 const T0 = "2026-08-23T10:00:00.000Z";
 const T1 = "2026-08-23T10:00:00.001Z";
 
-test("no draft row yet is a create", () => {
+/*
+ * The four cases of the decision table, one test each, in the order of the table in
+ * `conflict.ts`. Both nulls mean something, and the two mixed rows are the ones an
+ * implementation gets wrong in opposite directions.
+ */
+
+test("no draft row and no seen is a create — a genuine first save", () => {
   expect(decideSave({ current: null, seen: null })).toEqual({ kind: "create" });
 });
 
 /**
- * The mirror of the case below, and the reason the `current === null` check has to come
- * first. A client holding a `seen` for a draft that no longer exists — published, or the
- * page restored from a delete — has nothing to overwrite, so the safe answer is to write
- * its text rather than refuse and strand it.
+ * The mirror of the case below, and the one this module originally got wrong: it answered
+ * `create` for any null `current`, whatever the client claimed to have seen.
+ *
+ * A client holding a `seen` for a draft that no longer exists is not making a first save. It
+ * is holding a receipt for a row that has since been published (Task 9 deletes the draft) or
+ * deleted with its page (Task 12). Answering `create` writes its pre-publish text straight
+ * back as a draft over the version that was just published, returns 201, and tells nobody.
+ *
+ * Kills: `if (args.current === null) return { kind: "create" }` — the shipped bug — and any
+ * rewrite that decides on the row's existence alone.
  */
-test("a seen timestamp with no draft row is still a create", () => {
-  expect(decideSave({ current: null, seen: new Date(T0) })).toEqual({ kind: "create" });
+test("a seen timestamp with no draft row is vanished, not a create", () => {
+  expect(decideSave({ current: null, seen: new Date(T0) })).toEqual({ kind: "vanished" });
 });
 
 /**
@@ -30,6 +42,20 @@ test("a seen timestamp with no draft row is still a create", () => {
  */
 test("a missing seen against an existing draft is a conflict, never an overwrite", () => {
   expect(decideSave({ current: new Date(T0), seen: null })).toEqual({ kind: "conflict" });
+});
+
+/**
+ * The fourth row, stated as one test so the table is complete on its own terms: with both
+ * sides present the answer turns on the instants and nothing else. The two branches under it
+ * are pinned in detail by the mutation tests further down.
+ */
+test("with both present, matching instants update and differing ones conflict", () => {
+  expect(decideSave({ current: new Date(T0), seen: new Date(T0) })).toEqual({
+    kind: "update",
+  });
+  expect(decideSave({ current: new Date(T0), seen: new Date(T1) })).toEqual({
+    kind: "conflict",
+  });
 });
 
 /**

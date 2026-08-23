@@ -1,5 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { db, resetDb } from "../setup/reset";
+import { saveOutcome } from "@/lib/editor/save";
+import { editorReducer, initialEditorState } from "@/lib/editor/state";
 import type { Viewer } from "@/lib/authz/types";
 
 beforeEach(resetDb);
@@ -261,16 +263,95 @@ test("409 on a stale seen, carrying the other editor's work and the caller's own
 });
 
 /**
- * The case the plan's 409 body does not cover: `saveDraft` types `theirs` as
- * `OtherEdit | null`, and it is null when the draft row disappeared between the refused
- * write and the read that describes it — a concurrent publish or a page delete.
+ * The `vanished` sequence end to end through the real repository, which is how Task 9's
+ * publish will present it: a draft exists, the editor is holding its `updatedAt`, the row is
+ * deleted, and the next autosave arrives carrying the stale receipt.
  *
- * Staged with a stubbed repository rather than a real race, deliberately: the branch under
- * test belongs to the HTTP layer, and reproducing a mid-request publish would test Task 9's
- * code instead of this one. What is asserted is exactly the translation this route owns —
- * the status stays 409, `mine` still comes back so nothing the editor typed is dropped, and
- * the `theirs` KEY is present and null rather than absent, so a client can distinguish "no
- * other draft to load" from a body it failed to parse.
+ * Asserted on the whole body, because the shape is the contract the editor is already built
+ * against: `error: "conflict"` with a null `theirs` is what makes it render the one-action
+ * banner instead of "Keep mine" / "Load theirs", and `mine` is what makes "your text is
+ * below" true.
+ *
+ * Kills: `decideSave` answering `create` for a null `current` — with that, this is a 201 and
+ * a resurrected row, which the final assertion checks for directly.
+ */
+test("409 with theirs: null for a save whose draft was deleted, and nothing is written", async () => {
+  const { page, asAisyah } = await fixture();
+  const PUT = await routeAs(asAisyah);
+
+  const created = await PUT(...put(page.id, draft()));
+  expect(created.status).toBe(201);
+  const { updatedAt } = await created.json();
+
+  // Stands in for Task 9's publish, which deletes the draft inside its transaction.
+  await db.pageDraft.delete({ where: { pageId: page.id } });
+
+  const mine = draft({
+    title: "Typed after the publish",
+    markdown: "Typed after the publish, and never saved.",
+    seen: updatedAt,
+  });
+  const response = await PUT(...put(page.id, mine));
+
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: "conflict",
+    theirs: null,
+    mine: { title: mine.title, markdown: mine.markdown },
+  });
+  expect(await db.pageDraft.count()).toBe(0);
+});
+
+/**
+ * The recovery the editor actually offers, driven by the editor's own modules against the
+ * real endpoint. `saveOutcome` and `editorReducer` are pure and unit-tested either side of
+ * this, but nothing else joins them to a second real request — and "dismiss, then save"
+ * failing is a silent trap: the person keeps typing into a tab that will never store a
+ * character again.
+ *
+ * Kills: a `dismissed` that leaves `seen` in place (every later save 409s forever), and a
+ * `vanished` implemented as a permanent refusal for the page rather than a decision about
+ * the two values in front of it.
+ */
+test("the editor's dismiss-and-save path recovers the text into a fresh draft", async () => {
+  const { page, asAisyah } = await fixture();
+  const PUT = await routeAs(asAisyah);
+
+  const created = await PUT(...put(page.id, draft()));
+  const { updatedAt } = await created.json();
+  await db.pageDraft.delete({ where: { pageId: page.id } });
+
+  const mine = { title: "Rescued title", markdown: "Rescued paragraph." };
+  const refused = await PUT(...put(page.id, { ...mine, seen: updatedAt }));
+  expect(refused.status).toBe(409);
+
+  // Exactly what the component does with that response: map it to an action, reduce it, and
+  // then reduce the one button the null-`theirs` banner renders.
+  const outcome = saveOutcome({ status: refused.status, body: await refused.json(), mine });
+  const banner = editorReducer(initialEditorState(updatedAt), outcome);
+  expect(banner.conflict?.mine).toEqual(mine);
+  const dismissed = editorReducer(banner, { type: "dismissed" });
+  expect(dismissed.seen).toBeNull();
+
+  const retried = await PUT(...put(page.id, { ...mine, seen: dismissed.seen }));
+  expect(retried.status).toBe(201);
+
+  const row = await db.pageDraft.findUniqueOrThrow({ where: { pageId: page.id } });
+  expect(row.title).toBe("Rescued title");
+  expect(row.markdown).toBe("Rescued paragraph.");
+});
+
+/**
+ * The narrower sibling of the test above: `saveDraft` also types the `conflict` branch's
+ * `theirs` as nullable, for the row that disappears between the refused write and the read
+ * that describes it. Both reasons must reach the wire as the same 409, or the editor would
+ * need two banners for one situation.
+ *
+ * Staged with a stubbed repository rather than a real race, deliberately: that interleaving
+ * belongs to Task 9's code, and what is asserted here is only the translation this route
+ * owns — the status stays 409, `mine` still comes back so nothing the editor typed is
+ * dropped, and the `theirs` KEY is present and null rather than absent, so a client can
+ * distinguish "no other draft to load" from a body it failed to parse.
  */
 test("409 with theirs: null when the draft vanished mid-save, and mine still comes back", async () => {
   const { page, asAisyah } = await fixture();

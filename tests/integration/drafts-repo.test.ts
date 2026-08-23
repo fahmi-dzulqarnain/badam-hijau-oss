@@ -228,6 +228,93 @@ test("a missing seen against an existing draft conflicts and leaves the row unto
 });
 
 /**
+ * The mirror of the case above, and the sequence Task 9 is about to make routine: an editor
+ * has a tab open, someone publishes, publish deletes the `PageDraft`, and the next autosave
+ * arrives two seconds later still carrying the `updatedAt` of the row that is gone.
+ *
+ * The delete is done directly rather than through a publish, because Task 9 does not exist
+ * yet and because what is under test is this module's answer to a missing row — not how the
+ * row came to be missing. Task 12's page delete produces the same shape.
+ *
+ * Kills the shipped bug: `decideSave` answering `create` for any null `current`. With that
+ * answer the assertion below is not "wrong result" but "the draft is back" — pre-publish text
+ * recreated on top of a version that has just gone out, reported to the editor as a
+ * successful save.
+ */
+test("a seen for a draft that has been deleted is vanished, and nothing is written", async () => {
+  const { page, asAisyah } = await fixture();
+  const first = saved(
+    await saveDraft(asAisyah, page.id, {
+      title: "Pre-publish title",
+      markdown: "Pre-publish paragraph.",
+      seen: null,
+    }),
+  );
+
+  // Stands in for Task 9's publish, which deletes the draft inside its transaction.
+  await db.pageDraft.delete({ where: { pageId: page.id } });
+
+  const result = await saveDraft(asAisyah, page.id, {
+    title: "Typed after the publish",
+    markdown: "Typed after the publish, and never saved.",
+    seen: first.draft.updatedAt,
+  });
+
+  expect(result).toEqual({
+    ok: false,
+    reason: "vanished",
+    mine: {
+      title: "Typed after the publish",
+      markdown: "Typed after the publish, and never saved.",
+    },
+  });
+
+  // The assertion that catches the resurrection. Counting rather than reading the row,
+  // because the failure is a row EXISTING, and `findUnique` returning null is easy to
+  // misread as a passing assertion.
+  expect(await db.pageDraft.count()).toBe(0);
+});
+
+/**
+ * The other half of that sequence: the editor's only offered action is "Dismiss and save as
+ * a new draft", which clears `seen` (see `editorReducer`'s `dismissed`). The save that
+ * follows must actually create a draft — otherwise the refusal is permanent and the text in
+ * front of the person can never be stored anywhere.
+ *
+ * Kills a `vanished` implemented as a sticky refusal, and a repository that decides on the
+ * request having a `seen` at some point rather than on the two values it is given now.
+ */
+test("after a vanished refusal, dismissing and re-saving with a null seen creates a fresh draft", async () => {
+  const { page, asAisyah } = await fixture();
+  const first = saved(
+    await saveDraft(asAisyah, page.id, { title: "Before", markdown: "Before.", seen: null }),
+  );
+  await db.pageDraft.delete({ where: { pageId: page.id } });
+
+  const refused = await saveDraft(asAisyah, page.id, {
+    title: "Recovered title",
+    markdown: "Recovered paragraph.",
+    seen: first.draft.updatedAt,
+  });
+  expect(refused.ok).toBe(false);
+
+  // What the banner's one button leaves the client holding: the same text, no `seen`.
+  const retried = saved(
+    await saveDraft(asAisyah, page.id, {
+      title: "Recovered title",
+      markdown: "Recovered paragraph.",
+      seen: null,
+    }),
+  );
+
+  expect(retried.created).toBe(true);
+  const row = await db.pageDraft.findUniqueOrThrow({ where: { pageId: page.id } });
+  expect(row.title).toBe("Recovered title");
+  expect(row.markdown).toBe("Recovered paragraph.");
+  expect(row.updatedAt.getTime()).toBe(retried.draft.updatedAt.getTime());
+});
+
+/**
  * Two saves landing together, asserted on the outcome and never on which one arrived first.
  * Exactly one must win: both winning is the lost update the `updatedAt` predicate exists to
  * prevent, and both losing would mean the endpoint discards work under load.
