@@ -34,10 +34,19 @@ export default async function SpaceLanding({
         {modules.map((module) => (
           <li key={module.id}>
             <Link href={`/${space.key}/${module.path}`}>{module.title}</Link>{" "}
-            <span className="k">
-              {module.pageCount} pages
-              {module.draftCount > 0 ? ` · ${module.draftCount} draft` : ""}
-            </span>
+            {module.pageCount > 0 || module.draftCount > 0 ? (
+              <span className="k">
+                {/* A childless module is just a page — a count of 0 next to a working link
+                    reads as "empty section", so it is omitted entirely rather than shown as
+                    zero. summariseModules counts descendants, which is correct; this is a
+                    presentation decision. */}
+                {module.pageCount > 0
+                  ? `${module.pageCount} ${module.pageCount === 1 ? "page" : "pages"}`
+                  : ""}
+                {module.pageCount > 0 && module.draftCount > 0 ? " · " : ""}
+                {module.draftCount > 0 ? `${module.draftCount} draft` : ""}
+              </span>
+            ) : null}
           </li>
         ))}
       </ul>
