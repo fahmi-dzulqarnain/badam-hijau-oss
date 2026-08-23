@@ -85,3 +85,19 @@ export const listSpacePages = cache(async (viewer: Viewer, spaceId: string) => {
     },
   });
 });
+
+export const listRecentlyPublished = cache(
+  async (viewer: Viewer, spaceId: string, limit = 5) => {
+  return db.page.findMany({
+    where: { spaceId, publishedAt: { not: null }, space: readableSpace(viewer) },
+    orderBy: { publishedAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      title: true,
+      path: true,
+      publishedAt: true,
+      publishedVersion: { select: { author: { select: { name: true } } } },
+    },
+  });
+});
