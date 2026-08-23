@@ -5228,6 +5228,7 @@ import {
 } from "@/lib/pages/repo";
 import { buildTree } from "@/lib/pages/tree";
 import { summariseModules } from "@/lib/spaces/landing";
+import { dateFormat } from "@/lib/format";
 
 export default async function SpaceLanding({
   params,
@@ -5242,7 +5243,6 @@ export default async function SpaceLanding({
 
   const modules = summariseModules(buildTree(await listSpacePages(viewer, space.id)));
   const recent = await listRecentlyPublished(viewer, space.id);
-  const formatter = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" });
 
   return (
     <main className="doc">
@@ -5269,7 +5269,7 @@ export default async function SpaceLanding({
             <Link href={`/${space.key}/${page.path}`}>{page.title}</Link>{" "}
             <span className="k">
               {page.publishedVersion?.author.name}
-              {page.publishedAt ? ` · ${formatter.format(page.publishedAt)}` : ""}
+              {page.publishedAt ? ` · ${dateFormat.format(page.publishedAt)}` : ""}
             </span>
           </li>
         ))}
