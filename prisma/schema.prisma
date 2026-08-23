@@ -58,6 +58,8 @@ model User {
   pagesOwned   Page[]            @relation("PageOwner")
   pagesCreated Page[]            @relation("PageCreatedBy")
   pageVersions PageVersion[]     @relation("PageVersionAuthor")
+  draftsEdited PageDraft[]       @relation("DraftUpdatedBy")
+  auditEntries AuditLog[]        @relation("AuditActor")
 }
 
 model Space {
@@ -70,6 +72,7 @@ model Space {
   createdAt   DateTime          @default(now())
   memberships SpaceMembership[]
   pages       Page[]
+  redirects   Redirect[]
 }
 
 model SpaceMembership {
@@ -129,6 +132,7 @@ model Page {
   createdById        String
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
   space            Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   parent           Page?         @relation("PageTree", fields: [parentId], references: [id], onDelete: Cascade)
@@ -138,9 +142,16 @@ model Page {
   versions         PageVersion[] @relation("PageVersions")
   publishedVersion PageVersion?  @relation("PagePublishedVersion", fields: [publishedVersionId], references: [id])
 
+  draft     PageDraft?
+  redirects Redirect[] @relation("RedirectTarget")
+
   @@unique([spaceId, path])
   @@index([spaceId, status])
   @@index([spaceId, parentId])
+  // Not for the read path: measured at 60k rows, `deletedAt IS NULL` returns most of the
+  // table and the planner seq-scans with or without this. It is for the inverse query —
+  // listing deleted pages to restore — which is selective.
+  @@index([spaceId, deletedAt])
 }
 
 model PageVersion {
@@ -158,6 +169,54 @@ model PageVersion {
   page        Page  @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
   author      User  @relation("PageVersionAuthor", fields: [authorId], references: [id])
   publishedOn Page? @relation("PagePublishedVersion")
+  draftsBasedOn PageDraft[] @relation("DraftBaseVersion")
 
+  @@index([pageId, createdAt])
+}
+
+model PageDraft {
+  pageId        String   @id
+  title         String
+  markdown      String
+  frontmatter   Json     @default("{}")
+  baseVersionId String?
+  updatedById   String
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  page        Page         @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  baseVersion PageVersion? @relation("DraftBaseVersion", fields: [baseVersionId], references: [id])
+  updatedBy   User         @relation("DraftUpdatedBy", fields: [updatedById], references: [id])
+}
+
+model Redirect {
+  id        String   @id @default(cuid())
+  spaceId   String
+  fromPath  String
+  toPageId  String
+  createdAt DateTime @default(now())
+
+  space  Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  toPage Page  @relation("RedirectTarget", fields: [toPageId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, fromPath])
+  @@index([toPageId])
+}
+
+// `pageId` and `spaceId` are deliberately NOT foreign keys. An audit row must outlive the
+// thing it describes: Restrict would block the delete, and Cascade would erase the record of
+// it — which is the row you most want afterwards.
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String
+  action    String
+  spaceId   String?
+  pageId    String?
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  actor User @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([spaceId, createdAt])
   @@index([pageId, createdAt])
 }

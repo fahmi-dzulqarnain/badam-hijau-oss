@@ -162,14 +162,19 @@ so it should be clean — but the convention learned in Phase 1's Task 2 stands:
 `NOT NULL` column on a populated table needs a default or a three-step migration, and
 `Page` is populated in every environment this will ever run against.
 
-- [ ] **Step 5: Verify the index is actually used**
+- [x] **Step 5: Verify the index is actually used** — measured, and the answer was no
 
-```bash
-psql "$DATABASE_URL" -c 'explain select * from "Page" where "spaceId" = $$x$$ and "deletedAt" is null;'
-```
+Done, and it corrected the reason the index exists. On a throwaway database with 60,000 pages
+(42,000 live in one space), the planner sequential-scans
+`where "spaceId" = ? and "deletedAt" is null` **with or without** `Page_spaceId_deletedAt_idx`
+— identical plans, 8.5 ms vs 9.1 ms. That is the right plan: live pages are ~70% of the table,
+and no index helps a query returning most rows.
 
-A `deletedAt` filter that falls back to a sequential scan on every page read is worth
-knowing about now rather than in Phase 4 when the table is large.
+So the index does **not** speed up the read path, and the justification written above — "every
+read filters on it alongside the space" — is wrong. It is kept for the *inverse* query,
+`deletedAt IS NOT NULL`, which selects ~10% and is what the restore listing in Task 12 and the
+admin surface in Phase 6 need. Anyone tempted to add a similar index for a similar reason
+should measure first: at this shape, the read path never uses it.
 
 ---
 
