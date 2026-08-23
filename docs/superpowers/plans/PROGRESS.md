@@ -1,6 +1,6 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 75 commits · **105 tests passing** · typecheck
+Branch: `phase-1-foundations-reader` · 83 commits · **105 tests passing** · typecheck
 and build clean · working tree clean
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
@@ -19,8 +19,8 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 9. Seed script | ✅ approved |
 | 10. Reader shell | ✅ approved |
 | 11. Bug reporting | ✅ approved |
-| **12. Page reader route** | **next — validated, ready to dispatch** |
-| 13. Space landing | not started |
+| 12. Page reader route | implemented; fixes applied, re-review running |
+| **13. Space landing** | **next — validated, ready to dispatch** |
 | 14. Playwright E2E | not started |
 | 15. Cold-start smoke test | not started |
 
@@ -122,6 +122,13 @@ Re-running the seed updates page **markdown** (a new version is published) but n
 - **`summary` is stored raw.** Encode at output; sanitising on write destroys the evidence.
   The control-character strip is `\p{Cc}` only (keeping newline, tab, return) because
   Postgres rejects NUL — `\p{C}` would also break ZWJ emoji and bidi marks.
+- **`doc.css` is imported by the space layout, never by a page.** Importing it from a page
+  route made `.doc` compute differently on a hard load than on a soft navigation to the same
+  route — measured `max-width: none` versus `820px`.
+- **Breadcrumbs take real titles and published state from the page tree**, not from the path
+  string. Deriving labels from slugs disagreed with the nav rail beside it, and linking every
+  ancestor prefix offered links to unpublished pages that 404 — the exact links the rail
+  refuses to render.
 - **The bug dialog portals to `document.body`.** Rendered as a sibling of its trigger it sat
   inside `.rail-l`, which is `display: none` below 860px — taking the open dialog and the
   user's typed text with it.
@@ -133,8 +140,16 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   times a later task's text would have reverted an earlier fix — a vitest glob narrowed back
   to `.ts`, a hardcoded `TRUNCATE` list restored over an introspected one, a stale file list,
   a reprinted `requireViewer()` call losing its callback.
-- **Sync plan fences from the source files** after a task lands, rather than hand-editing.
-  Makes drift structurally impossible in that direction.
+- **Sync plan fences from source, but know there are three drift directions** and they need
+  different handling. Getting this wrong left Task 10's section describing a `NavLink` that
+  had not existed for twenty commits:
+  | Direction | Correct action |
+  |---|---|
+  | Plan specifies something not yet built | Dispatch it, or mark it pending |
+  | Code changed by the task's **own** fix rounds | Sync the fence |
+  | Code replaced by a **later** task | Leave it; note the supersession |
+  Syncing after a task's first commit is not enough — most tasks here needed two or three
+  fix rounds, and each one moves the code out from under the plan.
 - **A forward plan edit is not a code change.** Amending the plan to specify something new
   creates drift until a task actually ships it — which happened once: the plan gained
   `id: true` on a Prisma select that the file never got, and the next task built a
