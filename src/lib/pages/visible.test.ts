@@ -109,6 +109,32 @@ const MODULES: Record<
     covered: ["publishPage"],
     exempt: [],
   },
+  "src/lib/pages/move.ts": {
+    load: () => import("@/lib/pages/move"),
+    // Soft-delete tests: tests/integration/page-move.test.ts. This module has five page
+    // queries and they do not all carry the filter, which is the point of listing them:
+    //   "a soft-deleted page cannot be moved, and reads as not-found" and "a super admin's
+    //   move is not also a soft-delete bypass" cover the authorisation read and the re-read
+    //   under the lock;
+    //   "a soft-deleted page cannot be used as a parent" covers the parent lookup;
+    //   "a move onto a path held by a soft-deleted page names it and points at restore"
+    //   covers the collision check, which deliberately does NOT filter — the unique index
+    //   does not know about `deletedAt`, so a filtered check would pass and the rewrite
+    //   would fail;
+    //   "a soft-deleted descendant is rewritten with the subtree" and "a subtree with a
+    //   soft-deleted descendant can move away and back" cover the subtree read, which also
+    //   deliberately does not filter: a stranded soft-deleted row holds a path its parent no
+    //   longer has, and moving the subtree back collides with it.
+    //
+    //   The module also has a page *write*: the `updateMany` that moves `parentId` and `slug`
+    //   carries `visiblePage()` as a write predicate, so a soft delete committing
+    //   mid-transaction matches nothing and the move rolls back. Covered by "a soft delete
+    //   landing mid-move rolls the whole transaction back", which stages the interleaving
+    //   with a held row lock — a filter on a write is invisible to any test that cannot
+    //   arrange for the row to change underneath it.
+    covered: ["movePage"],
+    exempt: [],
+  },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),
     // Soft-delete tests: tests/integration/drafts-repo.test.ts
