@@ -1,6 +1,7 @@
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
-import { getPublishedPage, listSpacePages } from "@/lib/pages/repo";
+import { getPublishedPage, listSpacePages, resolveRedirect } from "@/lib/pages/repo";
+import { pageHref } from "@/lib/pages/href";
 import { renderMarkdown } from "@/lib/markdown/render";
 import { dateFormat } from "@/lib/format";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
@@ -20,11 +21,37 @@ export default async function DocPage({
   // moved or removed.
   const viewer = await requireViewer(`/${spaceKey}/${path.join("/")}`);
 
-  const result = await getPublishedPage(viewer, {
-    spaceKey,
-    path: path.join("/"),
-  });
-  if (!result) notFound();
+  const routePath = path.join("/");
+  const result = await getPublishedPage(viewer, { spaceKey, path: routePath });
+
+  // The redirect lookup lives HERE — inside the miss branch, after the page read has already
+  // failed — and nowhere else. Two reasons, and the second is the load-bearing one:
+  //
+  // - **Cost.** Every page view in the product goes through the line above. A lookup placed
+  //   before it, or unconditionally beside it, would add a second round trip to every
+  //   successful read to answer a question that is only ever asked about a URL that missed.
+  // - **Correctness.** A live page and a `Redirect` row can legitimately occupy the same
+  //   path — a redirect goes dormant the moment something is created or moved on top of it,
+  //   and Task 10 only reclaims the ones it makes live itself. Looking the redirect up first
+  //   would send readers away from a page that exists and renders. The page read wins by
+  //   construction, because it is the only one that runs on a hit.
+  if (!result) {
+    const moved = await resolveRedirect(viewer, { spaceKey, path: routePath });
+    // 308, not the spec's 301. Both are permanent and both consolidate link equity; the
+    // difference is that 301 has historically licensed intermediaries to rewrite the method
+    // to GET on the retry and 308 forbids it, which for a GET-only reader route is a
+    // guarantee this route wants and never needs to spend. The deciding constraint is that
+    // an RSC redirect is not only an HTTP status: on a client-side navigation Next carries
+    // it in the flight payload and the router re-issues it, so a hand-written 301 would need
+    // middleware — which this project has deliberately deferred, and which could not run
+    // this permission-checked lookup at the edge anyway. Reported as spec §14 drift rather
+    // than silently satisfied.
+    if (moved) permanentRedirect(pageHref(spaceKey, moved.path));
+    // One hop. `resolveRedirect` returns the target's *current* path, so there is never a
+    // second hop to follow: see its docstring for why `toPageId` makes a chain impossible
+    // to represent rather than merely impolite to follow.
+    notFound();
+  }
 
   const { space, page, version } = result;
   const { html, headings } = await renderMarkdown(version.markdown);

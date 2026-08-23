@@ -5,7 +5,9 @@ import {
   getReadableSpaceByKey,
   listRecentlyPublished,
   listSpacePages,
+  resolveRedirect,
 } from "@/lib/pages/repo";
+import { movePage } from "@/lib/pages/move";
 import type { Viewer } from "@/lib/authz/types";
 
 beforeEach(resetDb);
@@ -274,4 +276,283 @@ test("listRecentlyPublished omits a soft-deleted page and keeps its siblings", a
 
   const rows = await listRecentlyPublished(stranger, space.id);
   expect(rows.map((r) => r.title)).toEqual(["still-here"]);
+});
+
+/**
+ * Redirects (Task 11). `resolveRedirect` is only ever reached on a read miss, so every test
+ * here asserts the miss first — otherwise a redirect test can pass against a path that was
+ * never a miss in the first place, which is the same "verified the instance, not the class"
+ * mistake this project has made three times.
+ *
+ * The rows are written by the real `movePage` rather than by hand wherever a move can produce
+ * the shape under test. A `Redirect` fixture built with `db.redirect.create` proves this
+ * function reads a table; using the move proves it reads what the move writes.
+ */
+
+/**
+ * The shape `movePage` needs and the plain `fixture` above does not have: a page with a real
+ * parent row, two other root pages to move it to, and an `EDITOR` who may move it.
+ *
+ * Every field is distinguishable — slug, path and title all differ — so swapping one for
+ * another in the implementation is visible rather than invisible.
+ */
+async function movableFixture(visibility: "MEMBERS" | "ALL_STAFF") {
+  const author = await db.user.create({
+    data: { email: "aisyah@example.com", name: "Aisyah R." },
+  });
+  const space = await db.space.create({
+    data: { key: "engineering", name: "Engineering", initials: "EN", visibility },
+  });
+  await db.spaceMembership.create({
+    data: { spaceId: space.id, userId: author.id, role: "EDITOR" },
+  });
+
+  const root = (slug: string, title: string) =>
+    db.page.create({
+      data: {
+        spaceId: space.id,
+        slug,
+        path: slug,
+        title,
+        createdById: author.id,
+        status: "CURRENT",
+      },
+      select: { id: true, path: true },
+    });
+
+  const architecture = await root("architecture", "Architecture notes");
+  const platform = await root("platform", "Platform group");
+  const decisions = await root("decisions", "Decision log");
+
+  const page = await db.page.create({
+    data: {
+      spaceId: space.id,
+      parentId: architecture.id,
+      slug: "mqtt-contracts",
+      path: "architecture/mqtt-contracts",
+      title: "MQTT contracts",
+      createdById: author.id,
+      status: "CURRENT",
+    },
+    select: { id: true, path: true },
+  });
+  const version = await db.pageVersion.create({
+    data: {
+      pageId: page.id,
+      title: "MQTT contracts",
+      markdown: "## Topics\n\nOne namespace.",
+      status: "CURRENT",
+      authorId: author.id,
+    },
+  });
+  await db.page.update({
+    where: { id: page.id },
+    data: { publishedVersionId: version.id, publishedAt: new Date("2026-08-20T09:00:00Z") },
+  });
+
+  const editor: Viewer = {
+    id: author.id,
+    isSuperAdmin: false,
+    memberships: [{ spaceId: space.id, role: "EDITOR" }],
+  };
+  return { author, space, architecture, platform, decisions, page, editor };
+}
+
+/** Fails loudly with the rejection reason rather than on a downstream `undefined`. */
+async function move(viewer: Viewer, pageId: string, newParentId: string | null, newSlug: string) {
+  const result = await movePage(viewer, pageId, { newParentId, newSlug });
+  if (!result.ok) throw new Error(`move rejected: ${JSON.stringify(result)}`);
+  return result.page;
+}
+
+const ORIGINAL = "architecture/mqtt-contracts";
+const args = (path: string) => ({ spaceKey: "engineering", path });
+
+test("a moved page's old path resolves to where the page is now", async () => {
+  const { page, platform, editor } = await movableFixture("ALL_STAFF");
+  expect(await getPublishedPage(editor, args(ORIGINAL))).not.toBeNull();
+
+  await move(editor, page.id, platform.id, "mqtt-contracts");
+
+  // The miss first: the redirect is only consulted because the page read failed.
+  expect(await getPublishedPage(editor, args(ORIGINAL))).toBeNull();
+  expect(await resolveRedirect(editor, args(ORIGINAL))).toEqual({
+    pageId: page.id,
+    path: "platform/mqtt-contracts",
+  });
+  // And the page really is readable at the path the redirect names, so this is a redirect to
+  // a page and not merely to a string.
+  expect(await getPublishedPage(editor, args("platform/mqtt-contracts"))).not.toBeNull();
+});
+
+/**
+ * The property `Redirect.toPageId` buys, and the one test the plan does not list.
+ *
+ * Two moves leave two redirect rows. Both point at the same page id, so both resolve to
+ * wherever it is *now* — the first one included, in a single hop. Had the schema stored a
+ * target path, the first row would still name `platform/mqtt-contracts`, and answering the
+ * original URL correctly would require following it to a second row: a chain, with an
+ * infinite loop one bad row away. This is why "resolve exactly one hop" is sufficient rather
+ * than a limitation.
+ */
+test("a redirect whose target has moved again resolves in one hop to its current path", async () => {
+  const { space, page, platform, decisions, editor } = await movableFixture("ALL_STAFF");
+
+  await move(editor, page.id, platform.id, "mqtt-contracts");
+  await move(editor, page.id, decisions.id, "mqtt-contracts");
+
+  // Requested: the ORIGINAL path, not the intermediate one.
+  expect(await getPublishedPage(editor, args(ORIGINAL))).toBeNull();
+  expect(await resolveRedirect(editor, args(ORIGINAL))).toEqual({
+    pageId: page.id,
+    path: "decisions/mqtt-contracts",
+  });
+
+  // The intermediate path resolves in one hop too, to the same place.
+  expect(await resolveRedirect(editor, args("platform/mqtt-contracts"))).toEqual({
+    pageId: page.id,
+    path: "decisions/mqtt-contracts",
+  });
+
+  // And the reason both work: two rows, one target. Asserted so a future schema change that
+  // added a `toPath` — or a move that rewrote old redirects instead of adding one — would
+  // fail here rather than degrade quietly into a chain.
+  const rows = await db.redirect.findMany({
+    where: { spaceId: space.id },
+    select: { fromPath: true, toPageId: true },
+    orderBy: { fromPath: "asc" },
+  });
+  expect(rows).toEqual([
+    { fromPath: ORIGINAL, toPageId: page.id },
+    { fromPath: "platform/mqtt-contracts", toPageId: page.id },
+  ]);
+});
+
+test("a redirect in a space the viewer cannot read resolves to null rather than revealing the target", async () => {
+  const { page, platform, editor } = await movableFixture("MEMBERS");
+  await move(editor, page.id, platform.id, "mqtt-contracts");
+
+  // The member gets the redirect, so the row exists and is resolvable — without this line
+  // the assertion below would also pass against a function that resolves nothing at all.
+  expect(await resolveRedirect(editor, args(ORIGINAL))).not.toBeNull();
+
+  // The non-member gets exactly what they get for a path that never existed. Both callers
+  // ask about the same row: a different answer is what tells the outsider the page is real.
+  expect(await resolveRedirect(stranger, args(ORIGINAL))).toBeNull();
+  expect(await resolveRedirect(stranger, args("architecture/never-existed"))).toBeNull();
+});
+
+test("a redirect to a soft-deleted page 404s instead of delivering the reader to it", async () => {
+  const { space, page, platform, editor } = await movableFixture("ALL_STAFF");
+  await move(editor, page.id, platform.id, "mqtt-contracts");
+  expect(await resolveRedirect(editor, args(ORIGINAL))).not.toBeNull();
+
+  await db.page.update({ where: { id: page.id }, data: { deletedAt: new Date() } });
+
+  expect(await resolveRedirect(editor, args(ORIGINAL))).toBeNull();
+  // Inert, not gone. Task 10 writes redirects for soft-deleted rows on purpose and Task 12's
+  // restore is what makes them work again, so the row must survive the deletion.
+  expect(await db.redirect.count({ where: { spaceId: space.id, fromPath: ORIGINAL } })).toBe(1);
+});
+
+/**
+ * One hop, stated as a property of the resolution rather than of the data.
+ *
+ * A `Redirect` may legitimately sit at a live page's own path — dormant, shadowed by the page
+ * on top of it, waiting for that page to move away. Here one sits at exactly the path the
+ * first redirect resolves to. A resolver that looped "while a redirect exists at the answer"
+ * would walk on to `decisions/adr-0042`; this one stops.
+ */
+test("no redirect chain is followed", async () => {
+  const { space, author, page, platform, decisions, editor } = await movableFixture("ALL_STAFF");
+  await move(editor, page.id, platform.id, "mqtt-contracts");
+
+  const elsewhere = await db.page.create({
+    data: {
+      spaceId: space.id,
+      parentId: decisions.id,
+      slug: "adr-0042",
+      path: "decisions/adr-0042",
+      title: "MQTT topic naming",
+      createdById: author.id,
+      status: "CURRENT",
+    },
+  });
+  // Hand-written, because a correct move never produces it: this is the dormant row.
+  await db.redirect.create({
+    data: {
+      spaceId: space.id,
+      fromPath: "platform/mqtt-contracts",
+      toPageId: elsewhere.id,
+    },
+  });
+
+  expect(await resolveRedirect(editor, args(ORIGINAL))).toEqual({
+    pageId: page.id,
+    path: "platform/mqtt-contracts",
+  });
+});
+
+/**
+ * The self-redirect guard. A redirect standing at the live path of its own target would make
+ * the reader redirect a URL to itself — which a browser follows until it gives up, the exact
+ * production failure mode Step 2 of this task exists to rule out. Task 10's reclaiming
+ * `deleteMany` is what stops the row existing; this is the second line of defence, and it is
+ * only reachable when the page is a read miss for some other reason (here: unpublished).
+ */
+test("a redirect pointing at its own path resolves to null rather than to itself", async () => {
+  const { space, author, editor } = await movableFixture("ALL_STAFF");
+  const unpublished = await db.page.create({
+    data: {
+      spaceId: space.id,
+      slug: "draft-only",
+      path: "draft-only",
+      title: "Draft only",
+      createdById: author.id,
+    },
+  });
+  await db.redirect.create({
+    data: { spaceId: space.id, fromPath: "draft-only", toPageId: unpublished.id },
+  });
+
+  expect(await getPublishedPage(editor, args("draft-only"))).toBeNull();
+  expect(await resolveRedirect(editor, args("draft-only"))).toBeNull();
+});
+
+/**
+ * The same-space constraint on the target, which is the other half of the `toPage` filter and
+ * would otherwise be an untested clause. Nothing in the schema ties `Redirect.spaceId` to
+ * `toPage.spaceId`; no current writer produces a mismatch, and a future one that did would
+ * make this function answer a request for `/engineering/...` with a path that only exists in
+ * `handbook` — a wrong URL, and a readable-space check that was never asked about the space
+ * the reader actually lands in.
+ */
+test("a redirect pointing at a page in another space resolves to null", async () => {
+  const { space, author, page, platform, editor } = await movableFixture("ALL_STAFF");
+  await move(editor, page.id, platform.id, "mqtt-contracts");
+
+  const handbook = await db.space.create({
+    data: { key: "handbook", name: "Handbook", initials: "HB", visibility: "ALL_STAFF" },
+  });
+  const welcome = await db.page.create({
+    data: {
+      spaceId: handbook.id,
+      slug: "welcome",
+      path: "welcome",
+      title: "Welcome aboard",
+      createdById: author.id,
+      status: "CURRENT",
+    },
+  });
+  // Repointed rather than inserted, so the row is otherwise exactly what the move wrote and
+  // the space of the target is the only thing that differs.
+  await db.redirect.updateMany({
+    where: { spaceId: space.id, fromPath: ORIGINAL },
+    data: { toPageId: welcome.id },
+  });
+
+  // The handbook page is readable by everyone, so a permission check alone would let this
+  // through — which is why this is a shape constraint and has its own test.
+  expect(await getPublishedPage(stranger, { spaceKey: "handbook", path: "welcome" })).toBeNull();
+  expect(await resolveRedirect(editor, args(ORIGINAL))).toBeNull();
 });

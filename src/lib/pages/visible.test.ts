@@ -56,8 +56,22 @@ const MODULES: Record<
 > = {
   "src/lib/pages/repo.ts": {
     load: () => import("@/lib/pages/repo"),
-    // Soft-delete tests: tests/integration/pages-repo.test.ts
-    covered: ["getPublishedPage", "listSpacePages", "listRecentlyPublished"],
+    // Soft-delete tests: tests/integration/pages-repo.test.ts —
+    //   `resolveRedirect` is the odd one here: it queries `Redirect`, not `Page`, so the
+    //   filesystem sweep below cannot see it at all — no `db.page.*` token appears in it.
+    //   What catches it is the per-module enumeration: it is an export of a registered
+    //   module, so the next test fails until it is listed. That is worth saying out loud,
+    //   because it is the fourth time in this project the sweep has been too narrow, and
+    //   this time the narrowness is by design — a query that reaches `Page` only through a
+    //   relation filter (`toPage: visiblePage(...)`) is invisible to any regex looking for
+    //   the delegate. Its soft-delete test is "a redirect to a soft-deleted page 404s
+    //   instead of delivering the reader to it".
+    covered: [
+      "getPublishedPage",
+      "listSpacePages",
+      "listRecentlyPublished",
+      "resolveRedirect",
+    ],
     // Queries Space, which has no `deletedAt`.
     exempt: ["getReadableSpaceByKey"],
   },
