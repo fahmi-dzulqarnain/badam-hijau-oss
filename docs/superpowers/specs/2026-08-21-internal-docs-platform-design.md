@@ -196,6 +196,18 @@ publish must move it into that type's vocabulary — an ADR to `PROPOSED` or `AC
 runbook to `CURRENT`. `DRAFT` is therefore legal as an origin state for every type and as
 a destination for none.
 
+> **Correction, found while implementing Phase 2's publish transaction.** The RFC row above
+> and the paragraph beneath it contradict each other: the row begins RFC at `DRAFT`, while the
+> paragraph says `DRAFT` is a destination for none. Read literally, an RFC's first publish has
+> nowhere legal to go — and publishing into `DRAFT` would leave a published RFC
+> indistinguishable from one that has never been published, which is the distinction the whole
+> vocabulary exists to draw.
+>
+> **Resolved: an RFC's first publish goes to `IN_REVIEW`** — the first state an RFC can
+> actually be *in* once anyone can read it. `DRAFT` remains origin-only for every type,
+> including RFC. Phase 3 owns the full vocabulary and may add a `PROPOSED`-style second entry
+> point for RFCs; that is one table entry, not a redesign.
+
 ### 6.2 Relations
 
 Relations are stored **one direction only** and the inverse is derived at read time, so

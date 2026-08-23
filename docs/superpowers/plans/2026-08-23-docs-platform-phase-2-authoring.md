@@ -693,22 +693,64 @@ would have caught this.
 
 ---
 
-## Task 9: Publishing
+## Task 9: Publishing ✅
 
 **Files:**
 - Create: `src/lib/pages/publish.ts`, `src/lib/pages/transition.ts`,
   `src/lib/pages/transition.test.ts`
 - Create: `tests/integration/publish.test.ts`
+- Create: `src/app/api/pages/[pageId]/publish/route.ts` +
+  `tests/integration/publish-route.test.ts`, and a Publish button in
+  `src/components/Editor.tsx`. The original list omitted these, but this phase's own exit
+  criterion — "an editor creates, writes, previews, publishes and reads back a page in the
+  browser" — and Tasks 14 and 15 all require publish to be *reachable*, not merely callable.
 
-- [ ] **Step 1: The status transition rule, as a pure function**
+- [x] **Step 1: The status transition rule, as a pure function**
 
 Phase 3 owns the full per-doc-type vocabularies. Phase 2 needs only: a page may publish into
 `CURRENT`, and an already-`ACCEPTED` ADR may not silently revert to `DRAFT`. Write it as a
 table so Phase 3 extends the table rather than rewriting the caller.
 
-- [ ] **Step 2: The transaction**
+**This step found a contradiction in the spec.** §6.1 lists RFC as `DRAFT → IN_REVIEW → …`
+while the paragraph below it says `DRAFT` is "legal as an origin state for every type and as a
+destination for none". An RFC's first publish therefore has nowhere legal to go, and
+publishing into `DRAFT` would make a published RFC indistinguishable from an unpublished one.
+Resolved as `FIRST_PUBLISH.RFC = IN_REVIEW`, and the correction is written into spec §6.1
+rather than left in a code comment.
 
-Steps 1–3 and 7 of spec §9, all or nothing, in one `db.$transaction`:
+**Markdown is stored unstripped and untrimmed.** The preview pane rendered exactly those
+bytes, so normalising on the way into `PageVersion` would publish something the approved
+preview never showed. Emptiness is tested on a trimmed copy only. The *title* is a different
+matter — it is stripped and trimmed, and empty is refused, because Task 5 deliberately allows
+an empty title at autosave and publish is where that stops being acceptable.
+
+- [x] **Step 2: The transaction**
+
+Steps 1–3 and 7 of spec §9, all or nothing, in one `db.$transaction`.
+
+**Step 3 is split between phases and this plan twice called it whole.** Spec §9 step 3 is
+"Update `Page` (…) **and its `PageSystem` rows**" — the page update is Phase 2, the
+`PageSystem` rows are Phase 6. Implement the former and leave `TODO(phase-6)` inside it.
+
+**Concurrency: a `FOR UPDATE` row lock on the `PageDraft` row, taken as the transaction's
+first statement.** Not the space-wide `pg_advisory_xact_lock` that Tasks 6 and 10 take —
+publish never touches `Page.path`, so that lock would serialise every publish in a space
+against every other publish, create and move over a resource none of them share. What publish
+does share is *this page's draft*, and it has exactly two competitors: another publish of the
+same page, and an autosave of the same page. Both are keyed by `pageId`, so the natural lock
+is the draft row itself — which `saveDraft`'s existing atomic write already takes, so Task 4
+needed no change.
+
+Without it, two publishes read the same draft under MVCC and insert two identical versions,
+one of them pointed at by nothing. `Page.publishedVersionId` being `@unique` does not prevent
+this: it constrains which version can be pointed *at*, not how many are created.
+
+A concurrent **soft delete** is handled by a write predicate rather than a second lock — the
+page update is an `updateMany` carrying `visiblePage(...)` with a row-count check that rolls
+the version insert back. A second `FOR UPDATE` on `Page` would hold a row lock across the
+whole publish and impose a lock-ordering rule on Tasks 10 and 12 for no gain.
+
+The steps:
 
 1. Validate the transition and that the draft is not empty.
 2. Insert `PageVersion` with the draft's title, markdown and the publisher as author.
@@ -729,7 +771,7 @@ Steps 4, 5, 6 and 8 of the spec belong to Phases 3–6 and are **not** stubbed. 
 `TODO(phase-N)` at each point so the sequence stays discoverable from the code, the way
 Phase 1 marked the audit wiring point.
 
-- [ ] **Step 3: Tests**
+- [x] **Step 3: Tests**
 
 Publishing makes the page readable by a member (end to end through `getPublishedPage`, not by
 inspecting rows). The draft is gone afterwards. An illegal transition is rejected and

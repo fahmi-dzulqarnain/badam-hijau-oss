@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **351 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **389 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -24,8 +24,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 6. Creating a page | ✅ |
 | 7. The editor (CodeMirror 6) | ✅ |
 | 8. Server-rendered preview | ✅ |
-| **9. Publishing** | **next** |
-| 10–15 | not started |
+| 9. Publishing | ✅ |
+| **10. Moving a page — the landmine** | **next** |
+| 11–15 | not started |
 
 Findings already worth carrying:
 
@@ -210,6 +211,11 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   stopped short of headings, and no seeded page has an unbreakable one. Found only when Phase
   2's preview pane rendered hostile content. Fixed in `doc.css`, not in the pane. Test a class
   by **injecting** the hostile case, not by hoping the fixtures contain it.
+- **Lock the resource actually shared, not the biggest one to hand.** Create and move take a
+  space-wide advisory lock because they rewrite paths. Publish does not touch paths, so it
+  takes a `FOR UPDATE` row lock on the `PageDraft` row instead — its only competitors are
+  another publish and an autosave of the *same page*. Reusing the space lock would serialise
+  every publish in a space against every create and move over a resource none of them share.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in
