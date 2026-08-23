@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **207 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **239 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -20,8 +20,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 2. Soft-delete predicate + enumeration guard | ✅ |
 | 3. Slug and path rules | ✅ |
 | 4. Draft repo and the conflict contract | ✅ |
-| **5. Draft autosave endpoint** | **next** |
-| 6–15 | not started |
+| 5. Draft autosave endpoint | ✅ |
+| **6. Creating a page** | **next** |
+| 7–15 | not started |
 
 Findings already worth carrying:
 
@@ -43,6 +44,12 @@ Findings already worth carrying:
   The soft-delete guard enumerated one module's exports; `saveDraft` queries `Page` from a
   different module and was invisible to it. It is now a filesystem sweep of `src/` for
   `db.page.*`, with the per-module enumeration inside. Both escape routes mutation-verified.
+- **Two project rules can conflict, and an implementer cannot resolve it.** "Extract a rule
+  implemented twice" collided with "plan fences stay in sync" and "implementers do not edit
+  plans": the control-character strip could not be shared out of `src/lib/bugs/schema.ts`
+  because a Phase 1 whole-file fence quotes it. The agent duplicated it and escalated, which
+  was right. Resolved by extracting to `src/lib/text/control.ts` and annotating the Phase 1
+  fence as superseded. **Escalate a rule conflict; do not pick a side quietly.**
 
 ## Phase 1 — foundations and reader
 

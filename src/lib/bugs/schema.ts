@@ -1,14 +1,5 @@
 import { z } from "zod";
-
-// Postgres rejects NUL outright (22021), turning a legal JSON body into a 500 no retry can
-// clear — and this endpoint exists to receive pasted console output, where stray control
-// bytes come from. Strip the C0/C1 control block only: newline, tab and carriage return
-// carry meaning in a trace, and \p{Cf} (zero-width joiners, bidi marks) is deliberately
-// left alone — stripping it silently breaks ZWJ emoji sequences and right-to-left text.
-const stripControl = (value: string) =>
-  value.replace(/\p{Cc}/gu, (ch) =>
-    ch === "\n" || ch === "\t" || ch === "\r" ? ch : "",
-  );
+import { stripControl } from "@/lib/text/control";
 
 const optionalText = (max: number) =>
   z

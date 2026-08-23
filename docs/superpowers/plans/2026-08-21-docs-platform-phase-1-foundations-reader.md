@@ -3988,6 +3988,11 @@ Expected: FAIL — `Failed to resolve import "./schema"`.
 
 - [ ] **Step 3: Create `src/lib/bugs/schema.ts`**
 
+> **Superseded snapshot.** Phase 2's Task 5 needed the same control-character strip for
+> Markdown, so `stripControl` was extracted to `src/lib/text/control.ts` and this file now
+> imports it. The fence below still shows the inline copy. Read
+> `src/lib/bugs/schema.ts` for the current version.
+
 ```ts
 import { z } from "zod";
 

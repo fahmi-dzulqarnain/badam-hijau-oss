@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stripControl } from "@/lib/text/control";
 
 /**
  * The autosave request body, and the two size rules that go with it.
@@ -39,15 +40,9 @@ export const TITLE_MAX_LENGTH = 300;
  * shipped the `\p{C}` version once and had to fix it; see PROGRESS.md, "reproduce the class,
  * not the instance".
  *
- * Deliberately a second copy of the function in `src/lib/bugs/schema.ts` rather than a
- * shared import, and that is a compromise, not a preference: that file is quoted verbatim by
- * a whole-file fence in the Phase 1 plan, so extracting the helper out of it would put
- * `npm run plan:check` into drift with no sanctioned way to resolve it. The tests below pin
- * the behaviour on this copy so the two cannot silently diverge.
+ * The control strip lives in `@/lib/text/control` — one implementation, shared with the
+ * bug endpoint, because a rule implemented in two places is not yet a convention.
  */
-const stripControl = (value: string) =>
-  value.replace(/\p{Cc}/gu, (ch) => (ch === "\n" || ch === "\t" || ch === "\r" ? ch : ""));
-
 export const draftSaveInput = z.object({
   /**
    * Not trimmed, and not required to be non-empty. This is a *draft*: an editor who clears

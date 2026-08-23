@@ -427,13 +427,13 @@ Generalise it: **a concurrency test that never blocks is not testing a write pre
 
 ---
 
-## Task 5: The draft autosave endpoint
+## Task 5: The draft autosave endpoint ✅
 
 **Files:**
 - Create: `src/app/api/drafts/[pageId]/route.ts`
 - Create: `tests/integration/draft-route.test.ts`
 
-- [ ] **Step 1: `PUT` handler**
+- [x] **Step 1: `PUT` handler**
 
 Reuse the body-size lesson from Phase 1's bug endpoint verbatim, because a Markdown document
 is much larger than a bug report and this endpoint fires every two seconds:
@@ -448,7 +448,18 @@ is much larger than a bug report and this endpoint fires every two seconds:
   one makes the save permanently unretryable. **Not** `\p{C}`, which also destroys ZWJ emoji
   and bidi marks.
 
-- [ ] **Step 2: The 409 body**
+  **Use `stripControl` from `src/lib/text/control.ts`.** It did not exist when this task was
+  written: the rule lived inline in `src/lib/bugs/schema.ts`, and Task 5 duplicated it because
+  extracting it would have put a Phase 1 whole-file fence into drift — a real conflict between
+  two of this project's rules, correctly escalated rather than resolved unilaterally. It is
+  now one implementation with its own tests, imported by both surfaces, and Task 9 (publish)
+  and Task 12 (delete) should import it too rather than making a third copy.
+
+  Its tests write every control character as an **escape sequence**, never a literal. Literal
+  NULs and zero-width marks are invisible in a diff and this project has already had a shell
+  command rejected for carrying one.
+
+- [x] **Step 2: The 409 body**
 
 ```ts
 {
@@ -461,7 +472,7 @@ is much larger than a bug report and this endpoint fires every two seconds:
 Both texts, per the spec. The banner cannot offer "load theirs" without theirs, and cannot
 offer "keep mine" without having kept mine somewhere the reload will not destroy.
 
-- [ ] **Step 3: Tests**
+- [x] **Step 3: Tests**
 
 201/200 on create and update, 409 on stale, 411 on missing length, 413 on oversized, 404 for
 a page in an unreadable space, and a round-trip proving the returned `updatedAt` is what the
