@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **263 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **322 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -22,8 +22,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 4. Draft repo and the conflict contract | ✅ |
 | 5. Draft autosave endpoint | ✅ |
 | 6. Creating a page | ✅ |
-| **7. The editor (CodeMirror 6)** | **next** |
-| 8–15 | not started |
+| 7. The editor (CodeMirror 6) | ✅ |
+| **8. Server-rendered preview** | **next** |
+| 9–15 | not started |
 
 Findings already worth carrying:
 
@@ -50,6 +51,12 @@ Findings already worth carrying:
   are transactional too and would both have escaped. Now `/\b(?:db|tx)\.page\.\w+/`. Three
   times in one project the guard has been too narrow **and silent about it** — when writing
   one, ask what shape of the thing it would fail to see.
+- **Check a comparison rule in both directions before calling it done.** `decideSave`
+  documented, at length and convincingly, why "no `seen` but a draft exists" must be a
+  conflict rather than an overwrite — and then answered `create` for the mirror case, "a
+  `seen` but no draft". Once Task 9's publish deletes drafts, that silently resurrects a
+  draft with pre-publish text over the version just published, returns 201 and tells nobody.
+  Four cases, not three; write the table before the function.
 - **Two project rules can conflict, and an implementer cannot resolve it.** "Extract a rule
   implemented twice" collided with "plan fences stay in sync" and "implementers do not edit
   plans": the control-character strip could not be shared out of `src/lib/bugs/schema.ts`
