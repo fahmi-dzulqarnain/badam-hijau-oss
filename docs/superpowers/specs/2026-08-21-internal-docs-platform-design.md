@@ -382,7 +382,22 @@ interface so it can be replaced without touching callers.
 | Attachment too large or wrong type | Rejected before a presigned URL is issued, with the limit stated in the message |
 | Object storage unreachable | Upload fails with a retryable message; page text is unaffected and already saved |
 | Bug webhook unreachable | Report is already stored; forwarding retries in the background and the reporter sees success |
-| Page moved | Old path resolves via `Redirect`, 301 to the new path |
+| Page moved | Old path resolves via `Redirect`, permanent redirect to the new path — **308**, see below |
+
+**On the permanent redirect's status code.** This table said 301; the implementation emits
+**308**, deliberately.
+
+Next's `permanentRedirect()` emits 308, and forcing a literal 301 would mean writing the status
+by hand in middleware or a route handler — a second source for a response Next already writes.
+It could not live at the edge anyway: the redirect lookup is permission-checked, and this
+project has deliberately deferred splitting the auth config for edge middleware.
+
+On the merits the two are equivalent for canonicalisation and link equity, and the one real
+semantic difference favours 308: 301 has historically licensed intermediaries to rewrite the
+method to GET on the retry, and 308 forbids it. On a GET-only reader route that guarantee is
+never needed, but "never needed" is not "worse". The genuine cost of 308 is its age — RFC 7538
+(2015) — so a sufficiently old crawler or proxy may not recognise it and will treat it as
+300-class.
 
 ## 15. Testing
 

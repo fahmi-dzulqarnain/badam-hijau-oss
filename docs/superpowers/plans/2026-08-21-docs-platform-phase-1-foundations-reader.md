@@ -5049,6 +5049,11 @@ export default function NotFound() {
 
 - [ ] **Step 6: Create `src/app/(reader)/[space]/[...path]/page.tsx`**
 
+> **Superseded snapshot.** Phase 2's Task 11 added move-redirect resolution to this route's
+> read-miss branch, so the fence below is the Phase 1 version. Read
+> `src/app/(reader)/[space]/[...path]/page.tsx` for the current one. Syncing it would import
+> Phase 2's redirect handling into Phase 1's plan.
+
 ```tsx
 import { notFound } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";

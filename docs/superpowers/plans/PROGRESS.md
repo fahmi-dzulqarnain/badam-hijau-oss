@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **424 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **431 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -26,8 +26,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 8. Server-rendered preview | ✅ |
 | 9. Publishing | ✅ |
 | 10. Moving a page — the landmine | ✅ |
-| **11. Redirects in the reader** | **next** |
-| 12–15 | not started |
+| 11. Redirects in the reader | ✅ |
+| **12. Soft delete and restore** | **next** |
+| 13–15 | not started |
 
 Findings already worth carrying:
 
@@ -232,6 +233,20 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 - **`Prisma`'s `startsWith` does not escape `LIKE` metacharacters.** For a path containing a
   backslash it emits a pattern whose own children stop matching, and the read comes back short
   **silently**. Any prefix query over user-controlled text has to be raw, with escaping.
+- **A predicate stated twice is not twice as safe — it is untestable.** `resolveRedirect`
+  first carried `readableSpace` on the redirect's space *and* nested inside the `toPage`
+  filter, as defence in depth. Removing either one alone left all 22 tests passing. State a
+  permission predicate once, on the thing whose readability is the question, and let the other
+  filters carry *shape* constraints with their own tests. The exact inverse of the
+  "implemented in two places is not yet a convention" rule, which is about *logic*, not
+  predicates.
+- **The soft-delete guard has now been too narrow four times**, the last one invisible to both
+  halves: `resolveRedirect` queries `Redirect` and reaches `Page` through a relation filter, so
+  no `page` delegate token exists to sweep for. The sweep now matches **any** Prisma delegate
+  call, and the four modules that cannot reach a `Page` row declare `reachesPage: false` with a
+  reason. Verified by planting a new module that reads `PageVersion` filtered by
+  `{ page: { spaceId } }` — the shape that was previously invisible — and watching it fail.
+  **Name the thing you are protecting, not the syntax you expect it to be written in.**
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in

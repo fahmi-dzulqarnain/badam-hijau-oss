@@ -10,34 +10,49 @@ import { visiblePage } from "@/lib/pages/visible";
  * rail, so the filter cannot be left to reviewer attention. This file fails when a query on
  * `Page` exists anywhere in `src/` without a soft-delete test behind it.
  *
- * It began as an enumeration of one module's exports, which had a blind spot large enough to
- * matter: `saveDraft` in `src/lib/drafts/repo.ts` queries `Page` and was completely invisible
- * to it. Phase 2 adds page queries in at least four more places, several in new modules. So
- * the outer guard is now a **filesystem sweep** — a new module that queries `Page` fails this
- * file until someone registers it and says where its tests are.
+ * This guard has been too narrow **four times**, each time silently, and the widening history
+ * is the useful part:
+ *
+ * 1. It enumerated one module's exports. `saveDraft` in `src/lib/drafts/repo.ts` queries
+ *    `Page` from a different module and was invisible. → became a filesystem sweep.
+ * 2. The sweep matched `db.page.*`. `createPage` does every query as `tx.page.*` inside an
+ *    interactive transaction and contains **zero** `db.page.` tokens. → matches both.
+ * 3. A fence-level lesson from the same family: a bin reported only as a count is where
+ *    staleness hides.
+ * 4. `resolveRedirect` queries **`Redirect`** and reaches `Page` only through a relation
+ *    filter, so no `page` delegate token appears anywhere. The sweep could not see it at all;
+ *    only the per-module enumeration caught it, and that works solely because it happens to
+ *    live in an already-registered module. A *new* module doing relation-filtered `Page` reads
+ *    would have been invisible to both halves.
+ *
+ * So the sweep now matches **any Prisma delegate call**, not just `page`. Every module in
+ * `src/` that talks to the database must be registered — those that cannot reach a `Page` row
+ * declare `reachesPage: false` with a reason, which is one line and makes the claim reviewable
+ * instead of absent.
+ *
+ * The generalisation, stated once for whoever writes the next guard: **name the thing you are
+ * protecting, not the syntax you expect it to be written in.**
  */
 
 const SRC = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const ROOT = join(SRC, "..");
 
 /**
- * Any Prisma read or write against the Page model.
+ * Any Prisma delegate call, on any model, through either the client or a transaction client.
  *
- * `tx.` as well as `db.`: Task 6 does its collision check and its insert inside an
- * interactive transaction, where the delegate is the transaction client and a `db.`-only
- * sweep sees nothing. Tasks 10 and 12 are both transactional too, so the blind spot would
- * have swallowed the move and the delete — the same "a guard scoped too narrowly stops
- * covering as soon as the thing it guards moves" failure this sweep already exists for.
+ * Deliberately not `page`-specific: a query on `Redirect`, `PageVersion` or `PageDraft` can
+ * reach `Page` rows through a relation filter without ever naming the `page` delegate, and
+ * one already did.
  */
-const PAGE_QUERY = /\b(?:db|tx)\.page\.\w+/;
+const PRISMA_QUERY = /\b(?:db|tx)\.[a-z]\w*\.[a-z]\w*\(/;
 
-function sweepForPageQueries(dir: string, found: string[] = []): string[] {
+function sweepForPrismaQueries(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      sweepForPageQueries(full, found);
+      sweepForPrismaQueries(full, found);
     } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-      if (PAGE_QUERY.test(readFileSync(full, "utf8"))) found.push(relative(ROOT, full));
+      if (PRISMA_QUERY.test(readFileSync(full, "utf8"))) found.push(relative(ROOT, full));
     }
   }
   return found;
@@ -50,10 +65,13 @@ function sweepForPageQueries(dir: string, found: string[] = []): string[] {
  * `exempt` means "this does not read Page rows, and here is why" — listed rather than omitted,
  * because an omission reads as an oversight.
  */
-const MODULES: Record<
-  string,
-  { load: () => Promise<Record<string, unknown>>; covered: string[]; exempt: string[] }
-> = {
+type Registration =
+  /** Reads `Page` rows, so every exported reader needs a soft-delete test. */
+  | { load: () => Promise<Record<string, unknown>>; covered: string[]; exempt: string[] }
+  /** Queries the database but cannot reach a `Page` row, directly or through a relation. */
+  | { reachesPage: false; why: string };
+
+const MODULES: Record<string, Registration> = {
   "src/lib/pages/repo.ts": {
     load: () => import("@/lib/pages/repo"),
     // Soft-delete tests: tests/integration/pages-repo.test.ts —
@@ -155,17 +173,35 @@ const MODULES: Record<
     covered: ["saveDraft"],
     exempt: [],
   },
+
+  // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
+  // reads as an oversight, and this claim is the sort a reviewer can check in one line.
+  "src/lib/auth/config.ts": { reachesPage: false, why: "queries User only, to resolve a sign-in" },
+  "src/lib/users/upsert.ts": { reachesPage: false, why: "upserts User from an OIDC profile" },
+  "src/lib/users/viewer.ts": { reachesPage: false, why: "reads User and its memberships" },
+  "src/lib/bugs/create.ts": {
+    reachesPage: false,
+    why:
+      "writes BugReport. It resolves a pageId from a route path, but through " +
+      "src/lib/bugs/context.ts, which is registered separately if it ever queries directly.",
+  },
 };
 
-test("every module that queries Page is registered in this guard", () => {
-  const found = sweepForPageQueries(SRC).sort();
+test("every module that queries the database is registered in this guard", () => {
+  const found = sweepForPrismaQueries(SRC).sort();
   expect(
     found,
-    "a module queries Page but is not registered above — add it, with soft-delete tests",
+    "this module queries Prisma but is not registered above — add it with soft-delete tests, " +
+      "or declare `reachesPage: false` with the reason",
   ).toEqual(Object.keys(MODULES).sort());
 });
 
-test.each(Object.entries(MODULES))(
+/** Only the Page-reading registrations carry per-export coverage. */
+const PAGE_MODULES = Object.entries(MODULES).filter(
+  (e): e is [string, Extract<Registration, { load: unknown }>] => "load" in e[1],
+);
+
+test.each(PAGE_MODULES)(
   "%s: every exported reader has a soft-delete test",
   async (_path, mod) => {
     const loaded = await mod.load();
@@ -184,7 +220,7 @@ test.each(Object.entries(MODULES))(
  * renamed query would otherwise leave a stale name covering nothing and the new name
  * unlisted — and the first half of that mistake is silent.
  */
-test.each(Object.entries(MODULES))(
+test.each(PAGE_MODULES)(
   "%s: every name listed in the guard is still exported",
   async (_path, mod) => {
     const loaded = await mod.load();

@@ -877,27 +877,71 @@ restore because they point at `toPageId`.
 
 ---
 
-## Task 11: Redirects in the reader
+## Task 11: Redirects in the reader ✅
 
 **Files:**
 - Modify: `src/app/(reader)/[space]/[...path]/page.tsx`, `src/lib/pages/repo.ts`
 - Modify: `tests/integration/pages-repo.test.ts`
 
-- [ ] **Step 1: `resolveRedirect(viewer, spaceId, path)`**
+- [x] **Step 1: `resolveRedirect(viewer, { spaceKey, path })`**
 
-On a read miss, look up `(spaceId, fromPath)`. Return the target only when the viewer may read
-the space **and** the target is not soft-deleted — a redirect must not become a way to learn
-that a page exists somewhere you cannot read, and it must not deliver you to a deleted page.
+**The signature in the original plan — `(viewer, spaceId, path)` — was wrong.** A `spaceId`
+means the caller has already resolved a readable space, which is exactly the "guarded by call
+ordering" shape `repo.ts` forbids; and on a read miss the route does not know whether the space
+was readable. Taking the *key* lets the query state `readableSpace(viewer, { key })` itself.
 
-- [ ] **Step 2: 301, one hop only**
+Return the target only when the viewer may read the space **and** the target is not
+soft-deleted — a redirect must not become a way to learn that a page exists somewhere you
+cannot read, and it must not deliver you to a deleted page.
 
-Spec §14: *old path resolves via `Redirect`, 301 to the new path*. Resolve exactly one hop. A
-chain is a bug in the move (step 5 above prevents it), and following chains turns that bug
-into an infinite loop in production instead of a wrong answer in a test.
+**Do not state the permission predicate twice.** The first implementation put
+`readableSpace(viewer, { key })` on the redirect's own space *and* again nested inside the
+`toPage` filter, as defence in depth. Mutating away **either one alone left all 22 tests
+passing**: two statements of one predicate make neither of them testable, and the redundancy
+that reads as safety is what stops a mutation being caught. State it once, on the space the URL
+names — the space whose readability is the question being asked — and make the `toPage` filter
+carry *shape* constraints instead (not soft-deleted; in the space the URL names), each with its
+own test.
 
-- [ ] **Step 3: Tests**
+This is the mirror of the "a rule implemented in two places is not yet a convention" lesson: a
+**predicate** stated in two places is not twice as safe, it is untestable.
 
-Old path 301s to the new one. A redirect into an unreadable space 404s rather than revealing
+A third clause was added that the plan did not ask for: the target must be **in the space the
+URL names**. Nothing in the schema ties `Redirect.spaceId` to `toPage.spaceId`, and a writer
+that broke that would make this function answer `/engineering/…` with a path that only exists
+in `handbook`. It has its own test.
+
+- [x] **Step 2: A permanent redirect, one hop only — and it is 308, not 301**
+
+Resolve exactly one hop. A chain is a bug in the move (Task 10 step 5 prevents it), and
+following chains turns that bug into an infinite loop in production instead of a wrong answer
+in a test.
+
+**One hop is sufficient rather than a limitation, and the schema is why.** `Redirect` stores
+`toPageId`, not a target path, so resolution always lands on the page's *current* path. If the
+page moves again the old redirect still arrives in one hop. Do not add a `toPath`.
+
+Spec §14 said 301; the code emits **308**, and the spec has been corrected rather than the code
+bent to match. `permanentRedirect()` emits 308; forcing a literal 301 means writing the status
+by hand where Next also writes it, and it could not live in middleware anyway — the lookup is
+permission-checked and the auth config has deliberately not been split for the edge. On the
+merits 308 is the more precise of the two: 301 historically licenses an intermediary to rewrite
+the method to GET, 308 forbids it. Its only real cost is age (RFC 7538, 2015).
+
+**Where the lookup goes: inside the miss branch, after the page read.** Not for cost, though
+that matters — the load-bearing reason is that a `Redirect` row and a live page can legitimately
+share a path. A redirect goes dormant the moment something is created or moved on top of it, and
+Task 10 only reclaims the ones its own move makes live. Looking the redirect up *first* sends
+readers away from a page that exists and renders. **Measured:** with a dormant redirect over a
+live published page, the correct order returns 200 and renders it; the lookup hoisted above the
+page read returns `308` to somewhere else — **and the whole vitest suite still passed.**
+
+That ordering is a route property, so no vitest can pin it. It is an HTTP-level check, and
+Tasks 14 and 15 are where it belongs.
+
+- [x] **Step 3: Tests**
+
+Old path redirects to the new one. A redirect into an unreadable space 404s rather than revealing
 the target. A redirect to a soft-deleted page 404s. No redirect chain is followed.
 
 ---
@@ -977,6 +1021,10 @@ must preserve that.
 - [ ] A `VIEWER` sees no edit affordance and cannot reach `/edit/[pageId]` by URL.
 - [ ] No editor route scrolls horizontally — the guard that has caught three regressions in
       three different shapes.
+- [ ] **Pin the redirect lookup's position in the request.** With a dormant `Redirect` sitting
+      over a live published page, assert the page renders (200) rather than redirecting away
+      from it. Task 11 measured the hoisted-lookup mutation passing the entire vitest suite —
+      it is a route property and only an HTTP-level check can catch it.
 - [ ] **Close the guard's real gap.** Add a DOM-injection probe to the reader spec: append an
       `h2`, a `p` and a `pre` each carrying a 300-character unbreakable token, assert zero
       overflow, remove them. Task 8 found a 4,660px reader overflow from a long heading that
