@@ -1,6 +1,6 @@
 # Phase 1 execution status
 
-Branch: `phase-1-foundations-reader` · 87 commits · **105 tests passing** · typecheck
+Branch: `phase-1-foundations-reader` · 95 commits · **125 tests passing** · typecheck
 and build clean · working tree clean
 
 Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs-platform-phase-1-foundations-reader.md)
@@ -20,30 +20,32 @@ Plan: [`2026-08-21-docs-platform-phase-1-foundations-reader.md`](2026-08-21-docs
 | 10. Reader shell | ✅ approved |
 | 11. Bug reporting | ✅ approved |
 | 12. Page reader route | ✅ approved |
-| **13. Space landing** | **next — validated, ready to dispatch** |
-| 14. Playwright E2E | not started |
+| 13. Space landing | ✅ approved |
+| **14. Playwright E2E** | **next — plan re-diffed against HEAD, ready to dispatch** |
 | 15. Cold-start smoke test | not started |
 
 ## Test suite
 
-105 tests, 15 files. 55 pure unit (no database), 50 integration against real Postgres.
+125 tests, 17 files. 85 pure unit (no database), 40 integration against real Postgres.
 
 | File | Tests |
 |---|---|
 | `src/lib/users/gate.test.ts` | 15 |
 | `src/lib/authz/can.test.ts` | 14 |
+| `tests/integration/pages-repo.test.ts` | 12 |
 | `src/lib/markdown/render.test.ts` | 12 |
+| `src/lib/bugs/schema.test.ts` | 10 |
 | `src/lib/pages/tree.test.ts` | 9 |
-| `tests/integration/pages-repo.test.ts` | 8 |
-| `src/lib/version/build.test.ts` | 6 |
-| `src/lib/auth/test-login.test.ts` | 3 |
-| `src/lib/bugs/schema.test.ts` | 8 |
-| `tests/integration/bug-context.test.ts` | 5 |
+| `src/lib/spaces/landing.test.ts` | 8 |
+| `src/lib/pages/href.test.ts` | 8 |
 | `tests/integration/bug-route.test.ts` | 6 |
-| `tests/integration/bug-report.test.ts` | 4 |
-| `tests/integration/user-upsert.test.ts` | 4 |
+| `src/lib/version/build.test.ts` | 6 |
+| `tests/integration/bug-context.test.ts` | 5 |
 | `tests/integration/viewer.test.ts` | 4 |
+| `tests/integration/user-upsert.test.ts` | 4 |
+| `tests/integration/bug-report.test.ts` | 4 |
 | `tests/integration/authz-where.test.ts` | 3 |
+| `src/lib/auth/test-login.test.ts` | 3 |
 | `tests/integration/spaces.test.ts` | 2 |
 
 ## Running it
@@ -137,6 +139,17 @@ Re-running the seed updates page **markdown** (a new version is published) but n
 - **The bug dialog portals to `document.body`.** Rendered as a sibling of its trigger it sat
   inside `.rail-l`, which is `display: none` below 860px — taking the open dialog and the
   user's typed text with it.
+- **"Published" means `publishedVersionId`, never `publishedAt`.** They are two independent
+  nullable columns with no constraint tying them together. A query filtering on the
+  timestamp alone survives an unpublish or a rollback and returns a row whose link 404s and
+  whose byline has no author. State both.
+- **Every link to a page goes through `pageHref`** (`src/lib/pages/href.ts`). `Page.path` has
+  no format constraint, so a slug containing `#`, `?` or a space silently produces a broken
+  link. Three sites needed this and two of them had grown their own divergent copy.
+- **A rule implemented in two places is not yet a convention.** The draft-is-inert rule and
+  the path-encoding rule were each honoured by the nav rail and the breadcrumbs and then
+  quietly dropped by the third link site to be written. Both times the fix was to make the
+  rule a shared function rather than a habit.
 - Implementers create a **new commit**, never `--amend`.
 
 ## Working method that has earned its keep
@@ -174,6 +187,17 @@ Re-running the seed updates page **markdown** (a new version is published) but n
   not** — the reported case genuinely disappears and the class stays open.
 - **Only ever stage explicit paths while a subagent is live.** A `git add -A` once swept an
   implementer's in-flight work into an unrelated commit.
+- **Ask a reviewer to name which mutant each test kills.** It is the only question that has
+  reliably separated a test that pins behaviour from one that merely runs it. On Task 13 it
+  found that three real mutations — uncounted nested drafts, only the first module
+  summarised, and every module link pointing at the wrong URL — passed the whole suite, and
+  that one test could not fail at all, because `[].map(anything)` is `[]`.
+- **A fixture whose fields all default to the same value cannot catch a field mix-up.**
+  `slug`, `path` and `title` all defaulted to the node id, so swapping `path` for `slug` in
+  the implementation was invisible. Give every field a distinguishable default.
+- **Verifying a fix by hand is not the same as verifying its class.** The pluralisation fix
+  landed on `page/pages` and left `draft` singular directly beside it, and the seed has
+  exactly one draft, so every by-hand check of that line looked right.
 
 ## Offboarding a user
 

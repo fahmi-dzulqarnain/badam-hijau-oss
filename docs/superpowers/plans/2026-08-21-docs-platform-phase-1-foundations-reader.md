@@ -5074,6 +5074,21 @@ git commit -m "feat: add page reader with breadcrumbs, toc and page info"
 - Replace: `src/app/(reader)/[space]/page.tsx` (Task 10 shipped a placeholder here)
 - Modify: `src/lib/pages/repo.ts`
 
+Its fix round reached further than the list above, all of it driven by review findings:
+- Create: `src/lib/pages/href.ts` + `src/lib/pages/href.test.ts` — one `pageHref(spaceKey,
+  path)`. The landing page interpolated `Page.path` raw while `NavRail` and `Breadcrumbs`
+  each carried their own per-segment encoder, so the same slug could produce a working link
+  in one place and a broken one two inches away.
+- Modify: `src/components/NavRail.tsx`, `src/components/Breadcrumbs.tsx` — both now import
+  the shared helper and their local copies are gone. **This supersedes the fences for those
+  two files in Task 10**; read the source, not those fences. One behaviour change, toward
+  the safer copy: NavRail did not encode the space key and now does.
+- Modify: `src/components/doc.css` — `.landing` rules for the muted count text, the inert
+  draft module, and `overflow-wrap` on list items. `.doc` is not `.body`, so these items sat
+  outside the markdown pipeline's overflow guard.
+- Modify: `tests/integration/pages-repo.test.ts` — `listRecentlyPublished` shipped with no
+  test at all, the only permission-bearing query in `repo.ts` without one.
+
 - [ ] **Step 1: Write the failing test**
 
 `src/lib/spaces/landing.test.ts`:
@@ -5086,9 +5101,13 @@ import type { TreeNode } from "@/lib/pages/tree";
 function node(over: Partial<TreeNode> & { id: string }): TreeNode {
   return {
     parentId: null,
-    slug: over.id,
-    path: over.id,
-    title: over.id,
+    // `slug`, `path` and `title` all defaulted to `over.id`, which made three distinct
+    // fields indistinguishable: a summary reading `module.slug` where it means
+    // `module.path` — every module link pointing at a wrong URL — passed the whole suite.
+    // Each default is now distinct from the other two.
+    slug: `${over.id}-slug`,
+    path: `docs/${over.id}`,
+    title: `${over.id} title`,
     status: "CURRENT",
     docType: "DOC",
     publishedVersionId: "v",
@@ -5111,7 +5130,14 @@ test("counts published and draft descendants per module", () => {
   ]);
 
   expect(modules).toEqual([
-    { id: "decisions", title: "Decisions", path: "decisions", pageCount: 2, draftCount: 1 },
+    {
+      id: "decisions",
+      title: "Decisions",
+      path: "docs/decisions",
+      isDraft: false,
+      pageCount: 2,
+      draftCount: 1,
+    },
   ]);
 });
 
@@ -5125,12 +5151,62 @@ test("counts nested descendants at any depth", () => {
   expect(modules[0]?.pageCount).toBe(2);
 });
 
+test("counts a draft nested below the top level, not just an immediate child", () => {
+  const modules = summariseModules([
+    node({
+      id: "a",
+      children: [
+        node({
+          id: "b",
+          parentId: "a",
+          children: [node({ id: "c", parentId: "b", publishedVersionId: null })],
+        }),
+      ],
+    }),
+  ]);
+  expect(modules[0]?.draftCount).toBe(1);
+  expect(modules[0]?.pageCount).toBe(1);
+});
+
 test("a module with no children reports zero, not one", () => {
   expect(summariseModules([node({ id: "empty" })])[0]?.pageCount).toBe(0);
 });
 
-test("an empty tree produces no modules", () => {
-  expect(summariseModules([])).toEqual([]);
+test("summarises every module, not just the first", () => {
+  const modules = summariseModules([
+    node({ id: "architecture" }),
+    node({ id: "decisions" }),
+    node({ id: "runbooks" }),
+  ]);
+  expect(modules.map((m) => m.id)).toEqual(["architecture", "decisions", "runbooks"]);
+});
+
+test("the link path comes from `path`, not `slug`", () => {
+  const modules = summariseModules([
+    node({
+      id: "topic-registry",
+      slug: "topic-registry",
+      path: "architecture/mqtt-contracts/topic-registry",
+    }),
+  ]);
+  expect(modules[0]?.path).toBe("architecture/mqtt-contracts/topic-registry");
+});
+
+test("a module with no published version of its own is flagged as a draft", () => {
+  expect(summariseModules([node({ id: "wip", publishedVersionId: null })])[0]?.isDraft).toBe(
+    true,
+  );
+});
+
+test("a published module is not a draft merely because a child is", () => {
+  const modules = summariseModules([
+    node({
+      id: "decisions",
+      children: [node({ id: "adr-1", parentId: "decisions", publishedVersionId: null })],
+    }),
+  ]);
+  expect(modules[0]?.isDraft).toBe(false);
+  expect(modules[0]?.draftCount).toBe(1);
 });
 ```
 
@@ -5148,6 +5224,12 @@ export type ModuleSummary = {
   id: string;
   title: string;
   path: string;
+  /**
+   * The module itself has no published version. `getPublishedPage` requires one, so a link
+   * to it would 404 for everyone including admins — the landing page renders it as inert
+   * text, exactly as the nav rail does.
+   */
+  isDraft: boolean;
   pageCount: number;
   draftCount: number;
 };
@@ -5175,6 +5257,7 @@ export function summariseModules(tree: TreeNode[]): ModuleSummary[] {
       id: module.id,
       title: module.title,
       path: module.path,
+      isDraft: module.publishedVersionId === null,
       pageCount: counts.published,
       draftCount: counts.drafts,
     };
@@ -5194,19 +5277,29 @@ Append to the file:
 ```ts
 export const listRecentlyPublished = cache(
   async (viewer: Viewer, spaceId: string, limit = 5) => {
-  return db.page.findMany({
-    where: { spaceId, publishedAt: { not: null }, space: readableSpace(viewer) },
-    orderBy: { publishedAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      title: true,
-      path: true,
-      publishedAt: true,
-      publishedVersion: { select: { author: { select: { name: true } } } },
-    },
-  });
-});
+    return db.page.findMany({
+      // `publishedAt` and `publishedVersionId` are two independent nullable columns with no
+      // constraint tying them together, so "published" has to be stated as both. Filtering
+      // on the timestamp alone would survive an unpublish or a rollback (Phase 2) and yield
+      // a row whose link 404s and whose byline has no author.
+      where: {
+        spaceId,
+        publishedAt: { not: null },
+        publishedVersionId: { not: null },
+        space: readableSpace(viewer),
+      },
+      orderBy: { publishedAt: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        title: true,
+        path: true,
+        publishedAt: true,
+        publishedVersion: { select: { author: { select: { name: true } } } },
+      },
+    });
+  },
+);
 ```
 
 - [ ] **Step 6: Replace the placeholder `src/app/(reader)/[space]/page.tsx`**
@@ -5221,6 +5314,7 @@ soft navigation to the same route. The layout already provides it.
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
+import { pageHref } from "@/lib/pages/href";
 import {
   getReadableSpaceByKey,
   listRecentlyPublished,
@@ -5245,44 +5339,68 @@ export default async function SpaceLanding({
   const recent = await listRecentlyPublished(viewer, space.id);
 
   return (
-    <main className="doc">
+    <main className="doc landing">
       <h1>{space.name}</h1>
       {space.description ? <p>{space.description}</p> : null}
 
       <h2>Choose a module</h2>
-      <ul>
-        {modules.map((module) => (
-          <li key={module.id}>
-            <Link href={`/${space.key}/${module.path}`}>{module.title}</Link>{" "}
-            {module.pageCount > 0 || module.draftCount > 0 ? (
-              <span className="k">
-                {/* A childless module is just a page — a count of 0 next to a working link
-                    reads as "empty section", so it is omitted entirely rather than shown as
-                    zero. summariseModules counts descendants, which is correct; this is a
-                    presentation decision. */}
-                {module.pageCount > 0
-                  ? `${module.pageCount} ${module.pageCount === 1 ? "page" : "pages"}`
-                  : ""}
-                {module.pageCount > 0 && module.draftCount > 0 ? " · " : ""}
-                {module.draftCount > 0 ? `${module.draftCount} draft` : ""}
-              </span>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+      {modules.length === 0 ? (
+        <p className="k">This space has no pages yet.</p>
+      ) : (
+        <ul>
+          {modules.map((module) => (
+            <li key={module.id}>
+              {/* A draft module has no published version, so getPublishedPage would 404 a
+                  link to it — for admins too. Show that it exists, as the nav rail does,
+                  but do not offer a link that cannot work. */}
+              {module.isDraft ? (
+                <span className="landingdraft">
+                  {module.title}
+                  <span className="tag-draft">Draft</span>
+                </span>
+              ) : (
+                <Link href={pageHref(space.key, module.path)}>{module.title}</Link>
+              )}{" "}
+              {module.pageCount > 0 || module.draftCount > 0 ? (
+                <span className="k">
+                  {/* A childless module is just a page — a count of 0 next to a working link
+                      reads as "empty section", so it is omitted entirely rather than shown as
+                      zero. summariseModules counts descendants, which is correct; this is a
+                      presentation decision. */}
+                  {module.pageCount > 0
+                    ? `${module.pageCount} ${module.pageCount === 1 ? "page" : "pages"}`
+                    : ""}
+                  {module.pageCount > 0 && module.draftCount > 0 ? " · " : ""}
+                  {module.draftCount > 0
+                    ? `${module.draftCount} ${module.draftCount === 1 ? "draft" : "drafts"}`
+                    : ""}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <h2>Recently published</h2>
-      <ul>
-        {recent.map((page) => (
-          <li key={page.id}>
-            <Link href={`/${space.key}/${page.path}`}>{page.title}</Link>{" "}
-            <span className="k">
-              {page.publishedVersion?.author.name}
-              {page.publishedAt ? ` · ${dateFormat.format(page.publishedAt)}` : ""}
-            </span>
-          </li>
-        ))}
-      </ul>
+      {recent.length === 0 ? (
+        <p className="k">Nothing has been published in this space yet.</p>
+      ) : (
+        <ul>
+          {recent.map((page) => (
+            <li key={page.id}>
+              <Link href={pageHref(space.key, page.path)}>{page.title}</Link>{" "}
+              <span className="k">
+                {/* listRecentlyPublished's `where` requires both publishedVersionId and
+                    publishedAt to be non-null, but Prisma types relations and nullable
+                    columns from the schema, not from the filter — so these stay optional to
+                    the compiler and the render stays total rather than asserting. */}
+                {page.publishedVersion?.author.name}
+                {page.publishedAt ? ` · ${dateFormat.format(page.publishedAt)}` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </main>
   );
 }
@@ -5314,7 +5432,9 @@ test of its own.
 
 **Files:**
 - Create: `playwright.config.ts`, `e2e/reader.spec.ts`
-- Modify: `src/lib/auth/config.ts`, `package.json`, `.env.example`
+- Modify: `package.json`
+- Already done in earlier tasks, do **not** redo: the test-login provider in
+  `src/lib/auth/config.ts` (Task 10) and the `ALLOW_TEST_LOGIN` entry in `.env.example`
 
 - [ ] **Step 1: Install Playwright**
 
@@ -5323,9 +5443,13 @@ npm install -D @playwright/test
 npx playwright install chromium
 ```
 
-- [ ] **Step 2: Add the guarded test login to `src/lib/auth/config.ts`**
+- [x] **Step 2: Add the guarded test login to `src/lib/auth/config.ts`** — ALREADY SHIPPED
 
-Add the import and extend the `providers` array:
+> **Superseded by Task 10.** The provider exists. The fence below is the *original* Task 14
+> text and no longer matches the shipped code: the flag is named `allowTestLogin`, not
+> `testLoginEnabled`. Read `src/lib/auth/config.ts` for the truth; do not apply this fence.
+
+The original text read:
 
 ```ts
 import Credentials from "next-auth/providers/credentials";
@@ -5369,11 +5493,12 @@ the flag *is* set, which is the easy half. A unit test that clears `ALLOW_TEST_L
 imports the config fresh, and asserts `test-login` is not among the providers is the piece
 that actually guards against shipping a passwordless super-admin login.
 
-- [ ] **Step 3: Document the flag in `.env.example`**
+- [x] **Step 3: Document the flag in `.env.example`** — ALREADY SHIPPED
 
-```bash
-printf 'ALLOW_TEST_LOGIN=""   # set to 1 for e2e runs only, never in a deployed environment\n' >> .env.example
-```
+`.env.example` already carries an `ALLOW_TEST_LOGIN` entry with a stronger warning than the
+one this step appends, plus the note that `AUTH_SECRET` must be distinct per environment.
+Running the original `printf >> .env.example` would append a weaker duplicate. Verify with
+`grep -n ALLOW_TEST_LOGIN .env.example` and move on.
 
 - [ ] **Step 4: Create `playwright.config.ts`**
 
@@ -5409,6 +5534,15 @@ export default defineConfig({
 - [ ] **Step 6: Write the failing tests**
 
 `e2e/reader.spec.ts`:
+
+**One assertion to watch.** In `a non-member gets not-found rather than forbidden`, the
+`404` status and the "does not leak the title" assertion were both verified by hand against
+a running server and hold. The `Not found` **heading** assertion was not: the 404 response
+body is an empty shell, because `notFound()` under Next 16 streaming leaves the content to
+the client render. `src/app/not-found.tsx` does contain `<h1>Not found</h1>`, so a real
+browser will very likely satisfy it — but if it fails, fix it by asserting what the browser
+actually renders. **Do not weaken the `not.toContainText("MQTT contracts")` assertion beside
+it** — that one is the security property this test exists for.
 
 ```ts
 import { expect, test } from "@playwright/test";
@@ -5514,7 +5648,20 @@ test("the alpha badge and build string are visible, and a bug can be reported", 
 });
 ```
 
-- [ ] **Step 7: Run the tests**
+- [ ] **Step 7: Add the negative unit test that no Playwright test can cover**
+
+The prose at the top of this task calls this "the piece that actually guards against
+shipping a passwordless super-admin login", and then no step creates it. Playwright cannot:
+`webServer.env` sets `ALLOW_TEST_LOGIN=1`, so every E2E run exercises the flag-on case only.
+The three existing tests in `src/lib/auth/test-login.test.ts` cover the flag *parser*, not
+the `providers` array.
+
+Add a vitest test that clears `ALLOW_TEST_LOGIN`, imports the auth config **fresh**
+(`vi.resetModules()` — the module reads the flag at import time, so a cached module keeps
+the old value), and asserts `test-login` is absent from the providers array while `company`
+is still present. Assert the positive case in the same file so the pair reads together.
+
+- [ ] **Step 8: Run the tests**
 
 ```bash
 npm run db:seed
@@ -5524,10 +5671,13 @@ npm run test:e2e
 Expected: 8 passed. If sign-in times out, confirm `ALLOW_TEST_LOGIN=1` reached the server
 process — it is set by `webServer.env`, not by `.env`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
+
+Stage explicit paths only — `git add -A` once swept a live subagent's in-flight work into an
+unrelated commit on this project.
 
 ```bash
-git add -A
+git add playwright.config.ts e2e/ package.json package-lock.json src/lib/auth/test-login.test.ts
 git commit -m "test: add end-to-end coverage for reading, permissions and bug reporting"
 ```
 
