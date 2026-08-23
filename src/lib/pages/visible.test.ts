@@ -93,6 +93,22 @@ const MODULES: Record<
     covered: ["getPageForEditing", "canEditPage"],
     exempt: [],
   },
+  "src/lib/pages/publish.ts": {
+    load: () => import("@/lib/pages/publish"),
+    // Soft-delete tests: tests/integration/publish.test.ts —
+    //   "a soft-deleted page cannot be published, and reads as not-found" covers the
+    //   authorisation read, and "a super admin's publish is not also a soft-delete bypass"
+    //   pins that the permission bypass is not also a soft-delete bypass.
+    //
+    //   The module has a SECOND page query, and it is a write: the `updateMany` that moves
+    //   `publishedVersionId` carries `visiblePage()` as a write predicate, so a soft delete
+    //   committing mid-transaction matches nothing and the publish rolls back. Covered by
+    //   "a soft delete landing mid-publish rolls the whole transaction back", which stages
+    //   the interleaving with a held row lock — a filter on a write is invisible to any test
+    //   that cannot arrange for the row to change underneath it.
+    covered: ["publishPage"],
+    exempt: [],
+  },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),
     // Soft-delete tests: tests/integration/drafts-repo.test.ts

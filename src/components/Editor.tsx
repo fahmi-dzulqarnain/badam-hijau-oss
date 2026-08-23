@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { Annotation, EditorState as CodeMirrorState } from "@codemirror/state";
@@ -12,6 +13,7 @@ import {
   initialEditorState,
   saveStatusLabel,
   shouldAutosave,
+  type EditorAction,
   type EditorState,
 } from "@/lib/editor/state";
 
@@ -61,9 +63,20 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
 type PreviewState = { html: string; pending: boolean; error: string | null };
 
 export function Editor({ page }: { page: EditorPage }) {
+  const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialEditorState(page.updatedAt));
   const [title, setTitle] = useState(page.title);
   const [hydrated, setHydrated] = useState(false);
+  /**
+   * Publishing is its own state, not a `SaveStatus`. A failed publish and a failed save are
+   * different failures with different remedies, and folding them into one indicator would
+   * mean a publish refusal wiping out the save state — or, worse, "Saved 14:22" sitting
+   * beside a publish that did not happen.
+   */
+  const [publishing, setPublishing] = useState<{ pending: boolean; error: string | null }>({
+    pending: false,
+    error: null,
+  });
   const [preview, setPreview] = useState<PreviewState>({
     html: "",
     pending: true,
@@ -101,11 +114,16 @@ export function Editor({ page }: { page: EditorPage }) {
    * One save. Reads the document out of the view at the moment it fires rather than from
    * React state, which is the other half of "do not round-trip the document per keystroke":
    * the text lives in CodeMirror and React never holds a copy of it.
+   *
+   * It **returns the action it dispatched**, so a caller that needs to know whether the save
+   * landed can read the outcome rather than the reducer state. Publish is that caller, and
+   * the distinction matters: `dispatch` is asynchronous, so the state a click handler can see
+   * immediately after awaiting a save is still the state from before it.
    */
   const save = useCallback(
-    async (override?: { seen: string | null }) => {
+    async (override?: { seen: string | null }): Promise<EditorAction | null> => {
       const view = viewRef.current;
-      if (!view) return;
+      if (!view) return null;
 
       const mine = { title: titleRef.current, markdown: view.state.doc.toString() };
       // `override` is how "keep mine" re-sends with THEIR timestamp: an explicit overwrite
@@ -130,17 +148,18 @@ export function Editor({ page }: { page: EditorPage }) {
         status = response.status;
         body = await response.json().catch(() => null);
       } catch {
-        dispatch({
+        const offline: EditorAction = {
           type: "save-failed",
           message: "Not saved — the browser could not reach the server",
-        });
+        };
+        dispatch(offline);
         // A request that never reached a server is the one failure always worth retrying —
         // `shouldRetry(0)`. The scheduler cleared its dirty flag when this save started, so
         // it has to be told there is still something to write; otherwise the work sits
         // unsaved until the next keystroke, and the person who has stopped typing is
         // precisely the one about to close the tab.
         schedulerRef.current?.edited();
-        return;
+        return offline;
       }
 
       const action = saveOutcome({ status, body, mine });
@@ -154,6 +173,7 @@ export function Editor({ page }: { page: EditorPage }) {
       if (action.type === "save-failed" && shouldRetry(status)) {
         schedulerRef.current?.edited();
       }
+      return action;
     },
     [page.id],
   );
@@ -409,6 +429,91 @@ export function Editor({ page }: { page: EditorPage }) {
     schedulerRef.current?.edited();
   };
 
+  /**
+   * Waits until this client has nothing unsent, or reports that it cannot get there.
+   *
+   * Publish publishes **the draft row**, not what is on screen, so the unsent edits have to
+   * land first — otherwise clicking Publish two seconds after a keystroke publishes the text
+   * from before it, and the editor is told the page went out with a paragraph it did not
+   * contain.
+   *
+   * It goes through the scheduler's own `flush` rather than calling `save` directly, because
+   * clicking this button blurs the editor and the blur handler already starts a save: a
+   * second, direct save would be a PUT overlapping the first, carrying a `seen` the first is
+   * about to invalidate — a 409 raised by the user against themselves. `flush` is the one
+   * entry point that knows about the in-flight rule.
+   *
+   * The state is read from `stateRef` between waits, never from the closure: `dispatch` is
+   * asynchronous, so the render that owns this handler cannot see the outcome of a save it
+   * just triggered.
+   */
+  const settleSaves = useCallback(async (): Promise<boolean> => {
+    // ~4 seconds, which is twice the autosave interval. A bound rather than a deadline: if a
+    // save is genuinely stuck, saying so beats publishing text nobody has seen confirmed.
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const current = stateRef.current;
+      // An unanswered conflict or a failure is a question for the person, not something to
+      // publish through. Their own banner already says what it is.
+      if (current.conflict !== null || current.status.kind === "error") return false;
+      if (current.status.kind === "clean" && schedulerRef.current?.isDirty() !== true) {
+        return true;
+      }
+      schedulerRef.current?.flush();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  }, []);
+
+  const publish = async () => {
+    if (publishing.pending) return;
+    setPublishing({ pending: true, error: null });
+
+    if (!(await settleSaves())) {
+      setPublishing({
+        pending: false,
+        error:
+          "Not published — your latest changes are not saved yet. Deal with the notice " +
+          "above first, then publish.",
+      });
+      return;
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`/api/pages/${page.id}/publish`, { method: "POST" });
+    } catch {
+      setPublishing({
+        pending: false,
+        error: "Not published — the browser could not reach the server.",
+      });
+      return;
+    }
+
+    const body = await response.json().catch(() => null);
+    if (!response.ok || typeof body?.href !== "string") {
+      setPublishing({
+        pending: false,
+        // The endpoint's own sentence, verbatim. Every refusal `publishPage` produces is
+        // already written for the person who has to act on it — an empty title, an empty
+        // draft, a transition that is not allowed — and re-wording it here would give this
+        // surface a second, worse copy of each one.
+        error:
+          typeof body?.message === "string"
+            ? body.message
+            : `Not published — the server refused it (${response.status}).`,
+      });
+      return;
+    }
+
+    // The draft row no longer exists. Stop both clocks before navigating: a pending autosave
+    // firing into a deleted draft would 409 with `theirs: null` and raise the "this draft is
+    // gone" banner over a page that is on its way out, which is a true statement and a
+    // baffling one to be shown a moment after a successful publish.
+    schedulerRef.current?.stop();
+    previewRef.current?.stop();
+    router.push(body.href as Parameters<typeof router.push>[0]);
+  };
+
   const onTitleChange = (value: string) => {
     setTitle(value);
     titleRef.current = value;
@@ -426,14 +531,35 @@ export function Editor({ page }: { page: EditorPage }) {
           <span className="ed-chip">{page.docType}</span>
           {page.status === "DRAFT" ? <span className="ed-chip">Unpublished</span> : null}
         </div>
-        <span
-          className={`ed-status ed-status-${state.status.kind}`}
-          role="status"
-          aria-live="polite"
-        >
-          {saveStatusLabel(state, hydrated ? formatTime : null)}
-        </span>
+        <div className="ed-actions">
+          <span
+            className={`ed-status ed-status-${state.status.kind}`}
+            role="status"
+            aria-live="polite"
+          >
+            {saveStatusLabel(state, hydrated ? formatTime : null)}
+          </span>
+          <button
+            type="button"
+            className="ed-publish"
+            onClick={() => void publish()}
+            disabled={publishing.pending}
+          >
+            {publishing.pending ? "Publishing…" : "Publish"}
+          </button>
+        </div>
       </div>
+
+      {/*
+        A publish refusal gets its own alert rather than the save indicator's slot. The two
+        say different things — "your work is not stored" versus "your work is stored and did
+        not go out" — and the second must not overwrite the first.
+      */}
+      {publishing.error ? (
+        <p className="ed-publish-error" role="alert">
+          {publishing.error}
+        </p>
+      ) : null}
 
       {conflict ? (
         <div className="ed-conflict" role="alert">

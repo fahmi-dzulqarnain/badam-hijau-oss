@@ -98,6 +98,48 @@
   white-space: normal;
 }
 
+/*
+ * The save indicator and the Publish button share the bar's right-hand end. `min-width: 0`
+ * for the same reason every other flex child in this file has it — an error status is a whole
+ * sentence, and without it that sentence sets the flex base size and widens the page.
+ */
+.ed-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ed-publish {
+  flex: none;
+  padding: 6px 13px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--surface);
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+
+.ed-publish[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* Its own line, full width, wrapping — every message it carries is a whole sentence. */
+.ed-publish-error {
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
 .ed-conflict {
   margin: 16px 0 0;
   padding: 13px 15px;
