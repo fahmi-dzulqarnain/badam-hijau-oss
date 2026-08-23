@@ -20,8 +20,16 @@ import { visiblePage } from "@/lib/pages/visible";
 const SRC = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const ROOT = join(SRC, "..");
 
-/** Any Prisma read or write against the Page model. */
-const PAGE_QUERY = /\bdb\.page\.\w+/;
+/**
+ * Any Prisma read or write against the Page model.
+ *
+ * `tx.` as well as `db.`: Task 6 does its collision check and its insert inside an
+ * interactive transaction, where the delegate is the transaction client and a `db.`-only
+ * sweep sees nothing. Tasks 10 and 12 are both transactional too, so the blind spot would
+ * have swallowed the move and the delete — the same "a guard scoped too narrowly stops
+ * covering as soon as the thing it guards moves" failure this sweep already exists for.
+ */
+const PAGE_QUERY = /\b(?:db|tx)\.page\.\w+/;
 
 function sweepForPageQueries(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -52,6 +60,21 @@ const MODULES: Record<
     covered: ["getPublishedPage", "listSpacePages", "listRecentlyPublished"],
     // Queries Space, which has no `deletedAt`.
     exempt: ["getReadableSpaceByKey"],
+  },
+  "src/lib/pages/create.ts": {
+    load: () => import("@/lib/pages/create"),
+    // Soft-delete tests: tests/integration/page-create.test.ts —
+    //   "a soft-deleted parent cannot be used as a parent" covers the parent lookup, which
+    //   carries `visiblePage()` like every other read here;
+    //   "a path held by a soft-deleted page is refused, naming it" covers the collision
+    //   check, which deliberately does NOT — the unique index does not know about
+    //   `deletedAt`, so a filtered check would pass and the insert would fail. Registered as
+    //   `covered` rather than `exempt` because both halves are pinned by a test; the second
+    //   one pins the *absence* of the filter, which is the part a future reader would
+    //   otherwise "fix".
+    covered: ["createPage"],
+    // Queries Space, which has no `deletedAt`.
+    exempt: ["listEditableSpaces"],
   },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),

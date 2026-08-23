@@ -1,0 +1,96 @@
+/*
+ * The create form. Every class is prefixed `np-` and styled nowhere else, which is what
+ * keeps this clear of Phase 1's `doc.css` hazard: that bug was a class defined in two
+ * stylesheets whose load order differed between a hard load and a soft navigation. A
+ * stylesheet whose selectors appear in exactly one place cannot lose that race.
+ *
+ * Imported by the (editor) layout, matching the reader, so the ordering question does not
+ * arise at all.
+ */
+
+.np {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+.np h1 {
+  margin: 0 0 20px;
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 500;
+}
+
+.np-form label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.np-form input,
+.np-form select {
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.np-form input {
+  font-family: var(--mono);
+}
+
+.np-form #np-title {
+  font-family: var(--sans);
+}
+
+.np-hint {
+  margin: -10px 0 16px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.np-error {
+  margin: -8px 0 14px;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  color: var(--amber);
+  background: var(--amber-wash);
+  border-radius: 6px;
+}
+
+.np-empty {
+  padding: 16px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.np-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.np-actions button {
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--surface);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.np-actions button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
