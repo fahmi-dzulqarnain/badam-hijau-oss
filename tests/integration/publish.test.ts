@@ -612,6 +612,66 @@ test("a soft delete landing mid-publish rolls the whole transaction back", async
 });
 
 /**
+ * The other direction of publish-versus-autosave, and the one `publishPage`'s docstring
+ * makes a claim about: an autosave already in flight when the publish commits.
+ *
+ * `saveDraft` reads the pre-delete row under MVCC, decides `update` on a timestamp that is
+ * about to stop being true, and blocks on its own `UPDATE`. When the publish commits, that
+ * predicate is re-evaluated against a row that no longer exists, so it matches nothing — and
+ * the save comes back as the 409 with `theirs: null` that Task 5's route and Task 7's banner
+ * were both written for. Nothing is resurrected.
+ *
+ * The publish is staged as its bare effect (an uncommitted `DELETE`) because `publishPage`
+ * owns its own transaction and there is no way to pause inside it. What is being tested is
+ * `saveDraft`'s behaviour when a publish lands underneath it, which this reproduces exactly.
+ */
+test("an autosave in flight when a publish commits is refused, not resurrected", async () => {
+  const { page, asAisyah, asBudi } = await fixture();
+  const opened = await saveDraft(asBudi, page.id, {
+    title: "MQTT contracts",
+    markdown: "Budi's work in progress.\n",
+    seen: (await db.pageDraft.findUniqueOrThrow({ where: { pageId: page.id } })).updatedAt,
+  });
+  if (!opened.ok) throw new Error("expected the setup save to succeed");
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const publishing = db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`DELETE FROM "PageDraft" WHERE "pageId" = ${page.id}`;
+      await held;
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
+
+  await settle(); // the DELETE has taken the row lock
+  const racing = saveDraft(asBudi, page.id, {
+    title: "MQTT contracts",
+    markdown: "One more paragraph, typed as the publish landed.\n",
+    seen: opened.draft.updatedAt,
+  });
+  await settle(); // `racing` read the old row, decided update, and is now blocked
+
+  release();
+  await publishing;
+  const result = await racing;
+
+  expect(result.ok).toBe(false);
+  if (result.ok || result.reason !== "conflict") {
+    throw new Error(`expected a conflict, got ${JSON.stringify(result)}`);
+  }
+  // No other draft to offer, which is what the banner's one-action branch keys off.
+  expect(result.theirs).toBeNull();
+  expect(result.mine.markdown).toBe("One more paragraph, typed as the publish landed.\n");
+  // And nothing was written: the row stays gone.
+  expect(await db.pageDraft.findUnique({ where: { pageId: page.id } })).toBeNull();
+  // Publishing afterwards is still refused for having no draft, not silently accepted.
+  expect(rejection(await publishPage(asAisyah, page.id)).code).toBe("no-draft");
+});
+
+/**
  * The outcome contract, not the mechanism. Kept for the same reason Task 4 kept its
  * `Promise.all` test and labelled it: it pins what a user sees when two people click Publish
  * together, and it cannot be trusted to exercise the lock — the two calls stagger on a real
