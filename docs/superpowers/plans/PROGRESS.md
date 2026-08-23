@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **389 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **424 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -25,8 +25,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 7. The editor (CodeMirror 6) | ✅ |
 | 8. Server-rendered preview | ✅ |
 | 9. Publishing | ✅ |
-| **10. Moving a page — the landmine** | **next** |
-| 11–15 | not started |
+| 10. Moving a page — the landmine | ✅ |
+| **11. Redirects in the reader** | **next** |
+| 12–15 | not started |
 
 Findings already worth carrying:
 
@@ -216,6 +217,21 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   takes a `FOR UPDATE` row lock on the `PageDraft` row instead — its only competitors are
   another publish and an autosave of the *same page*. Reusing the space lock would serialise
   every publish in a space against every create and move over a resource none of them share.
+- **An equivalent mutant is a real category — report it, do not manufacture a test for it.**
+  Deleting `ESCAPE '\'` from the move statement passes the whole suite and always will:
+  Postgres defaults to backslash, so the clause is documentation and the escaping *function* is
+  the mechanism. Saying so beats inventing a test that pins the wrong thing.
+- **A guard on the rows is not a guard on the decision.** The move's `LIKE` pattern correctly
+  refused to drag `mqtt-contracts-v2` along with `mqtt-contracts`, while the separate
+  "is this in the moving subtree" check used a bare `startsWith` — so moving a page under that
+  sibling was refused as a cycle. All 32 tests passed. The same off-by-one, on the other side
+  of the same function.
+- **A staged interleaving must release its lock in a `finally`.** A failed assertion otherwise
+  leaks an uncommitted transaction, the next `TRUNCATE` blocks on it, and the run reports
+  meaningless hook timeouts that bury the two real failures underneath them.
+- **`Prisma`'s `startsWith` does not escape `LIKE` metacharacters.** For a path containing a
+  backslash it emits a pattern whose own children stop matching, and the read comes back short
+  **silently**. Any prefix query over user-controlled text has to be raw, with escaping.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in

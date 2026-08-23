@@ -781,7 +781,7 @@ draft fails cleanly rather than writing an empty version.
 
 ---
 
-## Task 10: Moving a page — the landmine
+## Task 10: Moving a page — the landmine ✅
 
 Re-read the landmine section at the top of this document before starting.
 
@@ -789,7 +789,7 @@ Re-read the landmine section at the top of this document before starting.
 - Create: `src/lib/pages/move.ts`
 - Create: `tests/integration/page-move.test.ts`
 
-- [ ] **Step 1: `movePage(viewer, pageId, { newParentId, newSlug })`**
+- [x] **Step 1: `movePage(viewer, pageId, { newParentId, newSlug })`**
 
 In one transaction, in this order:
 
@@ -810,7 +810,7 @@ In one transaction, in this order:
    page and reads bounce.
 6. `AuditLog`.
 
-- [ ] **Step 2: The statement**
+- [x] **Step 2: The statement**
 
 ```sql
 UPDATE "Page"
@@ -821,10 +821,45 @@ UPDATE "Page"
 
 **`$4` is the old prefix with `%`, `_` and `\` escaped, then `/%` appended.** Slugs allow `-`
 and digits but a future rule change could allow `_`, and `_` is a single-character wildcard in
-`LIKE`: unescaped, moving `a_b` would drag `axb` along with it. The `ESCAPE` clause and the
-escaping are one decision, not two.
+`LIKE`: unescaped, moving `a_b` would drag `axb` along with it.
 
-- [ ] **Step 3: Tests, including the two shapes the probe distinguished**
+Three corrections to this fence, all found while implementing it:
+
+- **"The `ESCAPE` clause and the escaping are one decision" is good guidance and factually
+  wrong.** Postgres already defaults to backslash, so deleting the clause changes nothing and
+  **no test can catch it** — an honest *equivalent mutant*. The escaping function carries all
+  the weight; dropping *that* is caught immediately. Keep the clause as documentation, but do
+  not believe it is the mechanism.
+- **In a TypeScript template literal it must be written `ESCAPE '\\'`.** Written `'\'` that is
+  the escape sequence for a quote, and Postgres receives `ESCAPE ''` and rejects it.
+- **The subtree *read* cannot use Prisma.** `path: { startsWith: oldPath + "/" }` escapes no
+  `LIKE` metacharacter and adds no `ESCAPE`, so for a page at `probe/back\` it emits
+  `LIKE 'probe/back\/%'` — the backslash escapes the slash, the page's own child stops
+  matching, and the read comes back one row short **silently**. Confirmed against Postgres. The
+  read must be raw and must share one pattern with the rewrite.
+
+And three things the module needs that this step list does not mention:
+
+- **Update the moved row's own `parentId` and `slug`.** The rewrite moves *paths*; a page whose
+  path and `parentId` disagree is reachable by URL and absent from the nav rail.
+- **Refuse a no-op move.** Performing it writes a redirect from a live path to itself — the
+  exact bug step 5's reclaim exists to prevent, manufactured by the function.
+- **Step 5's reclaim is necessary but not sufficient.** A redirect can already be standing
+  *dormant* at a path the move is vacating, shadowed by the page now leaving, and
+  `(spaceId, fromPath)` is unique — so the insert dies on a `P2002` unrelated to anything the
+  author asked for. Delete both sets; the newer redirect wins.
+
+**Soft-deleted descendants are rewritten with the rest of the subtree.** The invariant is one
+line: *every row's path is its parent's path plus its slug, deleted or not.* Skipping deleted
+rows breaks it three ways — `createPage` reads deleted rows deliberately and would refuse a
+path in a subtree that row no longer belongs to; Task 12's restore would return a page to a
+path whose ancestors live elsewhere, URL-reachable and rail-invisible; and moving the subtree
+back would collide on `(spaceId, path)` with a row nobody can see. The cost is that "restore
+puts it back where it was" means *under its parent* — the only version of that promise which
+survives the parent moving. Redirects are written for deleted rows too, and are inert until
+restore because they point at `toPageId`.
+
+- [x] **Step 3: Tests, including the two shapes the probe distinguished**
 
 - A subtree move rewrites every descendant, verified three levels deep.
 - A sibling **swap** is rejected up front rather than attempted — assert the error, and assert
@@ -833,8 +868,12 @@ escaping are one decision, not two.
 - A page cannot move under its own descendant.
 - `a/b_c` is not dragged along when `a/b` moves, and `mqtt-contracts-v2` is not dragged when
   `mqtt-contracts` moves.
-- Two concurrent moves in one space serialise: run with `Promise.all`, assert both complete
-  and the tree is consistent, rather than asserting on order.
+- Two concurrent moves in one space serialise. **This bullet originally said to run them with
+  `Promise.all`, which contradicts this project's own measured finding** that a pooled race
+  staggers and passed 3 runs out of 3 with an atomicity guarantee deleted. Stage it: hold a row
+  lock so move #1 is stuck *while holding the advisory lock*, and prove move #2 does not
+  complete. Keep a `Promise.all` test too if you like, labelled as an outcome contract — which
+  is how `publish.test.ts` does it — but it is not the test of the lock.
 
 ---
 
