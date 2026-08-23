@@ -480,30 +480,52 @@ next save must send.
 
 ---
 
-## Task 6: Creating a page
+## Task 6: Creating a page ✅
 
 **Files:**
 - Create: `src/app/(editor)/new/page.tsx`, `src/lib/pages/create.ts`
 - Create: `tests/integration/page-create.test.ts`
 
-- [ ] **Step 1: `createPage(viewer, { spaceId, parentId, slug, title, docType })`**
+- [x] **Step 1: `createPage(viewer, { spaceId, parentId, slug, title, docType })`**
 
-In one transaction: validate the slug (Task 3), resolve the parent's path, build the child
-path, **run `validatePath` on the assembled result** — the per-slug cap does not bound it —
-then **reject an occupied path up front** with a field-level message, create the `Page` with
-`status: DRAFT` and no `publishedVersionId`, create its `PageDraft`, and write an `AuditLog`
-row.
+Validate the slug and title first, **outside** the transaction — they are pure, a concurrent
+write cannot affect them, and holding a space-wide lock across a typo serialises nothing.
+
+Then, inside one transaction that opens with `pg_advisory_xact_lock(hashtext(spaceId))`:
+resolve the parent's path, build the child path, **run `validatePath` on the assembled
+result** — the per-slug cap does not bound it — **reject an occupied path up front** with a
+field-level message, create the `Page` with `status: DRAFT` and no `publishedVersionId`,
+create its `PageDraft`, and write an `AuditLog` row.
+
+**The lock is not optional, and this task originally did not ask for one.** Without it the
+occupancy pre-check is advisory: at READ COMMITTED a concurrent create — or a Task 10 move —
+can take the path between the check and the insert, and the failure arrives as the exact
+`P2002` the pre-check exists to prevent. The parent read must be *inside* the lock too: a move
+landing between the parent read and the insert creates a child carrying its parent's **old**
+path prefix — a page whose path disagrees with its parent's, reachable by URL and missing from
+the nav rail.
+
+**Task 10 must take the same lock on the same key.** Two different keys serialise create
+against create and move against move, and neither against the other — which is precisely the
+pair that corrupts a tree.
+
+**A path held by a soft-deleted page is refused**, with its own error code, naming the page
+and pointing at restore. The unique index does not know about `deletedAt`, so a soft-deleted
+row still holds its path — which makes the collision check **the one page read in this module
+deliberately without `visiblePage()`**. Filtering deleted rows there would let the check pass
+and the insert fail with the constraint violation the check exists to avoid. Pin that absence
+with a test: it is exactly the line a future reader will try to "fix".
 
 A page created this way is a draft: Phase 1 already renders those as inert text in the nav
 rail and 404s them in the reader, so a half-written page is invisible to readers from the
 moment it exists. That behaviour is load-bearing here, not incidental.
 
-- [ ] **Step 2: The form**
+- [x] **Step 2: The form**
 
 Space (only spaces where `can(viewer, space, "EDIT")`), optional parent, title, slug
 prefilled from the title but editable, doc type. On submit, redirect to `/edit/[pageId]`.
 
-- [ ] **Step 3: Tests**
+- [x] **Step 3: Tests**
 
 Slug rejections surface as field errors, not a 500. An occupied path is rejected with a
 message naming the conflict. A viewer without `EDIT` in the target space cannot create, and
@@ -625,7 +647,10 @@ Re-read the landmine section at the top of this document before starting.
 
 In one transaction, in this order:
 
-1. `pg_advisory_xact_lock` on a hash of the space id.
+1. `pg_advisory_xact_lock(hashtext(spaceId))` — **the same key Task 6's create takes**. Two
+   different keys serialise moves against moves and creates against creates but neither
+   against the other, and create-versus-move is the pair that corrupts a tree: a create
+   resolving a parent's path while a move rewrites it.
 2. Resolve the new path. **Reject a cycle** — a page cannot move under its own descendant.
    Compute this from the path prefix, not by walking parents, which is a loop waiting to
    happen on data that already has a cycle.
