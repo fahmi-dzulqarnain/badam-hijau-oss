@@ -4,6 +4,7 @@ import { beforeEach, expect, test } from "vitest";
 import { db, resetDb } from "../setup/reset";
 import {
   deletePage,
+  listDeletedPages,
   restorePage,
   type DeleteResult,
   type RestoreResult,
@@ -1191,4 +1192,100 @@ test("a competing write landing mid-restore rolls the whole restore back", async
     await staged.finish();
     await Promise.allSettled(pending);
   }
+});
+
+/* ------------------------------------------------- the restore list (Task 14b) ---------- */
+
+test("the deleted list holds only deleted pages, newest delete first", async () => {
+  const f = await fixture();
+
+  // Nothing deleted yet: the list is empty even though the space is full of pages. This is
+  // the half that fails if the filter is dropped — every live page would be listed, which is
+  // a titles listing wearing the label "deleted".
+  const empty = await listDeletedPages(f.asDara, f.space.id);
+  expect(empty).toEqual({ ok: true, pages: [] });
+
+  deleted(await deletePage(f.asAisyah, f.adr.id));
+  deleted(await deletePage(f.asAisyah, f.mqtt.id));
+
+  const result = await listDeletedPages(f.asDara, f.space.id);
+  if (!result.ok) throw new Error(`expected a list, got ${JSON.stringify(result)}`);
+
+  // The mqtt subtree went down second, so its two rows come first; the ADR is older. And the
+  // list is exactly the deleted set — `architecture`, `mqtt-contracts-v2` and `platform` are
+  // all still live and must not be in it.
+  expect(result.pages.map((p) => p.path)).toEqual([
+    "architecture/mqtt-contracts",
+    "architecture/mqtt-contracts/topic-registry",
+    "decisions/adr-0042",
+  ]);
+  expect(result.pages.map((p) => p.title)).toEqual([
+    "MQTT contracts",
+    "Topic registry",
+    "MQTT topic naming",
+  ]);
+});
+
+test("each row counts the pages that come back with it, and does not count a prefix sibling", async () => {
+  const f = await fixture();
+  deleted(await deletePage(f.asAisyah, f.architecture.id));
+
+  const result = await listDeletedPages(f.asDara, f.space.id);
+  if (!result.ok) throw new Error(`expected a list, got ${JSON.stringify(result)}`);
+
+  const by = new Map(result.pages.map((p) => [p.path, p.descendants]));
+  // `architecture` took all three below it. `mqtt-contracts` took one — `topic-registry` —
+  // and NOT `mqtt-contracts-v2`, which is its sibling and merely shares a prefix. That is the
+  // mutation this count exists to be wrong about in the most expensive place.
+  expect(by.get("architecture")).toBe(3);
+  expect(by.get("architecture/mqtt-contracts")).toBe(1);
+  expect(by.get("architecture/mqtt-contracts-v2")).toBe(0);
+  expect(by.get("architecture/mqtt-contracts/topic-registry")).toBe(0);
+});
+
+test("an editor cannot list deleted pages, and is told who can", async () => {
+  const f = await fixture();
+  deleted(await deletePage(f.asAisyah, f.mqtt.id));
+
+  // The asymmetry, from the side that makes it visible: the editor who just deleted the page
+  // cannot see it in a restore list, let alone restore it. Same permission as `restorePage`
+  // and the same sentence, because it is the same screen.
+  const result = await listDeletedPages(f.asAisyah, f.space.id);
+  expect(result.ok).toBe(false);
+  if (result.ok || result.reason !== "forbidden") throw new Error("expected forbidden");
+  expect(result.message).toMatch(/space admin/i);
+
+  // A VIEWER is refused the same way, and an ADMIN is not.
+  expect((await listDeletedPages(f.asViewer, f.space.id)).ok).toBe(false);
+  expect((await listDeletedPages(f.asDara, f.space.id)).ok).toBe(true);
+  // A super admin can, which is how the seeded e2e identity reaches this surface.
+  expect((await listDeletedPages(f.asSuperAdmin, f.space.id)).ok).toBe(true);
+});
+
+test("a stranger cannot list deleted pages, and gets not-found rather than forbidden", async () => {
+  const f = await fixture();
+  deleted(await deletePage(f.asAisyah, f.mqtt.id));
+
+  // Not-found and never forbidden: a 403 on a space a stranger cannot read confirms the space
+  // exists, and the list would then be a list of its titles.
+  expect(await listDeletedPages(stranger, f.space.id)).toEqual({
+    ok: false,
+    reason: "not-found",
+  });
+  expect(await listDeletedPages(f.asDara, "space-that-never-existed")).toEqual({
+    ok: false,
+    reason: "not-found",
+  });
+});
+
+test("a restored page leaves the list, and the subtree leaves with it", async () => {
+  const f = await fixture();
+  deleted(await deletePage(f.asAisyah, f.mqtt.id));
+  expect((await listDeletedPages(f.asDara, f.space.id)).ok).toBe(true);
+
+  restored(await restorePage(f.asDara, f.mqtt.id));
+
+  // The whole round trip through the surface an admin actually uses: the list is what they
+  // pick from, so it has to be empty again afterwards or the same page is offered twice.
+  expect(await listDeletedPages(f.asDara, f.space.id)).toEqual({ ok: true, pages: [] });
 });

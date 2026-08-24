@@ -4,6 +4,8 @@ import {
   SLUG_MAX_LENGTH,
   childPath,
   descendantPaths,
+  descendantsOf,
+  isInSubtree,
   validatePath,
   validateSlug,
   type FieldError,
@@ -403,5 +405,92 @@ describe("validatePath", () => {
   test("accepts a path exactly at the limit and rejects one byte more", () => {
     expect(validatePath("a".repeat(MAX_PATH_BYTES)).ok).toBe(true);
     expect(validatePath("a".repeat(MAX_PATH_BYTES + 1)).ok).toBe(false);
+  });
+});
+
+describe("isInSubtree", () => {
+  const ROOT = "architecture/mqtt-contracts";
+
+  // Kills: excluding the root, which is the shape `movePage` needs — its own path is the
+  // first thing the cycle check has to match, or a page could be moved under itself.
+  test("the root is inside its own subtree", () => {
+    expect(isInSubtree(ROOT, ROOT)).toBe(true);
+  });
+
+  test("a descendant at any depth is inside it", () => {
+    expect(isInSubtree(ROOT, `${ROOT}/topic-registry`)).toBe(true);
+    expect(isInSubtree(ROOT, `${ROOT}/topic-registry/retained`)).toBe(true);
+  });
+
+  // Kills: `path.startsWith(root)` with no `/` boundary — the mutation this project has
+  // already shipped once, on the other side of `movePage`, with all 32 tests green.
+  test("a sibling whose path merely begins with the root's is not inside it", () => {
+    expect(isInSubtree(ROOT, `${ROOT}-v2`)).toBe(false);
+    expect(isInSubtree(ROOT, `${ROOT}-v2/topic-registry`)).toBe(false);
+  });
+
+  test("an ancestor and an unrelated page are outside it", () => {
+    expect(isInSubtree(ROOT, "architecture")).toBe(false);
+    expect(isInSubtree(ROOT, "handbook/welcome")).toBe(false);
+  });
+});
+
+describe("descendantsOf", () => {
+  // Every field is distinguishable, because a fixture whose fields all default to the same
+  // value cannot catch a field mix-up — this project's own finding.
+  const rows = [
+    { id: "p-arch", title: "Architecture", path: "architecture" },
+    { id: "p-mqtt", title: "MQTT contracts", path: "architecture/mqtt-contracts" },
+    {
+      id: "p-topics",
+      title: "Topic registry",
+      path: "architecture/mqtt-contracts/topic-registry",
+    },
+    {
+      id: "p-retained",
+      title: "Retained messages",
+      path: "architecture/mqtt-contracts/topic-registry/retained",
+    },
+    { id: "p-v2", title: "MQTT contracts v2", path: "architecture/mqtt-contracts-v2" },
+    { id: "p-welcome", title: "Welcome", path: "welcome" },
+  ];
+
+  // Kills: hardcoding a count (or a single level) in the delete confirmation. Deleting a
+  // page takes its WHOLE subtree, and an editor told "1 sub-page" about a three-level
+  // subtree finds out afterwards — with restore needing an admin.
+  test("returns every descendant at every depth, root excluded", () => {
+    expect(descendantsOf("architecture/mqtt-contracts", rows).map((r) => r.id)).toEqual([
+      "p-topics",
+      "p-retained",
+    ]);
+  });
+
+  // Kills: `startsWith`, again, on the surface where getting it wrong names an unrelated
+  // page in a delete confirmation — the worst possible place to be wrong about scope.
+  test("does not claim a sibling that shares the root's prefix", () => {
+    expect(descendantsOf("architecture/mqtt-contracts", rows).map((r) => r.id)).not.toContain(
+      "p-v2",
+    );
+  });
+
+  test("a leaf has no descendants", () => {
+    expect(descendantsOf("welcome", rows)).toEqual([]);
+  });
+
+  test("ordered by path, so a parent is listed above its own children", () => {
+    expect(descendantsOf("architecture", rows).map((r) => r.path)).toEqual([
+      "architecture/mqtt-contracts",
+      "architecture/mqtt-contracts-v2",
+      "architecture/mqtt-contracts/topic-registry",
+      "architecture/mqtt-contracts/topic-registry/retained",
+    ]);
+  });
+
+  // Kills: mutating the caller's array. The editor route hands this the same rows it renders
+  // the parent picker from, and an in-place `sort` would reorder that picker as a side effect.
+  test("does not reorder the caller's array", () => {
+    const original = rows.map((r) => r.id);
+    descendantsOf("architecture", rows);
+    expect(rows.map((r) => r.id)).toEqual(original);
   });
 });

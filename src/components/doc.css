@@ -233,3 +233,156 @@
  */
 .doc > h1,
 .crumbs { overflow-wrap: anywhere; }
+
+/*
+ * The reader-to-editor affordance (Task 14b), in the meta row rather than the right rail.
+ *
+ * `.rail-r` is `display: none` below 1180px, so `PageInfoCard` is the one place on this route
+ * where an action would silently cease to exist on a narrower window — the same failure shape
+ * as Phase 1's bug dialog inside `.rail-l`. `.meta` is hidden at no width.
+ *
+ * `margin-left: auto` puts it at the far end of the row on a wide viewport and lets it wrap
+ * with everything else on a narrow one; `.meta` is already `flex-wrap: wrap`, so this cannot
+ * be the horizontal-overflow class — and the label is fixed text, carrying no title, path or
+ * slug that could arrive unbreakable.
+ */
+.doc-edit {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent-ink);
+  text-decoration: none;
+  background: var(--accent-wash);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+}
+.doc-edit:hover { background: var(--surface); }
+
+/*
+ * The deleted-pages list (Task 14b), on `/{space}/-/deleted`.
+ *
+ * Here rather than in a stylesheet of its own because `doc.css` is already imported by the
+ * space layout and this route renders inside `.doc` — and Phase 1 measured what happens when a
+ * route pulls in its own stylesheet: `.doc` computed `max-width: none` on a hard load and
+ * `820px` on a soft navigation to the same route. Every selector is prefixed `del-` and defined
+ * in exactly one place, which is what makes an extra stylesheet unnecessary rather than merely
+ * inconvenient.
+ *
+ * `overflow-wrap: anywhere` on the title, the path and the row is the fifth-shape guard, stated
+ * by name: all three are user-typed strings painted OUTSIDE `.body`, so the `.body` rule above
+ * has never reached them, and a 300-character unbreakable title is exactly what widened the
+ * reader by 4,321px before `.doc > h1` got the same treatment.
+ */
+.del-lead {
+  margin: 0 0 22px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 66ch;
+}
+
+.del-empty {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.del-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.del-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.del-what {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  /* `flex: 1 1 0` and not `1 1 auto`: an `auto` basis is the content width, which for an
+     unbreakable title is wider than the row and pushes the page sideways. */
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+}
+
+.del-title {
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.del-path {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.del-when {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.del-restore {
+  flex: none;
+  padding: 6px 13px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.del-restore:hover {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+.del-restore[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.del-error {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+/* The nav rail's link to the surface above. Only rendered for MANAGE_SPACE — see NavRail. */
+.rail-admin {
+  margin-top: 14px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+}
+
+.rail-admin a {
+  display: block;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.rail-admin a:hover { color: var(--accent-ink); background: var(--accent-wash); }

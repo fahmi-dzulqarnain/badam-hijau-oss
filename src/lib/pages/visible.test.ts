@@ -197,7 +197,20 @@ const MODULES: Record<string, Registration> = {
     //   inverts the filter (`deletedAt: { not: null }`) for the same reason;
     //   "a stranger cannot delete or restore" pins that dropping the soft-delete filter did not
     //   take the permission predicate with it.
-    covered: ["deletePage", "restorePage"],
+    //
+    // `listDeletedPages` (Task 14b) is the third function here whose job is to return
+    // soft-deleted rows, and the only one that returns *nothing else*. Its page query carries
+    // `readableSpace` and inverts the filter to `deletedAt: { not: null }`:
+    //   "the deleted list holds only deleted pages" fails in both directions — dropped, every
+    //   live page in the space appears in the restore list, which is a titles listing wearing
+    //   the wrong label; inverted to `deletedAt: null`, the list is empty and there is nothing
+    //   to restore;
+    //   "an editor cannot list deleted pages, and is told who can" pins that inverting the
+    //   soft-delete filter did not take the permission predicate with it — the same pairing
+    //   `restorePage` needs, because these two are one screen and one authorisation;
+    //   "a stranger cannot list deleted pages" pins the space-level not-found, which is what
+    //   stops the list leaking titles out of a space the caller cannot read.
+    covered: ["deletePage", "restorePage", "listDeletedPages"],
     exempt: [],
   },
   "src/lib/drafts/repo.ts": {

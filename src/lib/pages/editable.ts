@@ -14,7 +14,22 @@ export type EditablePage = {
   path: string;
   docType: DocType;
   status: DocStatus;
-  space: { key: string; name: string };
+  /**
+   * The page's own `slug` and `parentId`, which the move form needs as its starting values.
+   * `movePage` requires both fields on every call and documents why neither may be optional:
+   * on a field whose purpose is to carry `null`, "omit to keep the current value" would
+   * silently move the page to the space root. The caller has to *have* the current values to
+   * send them, and this is the read that already had the row open.
+   */
+  slug: string;
+  parentId: string | null;
+  /**
+   * `id` as well as the display fields, because the editor route lists this space's pages —
+   * for the move form's parent picker and for the delete confirmation's subtree — and
+   * `listSpacePages` is keyed by space id. Reading it here costs nothing: the query already
+   * selects the space relation to answer `can()`.
+   */
+  space: { id: string; key: string; name: string };
   /**
    * The text to load into the editor. From the draft when there is one; otherwise from the
    * published version, so opening a published page starts from what readers currently see
@@ -65,6 +80,8 @@ export async function getPageForEditing(
       id: true,
       title: true,
       path: true,
+      slug: true,
+      parentId: true,
       docType: true,
       status: true,
       space: { select: { id: true, key: true, name: true, visibility: true } },
@@ -81,9 +98,11 @@ export async function getPageForEditing(
     page: {
       id: page.id,
       path: page.path,
+      slug: page.slug,
+      parentId: page.parentId,
       docType: page.docType,
       status: page.status,
-      space: { key: page.space.key, name: page.space.name },
+      space: { id: page.space.id, key: page.space.key, name: page.space.name },
       text: page.draft
         ? { title: page.draft.title, markdown: page.draft.markdown }
         : { title: page.title, markdown: page.publishedVersion?.markdown ?? "" },

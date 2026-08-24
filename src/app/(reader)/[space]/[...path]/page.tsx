@@ -1,5 +1,8 @@
+import type { Route } from "next";
+import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
+import { can } from "@/lib/authz/can";
 import { getPublishedPage, listSpacePages, resolveRedirect } from "@/lib/pages/repo";
 import { pageHref } from "@/lib/pages/href";
 import { renderMarkdown } from "@/lib/markdown/render";
@@ -56,6 +59,23 @@ export default async function DocPage({
   const { space, page, version } = result;
   const { html, headings } = await renderMarkdown(version.markdown);
 
+  /**
+   * The reader-to-editor affordance, and **no query pays for it**.
+   *
+   * `can()` is pure — it reads the viewer's in-memory memberships and the space's visibility,
+   * both of which are already in hand: the viewer came from the cookie and `space` came back
+   * from the page read this route had to make anyway. Task 14b's step is explicit that this
+   * must not add a second query, and the reason is that the obvious implementations do: a
+   * `listEditableSpaces`-style lookup, or a `canEditPage(viewer, page.id)` call, would each
+   * re-read a row this render is already holding, on the hottest path in the product.
+   *
+   * Until this existed, Task 14's "a `VIEWER` sees no edit affordance" assertion was
+   * unfalsifiable — there was no affordance for anyone, so the absence was universal rather
+   * than role-dependent. That test now means something, and the editor's half of it is
+   * asserted beside it.
+   */
+  const mayEdit = can(viewer, space, "EDIT");
+
   // Cache hit: the layout already called this with the same viewer object in this render.
   const rows = await listSpacePages(viewer, space.id);
   const byPath = new Map(rows.map((row) => [row.path, row]));
@@ -95,6 +115,22 @@ export default async function DocPage({
           <span>
             <span className="k">Commit</span> {version.gitSha ?? "not mirrored yet"}
           </span>
+          {/*
+            In the meta row and NOT in the right rail, and that is a decision rather than a
+            placement. `doc.css` hides `.rail-r` entirely below 1180px, so an Edit link in
+            `PageInfoCard` would simply not exist on a laptop in a split window — the same
+            shape of bug as Phase 1's bug dialog, which was rendered inside `.rail-l` and
+            vanished with it below 860px, taking the user's typed text along. `.meta` is
+            hidden at no width.
+
+            It carries no page data — not the title, not the path, not the slug — so it cannot
+            be the sixth shape of the horizontal-overflow class. The href is built from a cuid.
+          */}
+          {mayEdit ? (
+            <Link className="doc-edit" href={`/edit/${page.id}` as Route}>
+              Edit this page
+            </Link>
+          ) : null}
         </div>
 
         {/* `dangerouslySetInnerHTML` is safe here only because `renderMarkdown` sanitises. If

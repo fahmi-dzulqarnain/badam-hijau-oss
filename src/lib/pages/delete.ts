@@ -5,7 +5,7 @@ import { readableSpace } from "@/lib/authz/where";
 import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { subtreePattern } from "@/lib/pages/like";
-import { descendantPaths } from "@/lib/pages/slug";
+import { descendantPaths, descendantsOf } from "@/lib/pages/slug";
 import type { Viewer } from "@/lib/authz/types";
 
 export type DeletedPage = {
@@ -623,4 +623,104 @@ export async function restorePage(viewer: Viewer, pageId: string): Promise<Resto
     if (error instanceof PageNoLongerRestorable) return { ok: false, reason: "not-found" };
     throw error;
   }
+}
+
+/** One row of the restore list: enough to decide, and nothing that is not on screen. */
+export type DeletedPageRow = {
+  id: string;
+  title: string;
+  /** Where it will come back — under its parent, wherever that parent has since moved to. */
+  path: string;
+  deletedAt: Date;
+  /**
+   * How many of the rows in this same list are below this one.
+   *
+   * The list is a subtree list, not a flat one: one delete of a three-page subtree produces
+   * three rows here, and restoring the root brings all three back at once. Without this
+   * number an admin looking at three rows cannot tell whether they have three separate
+   * deletes to undo or one, and `restorePage` refuses a descendant whose ancestor is still
+   * deleted — so pressing the wrong button is the default outcome of not knowing.
+   */
+  descendants: number;
+};
+
+export type DeletedListResult =
+  | { ok: true; pages: DeletedPageRow[] }
+  /** No such space, or one this viewer cannot read. One answer for both, as everywhere. */
+  | { ok: false; reason: "not-found" }
+  /** Readable, but not administrable. Carries the same sentence `restorePage` refuses with. */
+  | { ok: false; reason: "forbidden"; message: string };
+
+/**
+ * The deleted pages of one space, newest delete first.
+ *
+ * **This is the query the `deletedAt` index is actually for.** Measured at 60k rows during
+ * Phase 2 Task 1: live pages are ~70% of the table, so the planner seq-scans the *read* path
+ * with or without the index. This is the inverse — a few rows out of many — and it is the one
+ * the index was kept for, which is worth stating where the query lives rather than only in
+ * PROGRESS.md.
+ *
+ * It is the one Page **read** in the codebase whose job is to return soft-deleted rows and
+ * only those, so it carries `readableSpace` and deliberately not `visiblePage()` — the same
+ * absence `restorePage` documents, for the same reason, and registered in the soft-delete
+ * guard as `covered` rather than `exempt` so the absence is pinned by tests instead of merely
+ * allowed.
+ *
+ * `MANAGE_SPACE`, matching `restorePage` rather than `deletePage`. A list of deleted titles is
+ * a list of titles, and an editor who may delete a page has no need of one — the asymmetry is
+ * the same asymmetry, so it is the same permission, and the refusal carries the same sentence
+ * so an editor who reaches this surface is told who can act rather than that they cannot.
+ */
+export async function listDeletedPages(
+  viewer: Viewer,
+  spaceId: string,
+): Promise<DeletedListResult> {
+  // The space, resolved through the permission predicate first: `can()` is pure and needs
+  // the visibility, and a space this viewer cannot read must answer not-found before any
+  // page title is read out of it. `readableSpace` is passed whole, never spread.
+  const space = await db.space.findFirst({
+    where: readableSpace(viewer, { id: spaceId }),
+    // Explicit select, never `include`. Only what `can()` needs.
+    select: { id: true, visibility: true },
+  });
+  if (!space) return { ok: false, reason: "not-found" };
+
+  if (!can(viewer, space, "MANAGE_SPACE")) {
+    return {
+      ok: false,
+      reason: "forbidden",
+      message:
+        "Restoring a deleted page needs space admin. Any editor can delete a page; only a " +
+        "space admin can put one back. Ask an admin of this space to restore it.",
+    };
+  }
+
+  const rows = await db.page.findMany({
+    // `readableSpace` again, on the same query that reads the rows, because that is this
+    // project's one rule for page queries: every query states its own permission predicate
+    // and none is guarded by call ordering. `deletedAt: { not: null }` is the inverted
+    // soft-delete filter — the reason this function exists.
+    where: { spaceId: space.id, deletedAt: { not: null }, space: readableSpace(viewer) },
+    // Newest delete first, then by path so the rows of one subtree delete stay together and
+    // in tree order under their own root.
+    orderBy: [{ deletedAt: "desc" }, { path: "asc" }],
+    // Explicit select, never `include`.
+    select: { id: true, title: true, path: true, deletedAt: true },
+  });
+
+  return {
+    ok: true,
+    pages: rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      path: row.path,
+      // Non-null by the filter above, which the types cannot see.
+      deletedAt: row.deletedAt!,
+      // Counted against the rows in *this* list, so it answers the question the list raises:
+      // "if I restore this one, what else comes back". `descendantsOf` is the shared boundary
+      // rule, so a sibling sharing a path prefix is not counted — the mutation this project
+      // has already shipped once elsewhere.
+      descendants: descendantsOf(row.path, rows).length,
+    })),
+  };
 }

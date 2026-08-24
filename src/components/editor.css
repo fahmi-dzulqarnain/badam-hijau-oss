@@ -351,3 +351,186 @@
 .ed-surface .cm-cursor { border-left-color: var(--ink); }
 .ed-surface .cm-panels { color: var(--ink); background: var(--surface-2); }
 .ed-surface .cm-panels input { font: inherit; color: var(--ink); background: var(--surface); }
+
+/*
+ * Move and delete (Task 14b), a sibling of `.ed` rather than a section inside it.
+ *
+ * `width: min(1400px, 100%)` matches `.ed` exactly so the two read as one column, and the
+ * `min()` is what keeps this out of the horizontal-scroll class for the fifth time — a bare
+ * `1400px` here would widen every viewport under that.
+ *
+ * Every text node in this block can carry a page title, a path or a slug, all of which arrive
+ * from a text input and can therefore be one unbreakable 300-character token. `.body`'s
+ * `overflow-wrap` guard in `doc.css` does not reach here — that was the fifth shape of this
+ * bug, the page title painted outside `.body` — so every one of them states it by name below.
+ */
+.ed-manage {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+  padding: 0 20px 72px;
+}
+
+.ed-manage-head {
+  margin: 0 0 4px;
+  padding-top: 26px;
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 500;
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * `minmax(0, 1fr)` twice, never `1fr` twice — a bare `1fr` is `minmax(auto, 1fr)`, whose floor
+ * is the item's min-content width, and a 300-character title in the subtree list would set a
+ * floor wider than the viewport. Same declaration, same reason, as `.ed-split` above.
+ */
+.ed-manage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+@media (max-width: 1080px) {
+  .ed-manage-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.ed-manage-block {
+  min-width: 0;
+  padding: 15px 17px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.ed-manage-sub {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ed-manage-hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.ed-manage-block .ed-label { margin-top: 12px; }
+
+/* `width: 100%` is load-bearing on the select: left to size itself, a `<select>` is as wide
+   as its widest option, and the options carry every page title in the space. */
+.ed-manage-input {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.ed-manage-go,
+.ed-manage-danger {
+  margin-top: 12px;
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.ed-manage-go {
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+}
+
+.ed-manage-go:hover {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+.ed-manage-danger {
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+}
+
+.ed-manage-go[disabled],
+.ed-manage-danger[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* The confirmation. Amber rather than red because it is a soft delete and says so. */
+.ed-manage-confirm {
+  margin-top: 12px;
+  padding: 12px 13px;
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+}
+
+.ed-manage-confirm-lead {
+  margin: 0 0 8px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ed-manage-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+/* The subtree. Bounded height so a forty-page branch does not push the buttons off screen —
+   the confirmation is worthless if the button that acts on it cannot be seen beside it. */
+.ed-manage-list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12.5px;
+}
+
+.ed-manage-list li {
+  margin-bottom: 3px;
+  overflow-wrap: anywhere;
+}
+
+.ed-manage-list code,
+.ed-manage-confirm code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.ed-manage-error,
+.ed-manage-done {
+  margin: 11px 0 0;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.ed-manage-error {
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+}
+
+.ed-manage-done {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent);
+}

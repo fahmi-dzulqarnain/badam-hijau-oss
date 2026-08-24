@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import "@/components/shell.css";
 import "@/components/doc.css";
 import { requireViewer } from "@/lib/auth/viewer";
+import { can } from "@/lib/authz/can";
 import { getReadableSpaceByKey, listSpacePages } from "@/lib/pages/repo";
 import { buildTree } from "@/lib/pages/tree";
 import { buildInfo } from "@/lib/version/build";
@@ -39,6 +40,15 @@ export default async function SpaceLayout({
           spaceName={space.name}
           tree={tree}
           build={build}
+          // Pure, and no query pays for it: `can()` reads the viewer's in-memory memberships
+          // and the space's visibility, both already resolved above. Task 14b asks for the
+          // reader's affordances to be free, and this is the same rule as the Edit link on the
+          // page route — the layout is the one place that holds both halves of the question.
+          manageHref={
+            can(viewer, space, "MANAGE_SPACE")
+              ? `/${encodeURIComponent(space.key)}/-/deleted`
+              : null
+          }
         />
         {children}
       </div>

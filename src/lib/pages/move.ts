@@ -7,6 +7,7 @@ import { subtreePattern } from "@/lib/pages/like";
 import {
   childPath,
   descendantPaths,
+  isInSubtree,
   validatePath,
   validateSlug,
   type PathErrorCode,
@@ -231,15 +232,16 @@ export async function movePage(
        * Whether a path is inside the subtree being moved — the moved page itself, or anything
        * below it at a `/` boundary.
        *
-       * This is `descendantPaths` rather than a fresh comparison, and the empty replacement
-       * prefix is what turns it into a question: a path inside the subtree is rewritten and so
-       * comes back changed, and a path outside it comes back identical. The boundary rule
+       * `isInSubtree` and not a local comparison: the boundary rule
        * (`architecture/mqtt-contracts` takes `…/topic-registry` but not `…-v2`) is tested
-       * once, in `slug.test.ts`, and used everywhere — including here, where writing
-       * `startsWith(oldPath)` instead would call `mqtt-contracts-v2` a descendant.
+       * once, in `slug.test.ts`, and used everywhere. Writing `startsWith(oldPath)` here
+       * instead would call `mqtt-contracts-v2` a descendant — which is not hypothetical, it is
+       * the bug this module already had once on the other side of the same function.
+       *
+       * Task 14b's delete confirmation asks the same question about the same tree, which is
+       * what moved this two-line closure into `slug.ts`.
        */
-      const inMovingSubtree = (path: string) =>
-        descendantPaths(oldPath, "", path) !== path;
+      const inMovingSubtree = (path: string) => isInSubtree(oldPath, path);
 
       // A cycle, rejected **by path prefix and never by walking `parentId`**. A parent walk
       // loops forever on data that already contains a cycle, and `buildTree` exists precisely

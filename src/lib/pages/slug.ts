@@ -184,6 +184,44 @@ export function descendantPaths(
   return path;
 }
 
+/**
+ * Whether `path` is inside the subtree rooted at `root` — the root itself, or anything below
+ * it at a `/` boundary.
+ *
+ * Expressed through `descendantPaths` rather than as a fresh comparison, and the empty
+ * replacement prefix is what turns a rewrite into a question: a path inside the subtree comes
+ * back changed, a path outside it comes back identical. So there is exactly **one**
+ * implementation of the boundary rule and everything that asks the question inherits its
+ * tests — `movePage`, which used to spell this out inline, and Task 14b's delete confirmation,
+ * which has to name the pages that go with a page.
+ *
+ * That second caller is why this is a named export rather than a two-line closure repeated at
+ * each site. Phase 1 learned twice that "a rule implemented in two places is not yet a
+ * convention", and this project has already had the *other* half of this exact rule go wrong
+ * once: `movePage`'s `LIKE` pattern correctly refused to drag `mqtt-contracts-v2` along while
+ * a separate `startsWith` check called it a descendant, and all 32 tests passed.
+ */
+export function isInSubtree(root: string, path: string): boolean {
+  return descendantPaths(root, "", path) !== path;
+}
+
+/**
+ * The rows below `root`, root **excluded**, ordered by path.
+ *
+ * What a delete confirmation is made of: "deleting this page also deletes these". Generic over
+ * the row shape so it can be handed the nav rail's own rows rather than a second query, and
+ * pure so the boundary case — a sibling whose path merely starts with the same characters —
+ * is tested without a database.
+ */
+export function descendantsOf<Row extends { path: string }>(
+  root: string,
+  rows: readonly Row[],
+): Row[] {
+  return rows
+    .filter((row) => row.path !== root && isInSubtree(root, row.path))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
 export type PathValidation =
   | { ok: true; path: string }
   | { ok: false; error: FieldError<"slug"> };
