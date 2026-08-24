@@ -1034,18 +1034,34 @@ subtree. Restore into an occupied path fails with a readable message and changes
 
 ---
 
-## Task 13: Audit wiring, including the Phase 1 debt
+## Task 13: Audit wiring, including the Phase 1 debt ✅
 
 **Files:**
 - Create: `src/lib/audit/log.ts`, `tests/integration/audit.test.ts`
-- Modify: `src/lib/pages/repo.ts`
+- Modify: `src/lib/pages/repo.ts`, and — consolidating necessarily touches all five existing
+  call sites — `create.ts`, `publish.ts`, `move.ts`, `delete.ts`, plus the guard registration in
+  `src/lib/pages/visible.test.ts`
 
-- [ ] **Step 1: One `writeAudit` helper, taking the transaction client**
+- [x] **Step 1: One `writeAudit` helper, taking the transaction client**
 
 Every mutation in this phase already calls it; this task makes it consistent and tests it
-rather than adding it.
+rather than adding it. `AuditClient` is structural, so the five mutations keep passing their
+**transaction** client while the access audit passes `db`.
 
-- [ ] **Step 2: Pay off `needsAccessAudit`**
+Guarded by a sweep of its own: no module outside `src/lib/audit/log.ts` may touch the
+`auditLog` delegate. With a companion test proving the sweep's pattern can see the one file
+that does — **a pattern that matches nothing looks exactly like a clean codebase**, which is
+the same failure this project's soft-delete guard hit four times.
+
+**Consolidating surfaced a real inconsistency, now fixed.** `page.publish` recorded
+`{ from, to }` for a **status** transition while `page.move` recorded `{ from, to }` for a
+**path** transition — one key name meaning two things, so `detail->>'from'` was not queryable
+across actions. Worse, `move` already named its other pairs `fromSlug`/`toSlug` and
+`fromParentId`/`toParentId`, so the bare names were inconsistent with its own scheme. Renamed
+to `fromStatus`/`toStatus` and `fromPath`/`toPath`. Cheap now — there are zero audit rows
+anywhere and the phase is unreleased — and it would have needed a migration story later.
+
+- [x] **Step 2: Pay off `needsAccessAudit`**
 
 Phase 1 shipped `needsAccessAudit` with tests and no call site, marked `TODO(phase-2)` in
 `repo.ts` and recorded as an **accepted risk, not an oversight**: for all of Phase 1, a super
@@ -1055,7 +1071,40 @@ It must not slow or fail a read. Write the row on a path that cannot throw into 
 a failed audit write must not turn a successful read into an error page — but do **not** make
 it fire-and-forget in a way that loses rows silently. Log the failure loudly if it happens.
 
-- [ ] **Step 3: Tests**
+**Those two constraints pull against each other and are met by two mechanisms with two
+different jobs**, deliberately not one restated twice (see the "a predicate stated twice is
+untestable" finding):
+
+- `after()` from `next/server` is the **latency** mechanism: the write is scheduled after the
+  response, so no render awaits a database write mid-stream. It also runs when a render ends in
+  `notFound()` or a redirect, which matters — a super admin who resolved the space and then
+  missed the page still read the space. Outside a request scope `after()` throws (E468), so
+  tests and scripts fall through to an awaited inline write, and that fallback is what makes the
+  behaviour observable to a test at all.
+- A `try/catch` in the writer is the **resilience** mechanism, and it is the one that fires on a
+  real failure. The error line carries the whole row — actor, space, key, visibility — so a lost
+  audit is *reconstructable* from logs rather than merely known about.
+
+**Dedupe is per request, per (actor, space).** One page view resolves the space two or three
+times (layout, page read, bug context); three identical rows a millisecond apart add no
+information and make any rate-based reading of the table meaningless. It stays per *page view*,
+so how much a super admin read is still visible. The key is marked **before** the write is
+attempted, so a failure is not retried or double-logged inside one request.
+
+**The row carries exactly `{ key, visibility, by: "super-admin" }`**, asserted with `toEqual` —
+a later leak arrives as an extra key, which `toMatchObject` would wave through. The page is
+deliberately absent: it is genuinely unknown at space-resolution time, and a `pageId` populated
+on some renders and null on others is worse than none.
+
+**No seeded path exercises this audit**, and that is worth stating rather than discovering in
+Task 14. `efcorporates@gmail.com` is seeded as an **ADMIN member of `engineering`**, so
+`needsAccessAudit` is correctly `false` for every seeded combination. The integration tests
+cover it against a real database, including the per-request boundary; **e2e and smoke
+deliberately do not**, because the alternative is a third seeded space whose only purpose is
+this one path, and the `2 spaces / 7 pages` baseline is asserted by the smoke test and dozens
+of assertions. The benign corollary: e2e and smoke runs will never accumulate audit rows.
+
+- [x] **Step 3: Tests**
 
 A super admin reading a members-only space they do not belong to writes exactly one row. A
 member reading their own space writes none. A super admin reading an `ALL_STAFF` space writes

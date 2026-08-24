@@ -996,8 +996,8 @@ test("one audit row records both paths and how many pages moved", async () => {
   expect(audit.actorId).toBe(f.aisyah.id);
   expect(audit.pageId).toBe(f.mqtt.id);
   expect(audit.detail).toEqual({
-    from: "architecture/mqtt-contracts",
-    to: "platform/mqtt-contracts",
+    fromPath: "architecture/mqtt-contracts",
+    toPath: "platform/mqtt-contracts",
     fromSlug: "mqtt-contracts",
     toSlug: "mqtt-contracts",
     fromParentId: f.architecture.id,

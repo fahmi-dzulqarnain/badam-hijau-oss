@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **469 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **482 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -28,8 +28,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 10. Moving a page — the landmine | ✅ |
 | 11. Redirects in the reader | ✅ |
 | 12. Soft delete and restore | ✅ |
-| **13. Audit wiring, incl. the Phase 1 debt** | **next** |
-| 14–15 | not started |
+| 13. Audit wiring, incl. the Phase 1 debt | ✅ |
+| **14. End-to-end coverage of authoring** | **next** |
+| 15 | not started |
 
 Findings already worth carrying:
 
@@ -256,6 +257,13 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   against itself. `src/lib/pages/delete.ts` is the only such write today.
 - **Compare a stored timestamp against the real clock, not against another copy of itself.**
   That is what made the bug above visible.
+- **A guard pattern that matches nothing looks exactly like a clean codebase.** Every sweep
+  needs a companion test proving the pattern can still see at least one real instance. The
+  audit sweep has one; the soft-delete sweep earned the same lesson the hard way, four times.
+- **`needsAccessAudit` is no longer unwired**, but no *seeded* path reaches it: the super admin
+  is a seeded ADMIN of `engineering`, so the predicate is correctly false for every seeded
+  combination. Covered by integration tests; e2e and smoke deliberately skip it rather than add
+  a third space and disturb the `2 spaces / 7 pages` baseline.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in

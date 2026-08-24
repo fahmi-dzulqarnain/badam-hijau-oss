@@ -170,8 +170,8 @@ test("publishing makes the page readable end to end, and takes the draft with it
   expect(audit.detail).toMatchObject({
     path: "architecture/mqtt-contracts",
     versionId: result.versionId,
-    from: "DRAFT",
-    to: "CURRENT",
+    fromStatus: "DRAFT",
+    toStatus: "CURRENT",
   });
 });
 

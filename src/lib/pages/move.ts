@@ -516,8 +516,11 @@ export async function movePage(
         // "a move rewrote 40 pages" is the difference between a rename and a
         // reorganisation, and nothing else records it.
         detail: {
-          from: oldPath,
-          to: newPath,
+          // `fromPath`/`toPath`, not `from`/`to`: this module already names its other pairs
+          // `fromSlug`/`toSlug` and `fromParentId`/`toParentId`, and `page.publish` records a
+          // *status* transition, so the bare names meant two different things across actions.
+          fromPath: oldPath,
+          toPath: newPath,
           fromSlug: page.slug,
           toSlug: slug.slug,
           fromParentId: page.parentId,

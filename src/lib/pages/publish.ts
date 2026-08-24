@@ -336,8 +336,11 @@ export async function publishPage(
           path: page.path,
           versionId: version.id,
           title,
-          from: page.status,
-          to: status,
+          // `fromStatus`/`toStatus`, not `from`/`to`: `page.move` records a *path* transition
+          // under those bare names, so one key would mean two things and `detail->>'from'`
+          // would not be queryable across actions.
+          fromStatus: page.status,
+          toStatus: status,
         },
       });
 
