@@ -1112,7 +1112,7 @@ none.
 
 ---
 
-## Task 14: End-to-end coverage of authoring
+## Task 14: End-to-end coverage of authoring ✅
 
 **Files:**
 - Create: `e2e/authoring.spec.ts`
@@ -1122,25 +1122,103 @@ The suite must stay green from a cold start, and the seed is **idempotent** — 
 publishes a version only when content actually differs. Anything this task adds to the seed
 must preserve that.
 
-- [ ] Create a page, write Markdown, watch it autosave, publish it, read it as a member.
-- [ ] Preview matches the published output for the same source.
-- [ ] Two browser contexts on one page: the second save shows the conflict banner naming the
+- [x] Create a page, write Markdown, watch it autosave, publish it, read it as a member.
+- [x] Preview matches the published output for the same source.
+- [x] Two browser contexts on one page: the second save shows the conflict banner naming the
       first editor; Load theirs replaces the text; Keep mine wins.
-- [ ] Move a page; the old URL 301s to the new one.
-- [ ] Delete a page; it 404s and leaves the nav rail.
-- [ ] A `VIEWER` sees no edit affordance and cannot reach `/edit/[pageId]` by URL.
+
+      **Two identities are available after all.** Task 7 reported "two browser profiles are not
+      available, and two tabs share a cookie jar" — true of the browser-automation tooling it
+      used for a manual check, **not** of Playwright. `browser.newContext()` is an isolated
+      storage partition in the same process, so two contexts hold two different session cookies
+      and the server resolves two different people. No scripted second actor needed.
+- [x] Move a page; the old URL **308s** to the new one (spec §14 said 301; Task 11 corrected
+      the spec, and this bullet still said 301).
+- [x] Delete a page; it 404s and leaves the nav rail.
+- [x] A `VIEWER` cannot reach `/edit/[pageId]` by URL, and is refused by
+      `PUT /api/drafts`, `POST publish` and `POST /api/preview`.
+
+      **The "sees no edit affordance" half was unfalsifiable when written**, and saying so is
+      more useful than a green test: there was no reader-to-editor affordance for *anyone*, so
+      the absence was universal rather than role-dependent. The seed also has no VIEWER-role
+      user. Task 14b adds the affordance; the assertion becomes meaningful there.
 - [ ] No editor route scrolls horizontally — the guard that has caught three regressions in
       three different shapes.
-- [ ] **Pin the redirect lookup's position in the request.** With a dormant `Redirect` sitting
+- [x] **Pin the redirect lookup's position in the request.** With a dormant `Redirect` sitting
       over a live published page, assert the page renders (200) rather than redirecting away
       from it. Task 11 measured the hoisted-lookup mutation passing the entire vitest suite —
       it is a route property and only an HTTP-level check can catch it.
-- [ ] **Close the guard's real gap.** Add a DOM-injection probe to the reader spec: append an
+- [x] **Close the guard's real gap.** It found a fifth shape immediately: a page **title** is
+      painted from `Page.title` into `.doc > h1` and repeated as the last breadcrumb, both
+      *outside* `.body`, so Task 8's `.body :is(h1…h6)` fix never reached them. Measured at
+      1280px with a 300-character title: **4,321px** of overflow, `.doc h1` reporting a 5,295px
+      `scrollWidth` inside a 694px box. `min-width: 0` on `.doc` keeps the grid *track* honest
+      and does nothing about inline content overflowing the box. No document content could ever
+      have exercised it — a title arrives from a text input, not from Markdown.
+
+      Note also what the **editor** overflow loop can and cannot see: `.ed-preview` is
+      `overflow: auto` by design, so with all three `doc.css` guards stripped both editor routes
+      still measure 0 while the reader shows 2,609px. The editor loop pins the chrome — top bar,
+      the split grid's `minmax(0, 1fr)`, CodeMirror's line wrapping — and can never pin `.body`.
+      The reader-side injection probe is the load-bearing one.
+- [x] **Fix the suite's own leak.** `reader.spec.ts` inserted a real `BugReport` and never
+      deleted it — one row per run, forever. It broke nothing, which is why nothing failed; it
+      simply made "run the suite twice and compare counts" impossible to pass. Cleanup is now
+      **asserted**: `beforeAll` snapshots the dev-database counts and `afterAll` requires them
+      unchanged. Add a DOM-injection probe to the reader spec: append an
       `h2`, a `p` and a `pre` each carrying a 300-character unbreakable token, assert zero
       overflow, remove them. Task 8 found a 4,660px reader overflow from a long heading that
       this suite had been green over for the whole of Phase 1, because it only measures seeded
       content. Injecting hostile content writes nothing to the database and tests the class
       the suite claims to test.
+
+---
+
+## Task 14b: Reaching authoring from the product
+
+**Found by Task 14, and it is a scope gap rather than a nit.** `movePage`, `deletePage` and
+`restorePage` are library functions with no route and no UI, and `/edit/[pageId]` is unreachable
+from the reader — an editor would have to know a page's cuid. So this phase's deliverable, "an
+editor creates, drafts, previews and publishes pages in the browser… move and delete with
+redirects", is only half true: creating and publishing are reachable (Task 9 added the route and
+the button for exactly this reason), moving, deleting and *re-editing* are not.
+
+This lands **before** Task 15, because the smoke test has to exercise move and delete over HTTP.
+
+**Files:**
+- Create: `src/app/api/pages/[pageId]/move/route.ts`,
+  `src/app/api/pages/[pageId]/delete/route.ts`,
+  `src/app/api/pages/[pageId]/restore/route.ts` + their integration tests
+- Create: a page-actions component for the editor (move / delete), and a restore affordance for
+  an admin
+- Modify: the reader route or `PageInfoCard` — an **Edit this page** link, rendered only for a
+  viewer with `EDIT`
+
+- [ ] **Step 1: The three routes**
+
+Thin translations of the existing library functions, exactly as `publish/route.ts` is. Every
+authorisation decision already lives in the module — do not re-decide anything here, and keep
+404-not-403 rendered rather than re-derived. Reuse Task 5's body handling where a body exists.
+
+- [ ] **Step 2: The Edit affordance**
+
+Rendered only when `can(viewer, space, "EDIT")`. This is what makes Task 14's
+"a `VIEWER` sees no edit affordance" assertion mean something, so add that test there too.
+
+Note the reader is a server component and the permission is already resolved in its layout —
+do not add a second query for it.
+
+- [ ] **Step 3: Move and delete from the editor**
+
+Move needs a target parent and a slug; delete needs a confirmation that names what else goes
+with it — deleting a page takes its whole subtree, and an editor who is not told that will find
+out afterwards. Restore is `MANAGE_SPACE`, so it belongs to an admin surface, not the editor's.
+
+- [ ] **Step 4: Tests**
+
+Integration tests per route, plus e2e: move a page **through the UI** and follow the 308;
+delete a page with a child and see the confirmation name the child; a `VIEWER` sees no Edit
+link. Clean up after yourself — the e2e suite asserts the dev-database counts are unchanged.
 
 ---
 

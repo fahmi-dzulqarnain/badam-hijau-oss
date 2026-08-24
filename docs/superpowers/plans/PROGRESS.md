@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **482 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **482 vitest + 18 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -29,8 +29,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 11. Redirects in the reader | ✅ |
 | 12. Soft delete and restore | ✅ |
 | 13. Audit wiring, incl. the Phase 1 debt | ✅ |
-| **14. End-to-end coverage of authoring** | **next** |
-| 15 | not started |
+| 14. End-to-end coverage of authoring | ✅ |
+| **14b. Reaching authoring from the product** | **next — scope gap Task 14 found** |
+| 15. Extend the smoke test | not started |
 
 Findings already worth carrying:
 
@@ -264,6 +265,14 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   is a seeded ADMIN of `engineering`, so the predicate is correctly false for every seeded
   combination. Covered by integration tests; e2e and smoke deliberately skip it rather than add
   a third space and disturb the `2 spaces / 7 pages` baseline.
+- **The horizontal-overflow class has now bitten five times, in five different shapes**:
+  paragraphs, images, the mermaid placeholder, `.body` headings, and — found by the injection
+  probe — the page **title**, which is painted outside `.body` from `Page.title` and so was
+  never reached by the `.body` fix. 4,321px at 1280px. A title arrives from a text input, so no
+  document content could ever have exercised it. **`min-width: 0` keeps a grid track honest and
+  does nothing about inline content overflowing its box.**
+- **Test a class by injecting the hostile case.** The suite was green over a 4,660px reader
+  overflow for all of Phase 1 because it only measured seeded content.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in
