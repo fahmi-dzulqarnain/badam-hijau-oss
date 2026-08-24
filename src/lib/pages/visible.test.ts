@@ -167,6 +167,39 @@ const MODULES: Record<string, Registration> = {
     covered: ["movePage"],
     exempt: [],
   },
+  "src/lib/pages/delete.ts": {
+    load: () => import("@/lib/pages/delete"),
+    // Soft-delete tests: tests/integration/page-delete.test.ts. This module is the one place
+    // in the codebase whose job is to *write* the predicate every other query reads, so its
+    // queries split cleanly into two groups and both need naming.
+    //
+    // `deletePage`'s reads all carry `visiblePage()` and each has a test:
+    //   "a super admin cannot delete an already-deleted page" covers the authorisation read
+    //   and the re-read under the lock, and pins that the permission bypass is not also a
+    //   soft-delete bypass;
+    //   "deleting a root page writes no redirect, and its URL 404s" covers the surviving-parent
+    //   read from the other side — a deleted parent is not a surviving one, so the branch a
+    //   missing `visiblePage()` would take is the branch that writes redirects to a page that
+    //   404s.
+    //   The subtree read deliberately does NOT filter, in both functions: it has to see
+    //   deleted rows to know which ones it is *not* responsible for. Covered by "a descendant
+    //   deleted earlier and separately is not restored with the subtree", which fails in both
+    //   directions — filtered out, the earlier row is re-stamped and resurrected.
+    //
+    // `restorePage` is the one reader in Phase 2 that is looking **for** a soft-deleted row, so
+    // its page reads carry `readableSpace` and deliberately not `visiblePage()`. Registered as
+    // `covered` rather than `exempt` because the absence is pinned rather than merely allowed:
+    //   "restore brings back the whole subtree, where it was" fails outright if the read
+    //   excludes deleted rows — there would be nothing to restore;
+    //   "restoring a page that is not deleted says so rather than reporting a miss" pins the
+    //   explicit `deletedAt === null` branch that replaces the filter;
+    //   "restoring under a still-deleted ancestor is refused" covers the ancestor read, which
+    //   inverts the filter (`deletedAt: { not: null }`) for the same reason;
+    //   "a stranger cannot delete or restore" pins that dropping the soft-delete filter did not
+    //   take the permission predicate with it.
+    covered: ["deletePage", "restorePage"],
+    exempt: [],
+  },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),
     // Soft-delete tests: tests/integration/drafts-repo.test.ts

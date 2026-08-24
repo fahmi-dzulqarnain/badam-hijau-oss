@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
 import { visiblePage } from "@/lib/pages/visible";
+import { subtreePattern } from "@/lib/pages/like";
 import {
   childPath,
   descendantPaths,
@@ -106,42 +107,6 @@ class PageNoLongerMovable extends Error {}
  * `LIKE` matched rows the boundary filter did not, which is what a broken escape looks like.
  */
 class RewriteTouchedUnexpectedRows extends Error {}
-
-/**
- * The escape character for the `LIKE` pattern below. Any character would do; a backslash is
- * conventional, and being explicit is what lets `%` and `_` inside a real path be matched
- * literally.
- */
-const LIKE_ESCAPE = "\\";
-
-/**
- * Escapes a literal string for use as a `LIKE` prefix. **The escaping and the `ESCAPE` clause
- * are one decision, not two** — either without the other is broken, so they are written
- * within a few lines of each other and neither is optional.
- *
- * All three metacharacters, including the escape character itself: `%` matches any run,
- * `_` matches exactly one character, and an unescaped trailing `\` would consume the `/`
- * that follows it in the pattern.
- *
- * A measurement worth writing down, because it says which half carries the weight: **the
- * `ESCAPE '\'` clause is not what makes this work.** Postgres already treats a backslash as
- * the escape character when no clause is given — `'axb' LIKE 'a\_b'` is false either way —
- * so deleting the clause from both statements below changes nothing and no test can catch it
- * (verified: the suite passes with it removed). What the tests do catch is deleting *this
- * function*. The clause stays because it says out loud which character the pattern is escaped
- * with, and because the SQL standard does not promise Postgres's default; it is documentation
- * with teeth, not the mechanism.
- *
- * `_` is the one that bites. Slugs today are `[a-z0-9-]`, so no path can contain any of these
- * — which is exactly why this is easy to skip now and expensive to discover later. If a
- * future rule admits `_`, an unescaped pattern for `a/b_c` also matches `a/bxc` and its whole
- * subtree, and the move would drag an unrelated page across the tree. There is a test that
- * inserts such a path directly, below the slug rules, so the escaping is exercised today
- * rather than from the day the rules change.
- */
-function escapeLikeLiteral(literal: string): string {
-  return literal.replace(/[\\%_]/g, (ch) => `${LIKE_ESCAPE}${ch}`);
-}
 
 /** What the subtree read returns: enough to rewrite, redirect and audit each row. */
 type SubtreeRow = { id: string; path: string; deletedAt: Date | null };
@@ -342,7 +307,10 @@ export async function movePage(
       // and the `ESCAPE` clause are a single decision and so is the pattern they apply to:
       // a read and a write that disagree about what "in this subtree" means is the same bug
       // twice over, in the direction nothing notices.
-      const pattern = `${escapeLikeLiteral(oldPath)}/%`;
+      //
+      // `subtreePattern` lives in `like.ts` because Task 12's soft delete matches the same
+      // subtree with the same rule; it was this module's private function until then.
+      const pattern = subtreePattern(oldPath);
 
       // Raw, and this started as `path: { startsWith: oldPath + "/" }`, which was **wrong** —
       // measured, not reasoned. Prisma does not escape `LIKE` metacharacters in `startsWith`
