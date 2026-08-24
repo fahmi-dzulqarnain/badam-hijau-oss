@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **431 vitest + 8 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **469 vitest + 8 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -27,8 +27,9 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 9. Publishing | ✅ |
 | 10. Moving a page — the landmine | ✅ |
 | 11. Redirects in the reader | ✅ |
-| **12. Soft delete and restore** | **next** |
-| 13–15 | not started |
+| 12. Soft delete and restore | ✅ |
+| **13. Audit wiring, incl. the Phase 1 debt** | **next** |
+| 14–15 | not started |
 
 Findings already worth carrying:
 
@@ -247,6 +248,14 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   reason. Verified by planting a new module that reads `PageVersion` filtered by
   `{ page: { spaceId } }` — the shape that was previously invisible — and watching it fail.
   **Name the thing you are protecting, not the syntax you expect it to be written in.**
+- **A raw write of a `Date` needs `::timestamptz AT TIME ZONE 'UTC'`.** Prisma maps `DateTime`
+  to `TIMESTAMP(3)` *without* time zone and converts to UTC itself; a raw statement bypasses
+  that, binds the `Date` as `timestamptz`, and the assignment converts to the **session** zone.
+  Measured on `Asia/Kuala_Lumpur`: `07:00Z` stored as `15:00`, read back as `15:00Z` — eight
+  hours out, silently, and the round trip stayed green because the value was only ever compared
+  against itself. `src/lib/pages/delete.ts` is the only such write today.
+- **Compare a stored timestamp against the real clock, not against another copy of itself.**
+  That is what made the bug above visible.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in

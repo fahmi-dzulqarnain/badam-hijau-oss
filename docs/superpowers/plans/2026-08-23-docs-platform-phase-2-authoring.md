@@ -946,26 +946,87 @@ the target. A redirect to a soft-deleted page 404s. No redirect chain is followe
 
 ---
 
-## Task 12: Soft delete and restore
+## Task 12: Soft delete and restore ✅
 
 **Files:**
 - Create: `src/lib/pages/delete.ts`
 - Create: `tests/integration/page-delete.test.ts`
 
-- [ ] **Step 1: `deletePage(viewer, pageId)`**
+- [x] **Step 1: `deletePage(viewer, pageId)`**
 
 Requires `EDIT`. Sets `deletedAt` on the page **and every descendant** in one statement —
 leaving children visible under a deleted parent produces pages reachable by URL with a broken
-breadcrumb. Writes a `Redirect` from the deleted path to the parent, so an existing link lands
-somewhere useful rather than on a 404. `AuditLog`.
+breadcrumb. Takes `pg_advisory_xact_lock(hashtext(spaceId))`, the create/move key. Writes a
+`Redirect` from each deleted path to the **nearest surviving ancestor**, so an existing link
+lands somewhere useful rather than on a 404. `AuditLog`.
 
-- [ ] **Step 2: `restorePage(viewer, pageId)`**
+Reuses Task 10's `LIKE` escaping — extracted to `src/lib/pages/like.ts` as `escapeLikeLiteral`
+and `subtreePattern`, so a subtree *read* and a subtree *write* cannot disagree about where the
+boundary is.
 
-Requires `ADMIN`. Clears `deletedAt` on the page and its descendants — but **only if the path
-is still free**. Something else may have been created there in the meantime, and the unique
-index will refuse; catching that as a clear message beats surfacing a constraint violation.
+**A deleted root page gets no redirect at all.** `Redirect.toPageId` is not nullable and a root
+has no surviving ancestor. A sibling root is arbitrary, and a 308 is permanent and
+browser-cached — pointing it at an unrelated page makes `resolveRedirect` lie, which is worse
+than the 404 the reader already produces well. Making `toPageId` nullable is a real option and
+was deliberately not taken here: it grows a branch in every `Redirect` reader for a case that a
+404 plus the nav rail already answers. The result carries `redirectTo: null` explicitly rather
+than leaving a caller to infer it from a count of zero.
 
-- [ ] **Step 3: Tests**
+**`PageDraft` is kept, not dropped.** `PageVersion` rows are immutable history and can always
+be re-read; the draft is the only copy of unpublished human text. Dropping it makes a *soft*
+delete destructive in the one place restore cannot undo. It costs nothing — every draft reader
+already carries `visiblePage()`, and `PageDraft.pageId` cascades, so a future hard delete still
+takes it.
+
+**`AT TIME ZONE 'UTC'` on the raw stamp is load-bearing, and it was measured.** Prisma maps
+`DateTime` to `TIMESTAMP(3)` *without* time zone and converts to UTC itself on the way in and
+out. A raw statement bypasses that: Prisma binds a JavaScript `Date` as a `timestamptz`, and
+assigning a `timestamptz` to a `timestamp` column converts it to the **session** time zone.
+Measured on this machine (`Asia/Kuala_Lumpur`):
+
+```
+timestamptz -> timestamp:      2026-08-23 15:00:00
+timestamptz AT TIME ZONE UTC:  2026-08-23 07:00:00
+```
+
+A stamp of `07:00Z` was stored as `15:00` and read back as `15:00Z` — eight hours in the
+future, silently. The whole delete/restore round trip stayed green, because the value is only
+ever compared against itself. **Any raw write of a `Date` into a Prisma `DateTime` column needs
+this cast.** Today `delete.ts` is the only one; a test pins it against the real clock rather
+than against another copy of itself.
+
+- [x] **Step 2: `restorePage(viewer, pageId)`**
+
+Requires `MANAGE_SPACE`. The asymmetry with delete's `EDIT` is deliberate: an editor cannot undo
+their own delete, and the refusal says who can.
+
+**This step's stated premise was wrong, and the correction is worth more than the step.** It
+said to clear `deletedAt` "only if the path is still free — something else may have been created
+there in the meantime, and the unique index will refuse". **That state cannot exist.**
+`@@unique([spaceId, path])` is total: it knows nothing about `deletedAt`, so a soft-deleted row
+goes on holding its path, and both `createPage` and `movePage` read deleted rows deliberately
+and refuse with `path-occupied-by-deleted`. Task 6 rejected "move the deleted page's path
+aside" *precisely because* this step promises to put a page back where it was. The check was
+implemented anyway — it is one query, and it is the difference between a sentence and a `P2002`
+if a Phase 3 importer ever reaches `Page` directly, or if that index is ever made partial on
+`deletedAt IS NULL` — but it is an **equivalent mutant**: deleting it entirely leaves the whole
+suite green, and that was reported rather than papered over with a test that pins the wrong
+thing.
+
+The restore failure that is real, and is tested, is **`ancestor-deleted`**: restoring `a/b/c`
+while `a/b` is still deleted is refused, naming the shallowest deleted ancestor. Otherwise
+`buildTree` promotes the parentless node to a **root**, and it surfaces as a bogus top-level
+module.
+
+**Restore is all-or-nothing over the set one delete took.** Delete stamps every row with a
+single `deletedAt` and skips rows that already had one; restore matches that stamp. So a
+descendant deleted earlier and separately stays deleted — that is a complete restore of a
+different set, not a partial one. Within the set: one transaction, `deletedAt: stamp` as a write
+predicate, and a count check. A half-restored subtree is exactly the URL-reachable,
+rail-invisible state the subtree rule exists to prevent, and no success message could honestly
+describe it.
+
+- [x] **Step 3: Tests**
 
 A deleted page 404s for everyone including an admin, disappears from the nav rail and the
 landing counts, and keeps its versions. Descendants go with it. Restore brings back the
