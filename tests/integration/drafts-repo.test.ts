@@ -509,7 +509,7 @@ test("a super admin who belongs to nothing can save", async () => {
   const { page } = await fixture("MEMBERS");
   const root: Viewer = { id: "", isSuperAdmin: true, memberships: [] };
   const rootUser = await db.user.create({
-    data: { email: "efcorporates@gmail.com", name: "Fahmi D.", isSuperAdmin: true },
+    data: { email: "admin@example.com", name: "Fahmi D.", isSuperAdmin: true },
   });
 
   const result = saved(

@@ -20,7 +20,7 @@ afterEach(() => vi.restoreAllMocks());
  */
 async function fixture() {
   const root = await db.user.create({
-    data: { email: "efcorporates@gmail.com", name: "Fahmi D.", isSuperAdmin: true },
+    data: { email: "admin@example.com", name: "Fahmi D.", isSuperAdmin: true },
   });
   const member = await db.user.create({
     data: { email: "aisyah@example.com", name: "Aisyah R." },

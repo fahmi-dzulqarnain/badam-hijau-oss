@@ -1097,7 +1097,7 @@ deliberately absent: it is genuinely unknown at space-resolution time, and a `pa
 on some renders and null on others is worse than none.
 
 **No seeded path exercises this audit**, and that is worth stating rather than discovering in
-Task 14. `efcorporates@gmail.com` is seeded as an **ADMIN member of `engineering`**, so
+Task 14. `admin@example.com` is seeded as an **ADMIN member of `engineering`**, so
 `needsAccessAudit` is correctly `false` for every seeded combination. The integration tests
 cover it against a real database, including the per-request boundary; **e2e and smoke
 deliberately do not**, because the alternative is a third seeded space whose only purpose is

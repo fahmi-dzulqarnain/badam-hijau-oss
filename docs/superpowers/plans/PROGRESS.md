@@ -141,7 +141,7 @@ a database ending in `_test`.
 
 **Signing in locally:** set `ALLOW_TEST_LOGIN=1` and sign in at `/api/auth/signin` as
 `aisyah@example.com` (member of engineering), `stranger@example.com` (member of nothing —
-how 404-not-403 is demonstrated), or `efcorporates@gmail.com` (super-admin). A session
+how 404-not-403 is demonstrated), or `admin@example.com` (super-admin). A session
 minted this way is revoked the moment the flag is turned off, because the token records
 which provider minted it.
 
@@ -154,7 +154,7 @@ Two spaces, seven pages, three users.
   exercise the recursive nav rail.
 - `handbook` (**ALL_STAFF**) — one published `welcome` page, so a viewer who belongs to
   nothing still sees something.
-- `aisyah@example.com` EDITOR · `efcorporates@gmail.com` super-admin ·
+- `aisyah@example.com` EDITOR · `admin@example.com` super-admin ·
   `stranger@example.com` member of nothing.
 
 **The seed is idempotent.** Re-running it publishes a new `PageVersion` only when the title,

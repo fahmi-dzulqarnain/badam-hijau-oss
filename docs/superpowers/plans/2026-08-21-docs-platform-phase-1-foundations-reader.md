@@ -3086,10 +3086,10 @@ const ENGINEERING_PAGES: SeedPage[] = [
 
 async function main() {
   const fahmi = await db.user.upsert({
-    where: { email: "efcorporates@gmail.com" },
+    where: { email: "admin@example.com" },
     update: {},
     create: {
-      email: "efcorporates@gmail.com",
+      email: "admin@example.com",
       name: "Fahmi D.",
       isSuperAdmin: true,
     },

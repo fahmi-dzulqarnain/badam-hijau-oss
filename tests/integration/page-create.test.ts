@@ -449,7 +449,7 @@ test("a non-member of an all-staff space is forbidden, not not-found", async () 
 test("a super admin who belongs to nothing can create", async () => {
   const { space } = await fixture("MEMBERS");
   const root = await db.user.create({
-    data: { email: "efcorporates@gmail.com", name: "Fahmi D.", isSuperAdmin: true },
+    data: { email: "admin@example.com", name: "Fahmi D.", isSuperAdmin: true },
   });
 
   const page = created(

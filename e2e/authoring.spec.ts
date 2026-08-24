@@ -150,7 +150,7 @@ test("an editor creates a page, writes Markdown, autosaves, publishes, and a mem
 
   // Read by a *different* member, in their own session, so this is the reader's permission
   // path and not the author's cached render.
-  const reader = await actorContext(browser, "efcorporates@gmail.com");
+  const reader = await actorContext(browser, "admin@example.com");
   const response = await reader.page.goto("/engineering/e2e-kiosk-runbook");
   expect(response?.status()).toBe(200);
   await expect(
@@ -216,7 +216,7 @@ test("a second editor's save conflicts; Load theirs replaces the text and Keep m
   // second actor: the banner has to name someone, and it can only name whoever the server
   // resolved from the session that made the earlier save.
   const aisyah = await actorContext(browser, "aisyah@example.com");
-  const fahmi = await actorContext(browser, "efcorporates@gmail.com");
+  const fahmi = await actorContext(browser, "admin@example.com");
 
   // Both load before either types, so both hold the same `seen`. Opening them in the other
   // order would hand the second editor an already-current timestamp and no conflict.
@@ -539,7 +539,7 @@ test("restore is a space admin's, on the space's own surface, and brings the sub
 
   /* The admin can, from the nav rail they are already reading. */
 
-  const admin = await actorContext(browser, "efcorporates@gmail.com");
+  const admin = await actorContext(browser, "admin@example.com");
   await admin.page.goto("/engineering");
   await admin.page
     .getByRole("navigation", { name: "Engineering administration" })
