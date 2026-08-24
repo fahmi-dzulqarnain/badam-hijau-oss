@@ -22,7 +22,17 @@ import { join, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const PLAN_DIR = join(ROOT, "docs/superpowers/plans");
-const CODE_LANGS = new Set(["ts", "tsx", "js", "mjs", "json", "css", "prisma"]);
+/**
+ * Languages whose fences are checked. `bash` and `sh` are here because leaving them out was a
+ * real hole, not an oversight to inherit: `scripts/smoke.sh` is quoted whole-file by the Phase 1
+ * plan, Phase 2 extended it, and the fence went on claiming byte-identity while landing in the
+ * "not code" bucket — a shell script could drift indefinitely and silently. Fifth time on this
+ * project that a guard could not see a whole category of the thing it guards.
+ *
+ * Most `bash` fences in these plans are command snippets, not files; they simply find no path
+ * reference above them and are skipped, exactly as before.
+ */
+const CODE_LANGS = new Set(["ts", "tsx", "js", "mjs", "json", "css", "prisma", "bash", "sh"]);
 const LOOKBACK = 12;
 
 /**
@@ -32,8 +42,29 @@ const LOOKBACK = 12;
  * fragment. That distinction is the whole point — a fence promising a whole file that no
  * longer matches it is drift, and must not be allowed to hide.
  */
-function findQuotedPath(lines, fenceLine) {
-  const exists = (p) => (existsSync(join(ROOT, p)) ? p : null);
+/**
+ * A fence's language constrains which file it can possibly be. Without this, a `bash` command
+ * snippet sitting under "Step N: Create `src/app/page.tsx`" binds to that file and is reported
+ * as drift — which is exactly what happened the moment shell fences were added to the checked
+ * set. A shell fence is never a `.tsx` file.
+ */
+const EXTENSIONS = {
+  ts: [".ts"],
+  tsx: [".tsx"],
+  js: [".js", ".mjs", ".cjs"],
+  mjs: [".mjs", ".js"],
+  json: [".json"],
+  css: [".css"],
+  prisma: [".prisma"],
+  bash: [".sh"],
+  sh: [".sh"],
+};
+
+function findQuotedPath(lines, fenceLine, lang) {
+  const allowed = EXTENSIONS[lang] ?? [];
+  const plausible = (p) => allowed.some((ext) => p.endsWith(ext));
+
+  const exists = (p) => (plausible(p) && existsSync(join(ROOT, p)) ? p : null);
 
   // Walk back from the fence and take the FIRST path reference of either kind. Whichever is
   // closest wins, and whether it was a `Step N: Create \`x\`` directive is what decides
@@ -110,7 +141,7 @@ for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
       results.skipped++;
       continue;
     }
-    const match = findQuotedPath(lines, fence.openLine);
+    const match = findQuotedPath(lines, fence.openLine, fence.lang);
     if (!match) {
       results.skipped++;
       continue;

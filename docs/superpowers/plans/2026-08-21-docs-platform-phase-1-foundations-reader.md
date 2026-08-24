@@ -374,6 +374,7 @@ the next developer can reproduce the database without guessing.
 # Creates the badam role and its two databases on a local Postgres.
 # Idempotent: safe to run repeatedly.
 set -euo pipefail
+
 cd "$(dirname "$0")/.."
 
 PGHOST="${PGHOST:-localhost}"
@@ -5703,6 +5704,11 @@ browser will very likely satisfy it — but if it fails, fix it by asserting wha
 actually renders. **Do not weaken the `not.toContainText("MQTT contracts")` assertion beside
 it** — that one is the security property this test exists for.
 
+> **Superseded snapshot.** Phase 2's Task 14 added the DOM-injection probes to this file — the
+> ones that found a 4,660px reader overflow from a heading and a 4,321px one from a page title,
+> both of which this suite had been green over for the whole of Phase 1. Read
+> `e2e/reader.spec.ts` for the current version.
+
 ```ts
 import { expect, test } from "@playwright/test";
 
@@ -5892,6 +5898,12 @@ with every run while the 2-spaces/7-pages invariant holds; and the bug report mu
 cleaned up, which the Teardown step below does.
 
 - [x] **Step 1: Create `scripts/smoke.sh`**
+
+> **Superseded snapshot.** Phase 2's Task 15 added an authoring pass — create, save, publish,
+> read, move, follow the redirect, delete, 404 — taking the script from 19 named checks to 37,
+> and rewrote its cleanup into a `sweep()` that also removes the `AuditLog` rows the pass writes.
+> Read `scripts/smoke.sh` for the current version. The sentence below claiming the fence is
+> byte-identical to the shipped file was true when written and is not now.
 
 **Two defects were baked into the fence below when it was first written**, both now fixed in
 it: three lines carried `'"'"'`-style shell-escaping artifacts left over from the heredoc that

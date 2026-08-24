@@ -1240,19 +1240,41 @@ The same off-by-one `descendantPaths` exists for, met in a Playwright locator.
 
 ---
 
-## Task 15: Extend the smoke test
+## Task 15: Extend the smoke test ✅
 
 Per the roadmap: *every later phase should extend the smoke test rather than replace it.*
 
 **Files:**
 - Modify: `scripts/smoke.sh`
 
-- [ ] Add a cold-start authoring check: sign in as the editor, create a page over HTTP,
+**19 named checks became 37.** Three findings from doing it:
+
+- **Create has no JSON route.** `/new` is a server action, so publish, move, delete and restore
+  are reachable with `curl` but create is not. The check sends the POST a JavaScript-disabled
+  browser sends, scraping React's four progressive-enhancement fields **from the form** rather
+  than hardcoding them — the action id is a build-time hash, so a pinned one would make the
+  check silently stop exercising create after the next build.
+- **The fixture is a root page on purpose.** The redirect this task follows comes from the
+  *move*; a deleted root has no surviving ancestor, so the delete's answer is a genuine 404
+  rather than a 308 to nowhere. `redirectTo: null` is asserted so the 404 is proven, not inferred.
+- **`sweep()` runs twice — before the pass and in teardown.** A fixture left by a crashed run
+  would make create fail on `path-occupied`, which reads as a product bug and is not one. It
+  ends with a `raise exception` block that fails if any marked row survived, so the cleanup
+  contract is carried by the exit code rather than by hope. Cleanup is keyed on the **slug**
+  prefix, not the path, because the pass renames the page.
+
+A latent flake in a Phase 1 helper was fixed while here: `expect_body` piped curl into
+`grep -q`, and under `set -euo pipefail` a pipeline reports the **writer's** status while
+`grep -q` exits on its first match — so a matching body can surface as curl's SIGPIPE. It had
+never bitten because the seeded pages are small enough that curl finishes first, which is
+precisely the kind of flake that appears the first time a page grows.
+
+- [x] Add a cold-start authoring check: sign in as the editor, create a page over HTTP,
       save a draft, publish it, read it back, move it, follow the redirect, delete it, confirm
       404.
-- [ ] Clean up everything it creates, the way the bug-report check already does. The dev
+- [x] Clean up everything it creates, the way the bug-report check already does. The dev
       database must be back to 2 spaces / 7 pages / 0 bug reports afterwards.
-- [ ] Prove it can fail — break one expectation, confirm a non-zero exit, restore. The exit
+- [x] Prove it can fail — break one expectation, confirm a non-zero exit, restore. The exit
       code is the contract, and `npm run smoke | tail` reports tail's status, not the
       script's.
 
@@ -1260,14 +1282,31 @@ Per the roadmap: *every later phase should extend the smoke test rather than rep
 
 ## Phase 2 exit criteria
 
-- [ ] `npm test`, `npm run test:e2e`, `npm run smoke` all pass
-- [ ] `npm run typecheck && npm run build` clean
-- [ ] `npm run plan:check` reports 0 drifted
-- [ ] An editor creates, writes, previews, publishes and reads back a page in the browser
-- [ ] Concurrent editing produces a conflict banner, and no save is silently lost in either
-      direction
-- [ ] A moved page's old URL 301s to the new one
-- [ ] A deleted page 404s, leaves the nav, and can be restored by an admin with its history
-- [ ] A `VIEWER` cannot create, edit, publish, move or delete, and cannot discover a space
-      they may not read by attempting any of them
-- [ ] A super admin's read of a members-only space they do not belong to writes an audit row
+All verified on 24 Aug 2026:
+
+- [x] `npm test` — **520 passing, 42 files**
+- [x] `npm run test:e2e` — **21 passing** against a production build
+- [x] `npm run smoke` — **37 checks, `SMOKE PASSED`, exit 0** from a cold start
+- [x] `npm run typecheck && npm run build` — both exit 0
+- [x] `npm run plan:check` — **0 drifted**
+- [x] An editor creates, writes, previews, publishes and reads back a page in the browser
+- [x] Concurrent editing produces a conflict banner, and no save is silently lost in either
+      direction — two Playwright contexts, two real identities, Load theirs and Keep mine both
+      asserted against the database
+- [x] A moved page's old URL permanently redirects to the new one — **308**, and spec §14 was
+      corrected rather than the code bent to match
+- [x] A deleted page 404s, leaves the nav, and can be restored by an admin with its history —
+      restore is `MANAGE_SPACE` where delete is `EDIT`, so an editor cannot undo their own delete
+- [x] A `VIEWER` cannot create, edit, publish, move or delete, and cannot discover a space they
+      may not read by attempting any of them
+- [x] A super admin's read of a members-only space they do not belong to writes an audit row —
+      covered by integration tests. **Not** by e2e or smoke, deliberately: the super admin is a
+      seeded ADMIN of `engineering`, so no seeded combination reaches the predicate, and making
+      one would mean a third space existing solely for this path against a
+      `2 spaces / 7 pages` baseline asserted in a dozen places.
+
+Dev database after the full gate: **2 spaces / 7 pages / 6 versions / 0 drafts / 0 audit /
+0 redirects / 0 bugs / 0 soft-deleted** — the e2e suite and the smoke script both assert their
+own cleanup rather than promising it.
+
+**Phase 2 is complete.**

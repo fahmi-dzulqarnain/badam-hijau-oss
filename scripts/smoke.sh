@@ -57,7 +57,13 @@ expect_status() { # url expected label
 }
 
 expect_body() { # url needle label
-  curl -s -b "$JAR" "$BASE$1" | grep -q -- "$2" \
+  # Written to a file and grepped, not piped: under `pipefail` a pipeline reports the WRITER's
+  # status, and `grep -q` exits on its first match while curl is still writing — so a matching
+  # body can surface as curl's SIGPIPE. It has never bitten here because the seeded pages are
+  # small enough that curl finishes first, which is exactly the kind of latent flake that
+  # appears the first time a page grows. `body_has` already does it this way.
+  curl -s -b "$JAR" "$BASE$1" > "$OUT"
+  grep -q -- "$2" "$OUT" \
     && ok "$3" || fail "$3 (no match for '$2' at $1)"
 }
 

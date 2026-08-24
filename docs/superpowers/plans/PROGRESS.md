@@ -1,8 +1,8 @@
 # Execution status
 
-**Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
+**Phase 1 is complete. Phase 2 (authoring) is complete.**
 
-Branch: `phase-1-foundations-reader` · **520 vitest + 21 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **520 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -12,7 +12,11 @@ Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 ## Phase 2 — authoring
 
 Decisions taken with the user: **CodeMirror 6** for the editing surface, **soft delete** for
-removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Phases 3–6.
+removal. Sixteen tasks (14b was added mid-phase, when Task 14 found the library had no product
+surface); every exit criterion verified — see the end of the
+[phase-2 plan](2026-08-23-docs-platform-phase-2-authoring.md). Next: **Phase 3, doc types and
+lifecycle**, whose first job is the per-doc-type status vocabularies that Task 9 stubbed a
+Phase-2 subset of, and whose RFC row the spec has already had corrected once.
 
 | Task | State |
 |---|---|
@@ -31,7 +35,7 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 13. Audit wiring, incl. the Phase 1 debt | ✅ |
 | 14. End-to-end coverage of authoring | ✅ |
 | 14b. Reaching authoring from the product | ✅ |
-| **15. Extend the smoke test** | **next — last task in the phase** |
+| 15. Extend the smoke test | ✅ |
 
 Findings already worth carrying:
 
@@ -281,6 +285,15 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   over-claimed (the plan puts several fences under one heading). Blockquotes are skipped because
   every supersession note is one and names the file it supersedes. **Watch the counts move** —
   the first failure was visible only as 16 superseded becoming 15.
+- **`plan:check` covers `bash` and `sh` fences.** Leaving them out meant `scripts/smoke.sh`
+  could be quoted whole-file and drift indefinitely while landing in the "not code" bucket —
+  fifth time on this project that a guard could not see a whole category. Adding them surfaced
+  three real stale fences and, immediately, a new mis-binding class: a `bash` command snippet
+  under a `Create src/app/page.tsx` step bound to that file. **A fence's language now constrains
+  which paths it may bind to** — a shell fence is never a `.tsx`.
+- **A supersession note must sit immediately above its fence.** `isSuperseded` looks 12 lines
+  up; a note placed above an intervening paragraph is not seen, and the fence reads as drift.
+  Placing one above the wrong fence is worse — it claims a file was superseded when it was not.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in
