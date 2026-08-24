@@ -1,7 +1,8 @@
-import type { DocType, Prisma } from "@prisma/client";
+import type { DocType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
+import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import {
   childPath,
@@ -271,23 +272,20 @@ export async function createPage(
       select: { pageId: true },
     });
 
-    await tx.auditLog.create({
-      data: {
-        actorId: viewer.id,
-        action: "page.create",
-        spaceId: space.id,
-        pageId: page.id,
-        // The path is recorded now because Task 10 can move the page afterwards, at which
-        // point the row no longer says where it was created.
-        detail: {
-          path: page.path,
-          slug: slug.slug,
-          title,
-          docType: input.docType,
-          parentId: input.parentId,
-        } satisfies Prisma.InputJsonObject,
+    await writeAudit(tx, {
+      actorId: viewer.id,
+      action: "page.create",
+      spaceId: space.id,
+      pageId: page.id,
+      // The path is recorded now because Task 10 can move the page afterwards, at which
+      // point the row no longer says where it was created.
+      detail: {
+        path: page.path,
+        slug: slug.slug,
+        title,
+        docType: input.docType,
+        parentId: input.parentId,
       },
-      select: { id: true },
     });
 
     return { ok: true, page: { id: page.id, path: page.path, spaceKey: space.key } };

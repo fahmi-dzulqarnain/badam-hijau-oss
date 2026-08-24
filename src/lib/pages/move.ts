@@ -1,7 +1,7 @@
-import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
+import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { subtreePattern } from "@/lib/pages/like";
 import {
@@ -506,27 +506,24 @@ export async function movePage(
         data: moves.map((move) => ({ spaceId, fromPath: move.path, toPageId: move.id })),
       });
 
-      await tx.auditLog.create({
-        data: {
-          actorId: viewer.id,
-          action: "page.move",
-          spaceId,
-          pageId: page.id,
-          // Both paths, both parents, and the row count. The paths because this page can be
-          // moved again and the row would otherwise not say where it went; the count because
-          // "a move rewrote 40 pages" is the difference between a rename and a
-          // reorganisation, and nothing else records it.
-          detail: {
-            from: oldPath,
-            to: newPath,
-            fromSlug: page.slug,
-            toSlug: slug.slug,
-            fromParentId: page.parentId,
-            toParentId: input.newParentId,
-            rewritten,
-          } satisfies Prisma.InputJsonObject,
+      await writeAudit(tx, {
+        actorId: viewer.id,
+        action: "page.move",
+        spaceId,
+        pageId: page.id,
+        // Both paths, both parents, and the row count. The paths because this page can be
+        // moved again and the row would otherwise not say where it went; the count because
+        // "a move rewrote 40 pages" is the difference between a rename and a
+        // reorganisation, and nothing else records it.
+        detail: {
+          from: oldPath,
+          to: newPath,
+          fromSlug: page.slug,
+          toSlug: slug.slug,
+          fromParentId: page.parentId,
+          toParentId: input.newParentId,
+          rewritten,
         },
-        select: { id: true },
       });
 
       // TODO(phase-4): spec §9 step 6 — the search vector stores the path, so every rewritten

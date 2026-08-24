@@ -123,7 +123,14 @@ test("a members-only page is readable by a member", async () => {
 
 test("a super admin can read a members-only page", async () => {
   await fixture("MEMBERS");
-  const root: Viewer = { id: "root", isSuperAdmin: true, memberships: [] };
+  // A real User row, not a synthetic id. Since Task 13 this read writes a `space.access`
+  // audit row, and `AuditLog.actorId` is a foreign key — with an id naming no user the write
+  // fails, the read still succeeds (which is the point of that design), and the suite prints
+  // the audit module's error line on every run. A guard people learn to ignore is not a guard.
+  const user = await db.user.create({
+    data: { email: "root@example.com", name: "Root", isSuperAdmin: true },
+  });
+  const root: Viewer = { id: user.id, isSuperAdmin: true, memberships: [] };
   const result = await getPublishedPage(root, {
     spaceKey: "engineering",
     path: "architecture/mqtt-contracts",

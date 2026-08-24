@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { readableSpace } from "@/lib/authz/where";
+import { auditSpaceAccess } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import type { Viewer } from "@/lib/authz/types";
 
@@ -8,13 +9,20 @@ import type { Viewer } from "@/lib/authz/types";
  * Resolves a space the viewer may read, or null. Unreadable and nonexistent give the same
  * answer, so a title cannot leak through a status code (spec §8).
  *
- * TODO(phase-2): call needsAccessAudit(viewer, space) on the result and write to
- * AuditLog. Every page read must resolve its space through here first, which makes this
- * the right wiring point — but that is a precondition on callers, not a property of this
- * module: listSpacePages applies its own permission filter without passing through here.
+ * **This is where Phase 1's `needsAccessAudit` debt is paid** (spec §8: a super admin reading
+ * a `MEMBERS` space they do not belong to leaves a trace). It is the right wiring point for
+ * the reason the Phase 1 TODO gave — every space read passes through here — and that remains
+ * a precondition on callers rather than a property of this module: `listSpacePages` states its
+ * own permission filter and does not pass through here, so it audits nothing. That is
+ * consistent rather than lax: the routes that call it resolve the space through this function
+ * first, and the audit is per request, so the row is already written.
+ *
+ * The audit does not block or endanger the read. `auditSpaceAccess` hands the write to
+ * `after()` and cannot throw; see its docstring for why those are two mechanisms and not one
+ * restated twice.
  */
 export const getReadableSpaceByKey = cache(async (viewer: Viewer, key: string) => {
-  return db.space.findFirst({
+  const space = await db.space.findFirst({
     // No `visiblePage()` here, deliberately: this queries Space, which has no `deletedAt`.
     // Listed as exempt in the soft-delete guard test rather than simply omitted from it.
     where: readableSpace(viewer, { key }),
@@ -27,6 +35,12 @@ export const getReadableSpaceByKey = cache(async (viewer: Viewer, key: string) =
       visibility: true,
     },
   });
+
+  // Nothing to audit for a miss: unreadable and nonexistent are the same answer here, and
+  // neither is an access to a space.
+  if (space) await auditSpaceAccess(viewer, space);
+
+  return space;
 });
 
 /**

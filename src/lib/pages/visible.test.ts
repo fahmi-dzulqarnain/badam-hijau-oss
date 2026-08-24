@@ -209,6 +209,16 @@ const MODULES: Record<string, Registration> = {
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.
+  "src/lib/audit/log.ts": {
+    reachesPage: false,
+    why:
+      "writes AuditLog and reads nothing. The one delegate call is `tx.auditLog.create`, on a " +
+      "client its caller supplies; the `pageId` it records is passed in by the mutation that " +
+      "already read the row under `visiblePage()`, never looked up here. A soft-delete filter " +
+      "would have nothing to filter — and it must NOT acquire one: `page.delete` and " +
+      "`page.restore` audit rows are about pages that are soft-deleted at the moment they are " +
+      "written, so a filter here would drop exactly the rows the trail exists for.",
+  },
   "src/lib/auth/config.ts": { reachesPage: false, why: "queries User only, to resolve a sign-in" },
   "src/lib/users/upsert.ts": { reachesPage: false, why: "upserts User from an OIDC profile" },
   "src/lib/users/viewer.ts": { reachesPage: false, why: "reads User and its memberships" },

@@ -1,7 +1,8 @@
-import type { DocStatus, Prisma } from "@prisma/client";
+import type { DocStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
+import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { defaultPublishStatus, validateTransition } from "@/lib/pages/transition";
 import { stripControl } from "@/lib/text/control";
@@ -324,23 +325,20 @@ export async function publishPage(
       // TODO(phase-4): spec §9 step 6 — refresh the search vector for this page.
 
       // Spec §9 step 7.
-      await tx.auditLog.create({
-        data: {
-          actorId: viewer.id,
-          action: "page.publish",
-          spaceId: authorised.space.id,
-          pageId: page.id,
-          // `from` and `to` both, and the path as it stood: Task 10 can move the page
-          // afterwards, at which point the row no longer says where it was published.
-          detail: {
-            path: page.path,
-            versionId: version.id,
-            title,
-            from: page.status,
-            to: status,
-          } satisfies Prisma.InputJsonObject,
+      await writeAudit(tx, {
+        actorId: viewer.id,
+        action: "page.publish",
+        spaceId: authorised.space.id,
+        pageId: page.id,
+        // `from` and `to` both, and the path as it stood: Task 10 can move the page
+        // afterwards, at which point the row no longer says where it was published.
+        detail: {
+          path: page.path,
+          versionId: version.id,
+          title,
+          from: page.status,
+          to: status,
         },
-        select: { id: true },
       });
 
       // TODO(phase-5): spec §9 step 8 — enqueue a `GitJob`, committed with this transaction

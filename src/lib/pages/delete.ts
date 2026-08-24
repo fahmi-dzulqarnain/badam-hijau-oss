@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
+import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { subtreePattern } from "@/lib/pages/like";
 import { descendantPaths } from "@/lib/pages/slug";
@@ -348,26 +349,23 @@ export async function deletePage(viewer: Viewer, pageId: string): Promise<Delete
         redirects = written.count;
       }
 
-      await tx.auditLog.create({
-        data: {
-          actorId: viewer.id,
-          action: "page.delete",
-          spaceId,
-          pageId: page.id,
-          // `deletedAt` is in the row because it is the restore key: given only this audit
-          // trail, it is what says which rows a later restore brought back. The path because
-          // the page can be moved after being restored, at which point nothing else records
-          // where it was when it was deleted.
-          detail: {
-            path: page.path,
-            title: page.title,
-            deletedAt: deletedAt.toISOString(),
-            deleted,
-            redirects,
-            redirectTo: parent?.path ?? null,
-          } satisfies Prisma.InputJsonObject,
+      await writeAudit(tx, {
+        actorId: viewer.id,
+        action: "page.delete",
+        spaceId,
+        pageId: page.id,
+        // `deletedAt` is in the row because it is the restore key: given only this audit
+        // trail, it is what says which rows a later restore brought back. The path because
+        // the page can be moved after being restored, at which point nothing else records
+        // where it was when it was deleted.
+        detail: {
+          path: page.path,
+          title: page.title,
+          deletedAt: deletedAt.toISOString(),
+          deleted,
+          redirects,
+          redirectTo: parent?.path ?? null,
         },
-        select: { id: true },
       });
 
       // TODO(phase-4): spec §9 step 6 — the search index still carries every row taken down
@@ -591,23 +589,20 @@ export async function restorePage(viewer: Viewer, pageId: string): Promise<Resto
         where: { spaceId, fromPath: { in: restoredPaths } },
       });
 
-      await tx.auditLog.create({
-        data: {
-          actorId: viewer.id,
-          action: "page.restore",
-          spaceId,
-          pageId: page.id,
-          // The stamp identifies which delete this undid, which is the one thing the pair of
-          // audit rows cannot otherwise be joined on.
-          detail: {
-            path: page.path,
-            title: page.title,
-            deletedAt: stamp.toISOString(),
-            restored: restored.count,
-            redirectsCleared: cleared.count,
-          } satisfies Prisma.InputJsonObject,
+      await writeAudit(tx, {
+        actorId: viewer.id,
+        action: "page.restore",
+        spaceId,
+        pageId: page.id,
+        // The stamp identifies which delete this undid, which is the one thing the pair of
+        // audit rows cannot otherwise be joined on.
+        detail: {
+          path: page.path,
+          title: page.title,
+          deletedAt: stamp.toISOString(),
+          restored: restored.count,
+          redirectsCleared: cleared.count,
         },
-        select: { id: true },
       });
 
       // TODO(phase-4): spec §9 step 6 — every restored row needs its search index entry back.
