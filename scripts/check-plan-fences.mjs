@@ -35,18 +35,36 @@ const LOOKBACK = 12;
 function findQuotedPath(lines, fenceLine) {
   const exists = (p) => (existsSync(join(ROOT, p)) ? p : null);
 
-  for (let i = fenceLine - 1; i >= Math.max(0, fenceLine - LOOKBACK); i--) {
-    const directive = lines[i].match(
+  // Walk back from the fence and take the FIRST path reference of either kind. Whichever is
+  // closest wins, and whether it was a `Step N: Create \`x\`` directive is what decides
+  // `wholeFile`.
+  //
+  // Three failure modes were hit getting here, and all three were silent or spurious:
+  //
+  //  - Two separate lookbacks, 12 lines for the directive: a supersession note between a
+  //    heading and its fence pushed the directive out of reach, `wholeFile` silently became
+  //    false, and the fence dropped into the `unmatched` bin — the very bin this tool grew a
+  //    `--verbose` flag for. Caught only by watching the counts move by one.
+  //  - Widening that to 40: immediately mis-bound three fences to the *previous* step's file
+  //    and reported drift that did not exist.
+  //  - "Nearest step heading decides": over-claimed, because the plan puts several fences under
+  //    one heading — a component and a stylesheet both landed on an API route's step.
+  //
+  // Blockquote lines are skipped: every supersession note is a blockquote and names the file it
+  // supersedes, so counting those would re-create the first failure.
+  for (let i = fenceLine - 1; i >= Math.max(0, fenceLine - LOOKBACK * 2); i--) {
+    const line = lines[i];
+    if (/^\s*>/.test(line)) continue;
+
+    const directive = line.match(
       /\*\*Step \d+:\s*(Create|Replace|Rewrite)[^`]*`([^`\s]+\.[a-z]{2,6})`/i,
     );
     if (directive) {
       const p = exists(directive[2].replace(/^\.\//, ""));
       if (p) return { path: p, wholeFile: true };
     }
-  }
 
-  for (let i = fenceLine - 1; i >= Math.max(0, fenceLine - LOOKBACK); i--) {
-    for (const m of lines[i].matchAll(/`([^`\s]+\.[a-z]{2,6})`/g)) {
+    for (const m of line.matchAll(/`([^`\s]+\.[a-z]{2,6})`/g)) {
       const p = exists(m[1].replace(/^\.\//, ""));
       if (p) return { path: p, wholeFile: false };
     }

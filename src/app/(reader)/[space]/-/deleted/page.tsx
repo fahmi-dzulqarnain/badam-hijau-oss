@@ -89,7 +89,8 @@ export default async function DeletedPages({
                 <div className="del-what">
                   {/* Every one of these three is user-typed text that can be one unbreakable
                       300-character token, and none of them is inside `.body` — the fifth shape
-                      of the overflow class exactly. `del.css` states the guard by name. */}
+                      of the overflow class exactly. the `.del-*` rules in `doc.css` carry the
+                      guard, and name it. */}
                   <span className="del-title">{page.title}</span>
                   <code className="del-path">{page.path}</code>
                   <span className="del-when">

@@ -1174,7 +1174,7 @@ must preserve that.
 
 ---
 
-## Task 14b: Reaching authoring from the product
+## Task 14b: Reaching authoring from the product ✅
 
 **Found by Task 14, and it is a scope gap rather than a nit.** `movePage`, `deletePage` and
 `restorePage` are library functions with no route and no UI, and `/edit/[pageId]` is unreachable
@@ -1194,13 +1194,13 @@ This lands **before** Task 15, because the smoke test has to exercise move and d
 - Modify: the reader route or `PageInfoCard` — an **Edit this page** link, rendered only for a
   viewer with `EDIT`
 
-- [ ] **Step 1: The three routes**
+- [x] **Step 1: The three routes**
 
 Thin translations of the existing library functions, exactly as `publish/route.ts` is. Every
 authorisation decision already lives in the module — do not re-decide anything here, and keep
 404-not-403 rendered rather than re-derived. Reuse Task 5's body handling where a body exists.
 
-- [ ] **Step 2: The Edit affordance**
+- [x] **Step 2: The Edit affordance**
 
 Rendered only when `can(viewer, space, "EDIT")`. This is what makes Task 14's
 "a `VIEWER` sees no edit affordance" assertion mean something, so add that test there too.
@@ -1208,17 +1208,35 @@ Rendered only when `can(viewer, space, "EDIT")`. This is what makes Task 14's
 Note the reader is a server component and the permission is already resolved in its layout —
 do not add a second query for it.
 
-- [ ] **Step 3: Move and delete from the editor**
+- [x] **Step 3: Move and delete from the editor**
 
 Move needs a target parent and a slug; delete needs a confirmation that names what else goes
 with it — deleting a page takes its whole subtree, and an editor who is not told that will find
 out afterwards. Restore is `MANAGE_SPACE`, so it belongs to an admin surface, not the editor's.
 
-- [ ] **Step 4: Tests**
+- [x] **Step 4: Tests**
 
 Integration tests per route, plus e2e: move a page **through the UI** and follow the 308;
 delete a page with a child and see the confirmation name the child; a `VIEWER` sees no Edit
 link. Clean up after yourself — the e2e suite asserts the dev-database counts are unchanged.
+
+The UI-driven tests deliberately duplicate what Task 14's library-driven move and delete tests
+already cover, and that is the point: **Task 14b exists because driving the library was the only
+way**. The UI move test enters the editor by clicking the reader's own `Edit this page` link, so
+Step 2's affordance is on a critical path rather than only asserted absent for a stranger.
+
+Two details worth carrying:
+
+- **The delete-confirmation test uses a three-level subtree.** A two-level one cannot distinguish
+  correct behaviour from counting only direct children, or from a hardcoded 1.
+- **The restore test asserts the refusal as well as the success**: an `EDIT`-only viewer sees no
+  administration link, and reaching `/{space}/-/deleted` by URL gets the module's own sentence
+  with no Restore buttons and no deleted titles in the body. The
+  `EDIT`-deletes / `MANAGE_SPACE`-restores asymmetry is the one nobody can guess.
+
+It also hit the prefix-versus-boundary confusion one more time, in a new place: filtering the
+deleted-list rows by path matched two rows, because a leaf's path *begins with* its ancestor's.
+The same off-by-one `descendantPaths` exists for, met in a Playwright locator.
 
 ---
 

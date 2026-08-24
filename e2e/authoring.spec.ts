@@ -718,8 +718,10 @@ test("a viewer sees no edit affordance and cannot reach the editor by URL", asyn
   await page.goto("/handbook/welcome");
   await expect(page.getByRole("heading", { level: 1, name: "Welcome" })).toBeVisible();
   // No affordance anywhere on a page they can read. Phase 2 ships no reader-to-editor link for
-  // anyone, so this currently asserts an absence that is universal rather than role-dependent —
-  // reported as drift. The three checks below are the ones that pin the authorisation.
+  // Task 14b made this role-dependent, which it was not when first written: the reader now
+  // renders an `Edit this page` link for a viewer holding EDIT, and the UI-driven move test
+  // below enters the editor by clicking it. So this assertion is a real absence for this
+  // viewer, not a universal one — the positive half is covered, on the critical path.
   await expect(page.locator('a[href^="/edit/"], a[href^="/new"]')).toHaveCount(0);
 
   // Readable but not editable: say so. They can already see the page, so naming the refusal

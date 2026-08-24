@@ -2,7 +2,7 @@
 
 **Phase 1 is complete.** **Phase 2 (authoring) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **482 vitest + 18 Playwright tests passing** ·
+Branch: `phase-1-foundations-reader` · **520 vitest + 21 Playwright tests passing** ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -30,8 +30,8 @@ removal. Fifteen tasks; see the plan for what Phase 2 deliberately leaves to Pha
 | 12. Soft delete and restore | ✅ |
 | 13. Audit wiring, incl. the Phase 1 debt | ✅ |
 | 14. End-to-end coverage of authoring | ✅ |
-| **14b. Reaching authoring from the product** | **next — scope gap Task 14 found** |
-| 15. Extend the smoke test | not started |
+| 14b. Reaching authoring from the product | ✅ |
+| **15. Extend the smoke test** | **next — last task in the phase** |
 
 Findings already worth carrying:
 
@@ -273,6 +273,14 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   does nothing about inline content overflowing its box.**
 - **Test a class by injecting the hostile case.** The suite was green over a 4,660px reader
   overflow for all of Phase 1 because it only measured seeded content.
+- **`plan:check` binds a fence to the nearest path reference above it, skipping blockquotes.**
+  Getting that right took three wrong versions, each failing differently: a 12-line directive
+  window was too narrow (a supersession note pushed a directive out of reach and the fence
+  dropped silently into `unmatched`); 40 lines was too wide (mis-bound three fences to the
+  *previous* step's file and reported drift that did not exist); "nearest step heading decides"
+  over-claimed (the plan puts several fences under one heading). Blockquotes are skipped because
+  every supersession note is one and names the file it supersedes. **Watch the counts move** —
+  the first failure was visible only as 16 superseded becoming 15.
 - **No reader page may scroll horizontally.** An unbreakable token — an autolinked URL, a
   long mermaid identifier, a wide image — widens the document, and because the top bar and
   both rails are sticky in that scroll container they slide apart. Fixed three times in
