@@ -343,6 +343,270 @@ test("a deleted page 404s and leaves the nav rail", async ({ page }) => {
   await expect(page.locator("body")).not.toContainText(fixture.title);
 });
 
+/* ------------------------------------------- move, delete and restore through the UI ---- */
+
+/*
+ * The three tests below are Task 14b's own, and they are deliberately not the two above.
+ *
+ * Those two drive `movePage` and `deletePage` as functions, because when they were written
+ * there was no route and no control to drive — the properties they pin are the reader's. These
+ * three start from a URL a person can reach and end at a row in the database, so what they pin
+ * is the thing Task 14b added: that the product has a way in at all. A regression that removed
+ * the Edit link, the move form, the confirmation or the restore button would leave every test
+ * above green.
+ */
+
+test("an editor moves a page from the editor's own surface, and the old URL redirects to it", async ({
+  page,
+}) => {
+  const parent = await seedPublishedPage({
+    slug: "e2e-ui-move-parent",
+    title: "Adoptive parent",
+    markdown: "The page below was moved under this one from the editor.\n",
+  });
+  const subject = await seedPublishedPage({
+    slug: "e2e-ui-move-from",
+    title: "Relocated by hand",
+    markdown: "Recovery steps for the kiosk bridge.\n",
+  });
+
+  await signIn(page, "aisyah@example.com");
+
+  // Entered through the reader, because "can an editor get to the editor" is half of what this
+  // test is for: Task 14b added this link, and before it the only way to `/edit/{id}` was to
+  // know a cuid.
+  expect((await page.goto(`/engineering/${subject.path}`))?.status()).toBe(200);
+  await page.getByRole("link", { name: "Edit this page" }).click();
+  await expect(page).toHaveURL(new RegExp(`/edit/${subject.id}$`));
+
+  // Both halves of a move in one action — a new parent and a new slug — because the path is
+  // rebuilt from the pair and a form that only ever changed one of them would not show that.
+  await page.getByLabel("Parent page").selectOption(parent.id);
+  await page.getByLabel("Slug").fill("e2e-ui-move-to");
+  await page.getByRole("button", { name: "Move page" }).click();
+
+  const newPath = `${parent.path}/e2e-ui-move-to`;
+  // The endpoint's own sentence, rendered by the surface that asked for the move. Asserting
+  // the text and not just its absence of failure is what pins that the client read `path` out
+  // of the response rather than assuming the slug it sent.
+  await expect(page.locator(".ed-manage-done")).toContainText(`Moved to “${newPath}”`);
+  await expect(page.locator(".ed-manage-done")).toContainText("The old URL now redirects here");
+  await expect(page.locator(".ed-manage-error")).toHaveCount(0);
+
+  expect(
+    (await db.page.findUniqueOrThrow({ where: { id: subject.id }, select: { path: true } })).path,
+  ).toBe(newPath);
+
+  // 308, as Task 11 recorded: `permanentRedirect()` forbids an intermediary rewriting the
+  // method on the retry, where the spec's 301 does not.
+  const raw = await page.request.get(`/engineering/${subject.path}`, { maxRedirects: 0 });
+  expect(raw.status()).toBe(308);
+  expect(raw.headers()["location"]).toBe(`/engineering/${newPath}`);
+
+  // And it lands, rather than merely pointing somewhere.
+  const followed = await page.goto(`/engineering/${subject.path}`);
+  expect(followed?.status()).toBe(200);
+  expect(new URL(page.url()).pathname).toBe(`/engineering/${newPath}`);
+  await expect(page.getByRole("heading", { level: 1, name: subject.title })).toBeVisible();
+});
+
+test("the delete confirmation names every sub-page that goes with the page", async ({ page }) => {
+  // Three deep, not two. The count and the list are computed from `descendantsOf`, and a
+  // subtree one level deep cannot tell a correct implementation from one that counts direct
+  // children — or from a hardcoded 1.
+  const root = await seedPublishedPage({
+    slug: "e2e-ui-delete-root",
+    title: "Doomed section",
+    markdown: "This section and everything under it is about to go.\n",
+  });
+  const child = await seedPublishedPage({
+    slug: "e2e-ui-delete-child",
+    title: "Doomed child",
+    markdown: "A page whose parent is about to be deleted.\n",
+    parentId: root.id,
+  });
+  const grandchild = await seedPublishedPage({
+    slug: "e2e-ui-delete-grandchild",
+    title: "Doomed grandchild",
+    markdown: "A page two levels under the one being deleted.\n",
+    parentId: child.id,
+  });
+
+  await signIn(page, "aisyah@example.com");
+  await page.goto(`/edit/${root.id}`);
+
+  const confirm = page.locator(".ed-manage-confirm");
+  // Nothing is said until asked: the sentence is what the first click is for.
+  await expect(confirm).toHaveCount(0);
+  await page.getByRole("button", { name: "Delete this page…" }).click();
+
+  await expect(confirm).toContainText("Doomed section");
+  await expect(confirm).toContainText(root.path);
+  // The requirement, verbatim: an editor is told what else goes, by name and by count, before
+  // they can act — because restore is `MANAGE_SPACE` and they cannot undo this themselves.
+  await expect(confirm).toContainText("This also deletes its 2 sub-pages:");
+  for (const doomed of [child, grandchild]) {
+    await expect(confirm.locator(".ed-manage-list")).toContainText(doomed.title);
+    await expect(confirm.locator(".ed-manage-list")).toContainText(doomed.path);
+  }
+
+  // The first click is not destructive, and Cancel is not a promise. Asserted against the
+  // database rather than the screen.
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0);
+  expect(await db.page.count({ where: { id: root.id, deletedAt: null } })).toBe(1);
+  expect((await page.request.get(`/engineering/${root.path}`)).status()).toBe(200);
+
+  // The second click acts, and the count is on the button too — this is the last thing read
+  // before the page goes.
+  await page.getByRole("button", { name: "Delete this page…" }).click();
+  await confirm.getByRole("button", { name: "Delete this page and 2 sub-pages" }).click();
+
+  // A deleted root page has no surviving ancestor, so `redirectHref` is null and there is
+  // nowhere to send the editor but the space.
+  await expect(page).toHaveURL(/\/engineering$/, { timeout: 15_000 });
+
+  expect(
+    await db.page.count({
+      where: { id: { in: [root.id, child.id, grandchild.id] }, deletedAt: { not: null } },
+    }),
+  ).toBe(3);
+  for (const gone of [root, child, grandchild]) {
+    expect((await page.goto(`/engineering/${gone.path}`))?.status()).toBe(404);
+  }
+
+  await page.goto("/engineering");
+  await expect(page.locator("body")).not.toContainText(root.title);
+  await expect(page.locator("body")).not.toContainText(grandchild.title);
+});
+
+test("restore is a space admin's, on the space's own surface, and brings the subtree back", async ({
+  browser,
+}) => {
+  // A surviving root above the delete, so the delete writes redirects and the restore has
+  // something to reclaim. Deleting the middle page is also what makes the leaf's own row
+  // refusable, which is the asymmetry's second half.
+  const top = await seedPublishedPage({
+    slug: "e2e-ui-restore-top",
+    title: "Surviving ancestor",
+    markdown: "This page is never deleted.\n",
+  });
+  const mid = await seedPublishedPage({
+    slug: "e2e-ui-restore-mid",
+    title: "Restorable section",
+    markdown: "This page is deleted and then restored.\n",
+    parentId: top.id,
+  });
+  const leaf = await seedPublishedPage({
+    slug: "e2e-ui-restore-leaf",
+    title: "Restorable child",
+    markdown: "This page goes with its parent, both ways.\n",
+    parentId: mid.id,
+  });
+
+  // The delete goes through the module: this test is about the restore surface, and Aisyah's
+  // half of it is already driven through the UI by the test above.
+  const deleted = await deletePage(await viewerFor("aisyah@example.com"), mid.id);
+  if (!deleted.ok) throw new Error(`deletePage: ${JSON.stringify(deleted)}`);
+  expect(deleted.page.deleted).toBe(2);
+  expect(deleted.page.redirectTo).toBe(top.path);
+  expect(deleted.page.redirects).toBe(2);
+
+  // Deleted, and its old URL now points at the ancestor that survived.
+  const editor = await actorContext(browser, "aisyah@example.com");
+  const bounced = await editor.page.request.get(`/engineering/${mid.path}`, { maxRedirects: 0 });
+  expect(bounced.status()).toBe(308);
+  expect(bounced.headers()["location"]).toBe(`/engineering/${top.path}`);
+
+  /* The editor who deleted it cannot put it back, and is told who can. */
+
+  await editor.page.goto("/engineering");
+  // No affordance: the admin nav is its own landmark precisely so its absence is assertable.
+  await expect(
+    editor.page.getByRole("navigation", { name: "Engineering administration" }),
+  ).toHaveCount(0);
+
+  // Reached by URL anyway. `EDIT` is not `MANAGE_SPACE`, and the refusal names the role that
+  // is — the one `forbidden` in the codebase with a sentence, because nobody can guess this.
+  await editor.page.goto("/engineering/-/deleted");
+  await expect(editor.page.locator(".del-empty")).toContainText(
+    "Restoring a deleted page needs space admin",
+  );
+  await expect(editor.page.locator(".del-empty")).toContainText("Ask an admin of this space");
+  await expect(editor.page.getByRole("button", { name: /^Restore / })).toHaveCount(0);
+  // A list of deleted titles is a list of titles: refused means not shown, not shown greyed.
+  await expect(editor.page.locator("body")).not.toContainText(mid.title);
+
+  /* The admin can, from the nav rail they are already reading. */
+
+  const admin = await actorContext(browser, "efcorporates@gmail.com");
+  await admin.page.goto("/engineering");
+  await admin.page
+    .getByRole("navigation", { name: "Engineering administration" })
+    .getByRole("link", { name: "Deleted pages" })
+    .click();
+  await expect(admin.page).toHaveURL(/\/engineering\/-\/deleted$/);
+
+  const rows = admin.page.locator(".del-list li");
+  await expect(rows).toHaveCount(2);
+  // The number that tells an admin whether they are looking at one delete or two.
+  //
+  // Filtered by title and not by path, which is not a nicety: the leaf's path *begins* with
+  // the mid page's path, so a path filter matches both rows. That is the same prefix-versus-
+  // boundary confusion `isInSubtree` exists for, met here in a test locator.
+  await expect(rows.filter({ hasText: mid.title })).toContainText(
+    "restoring it brings back 1 sub-page",
+  );
+
+  // The leaf first, and it is refused — its ancestor is still deleted, and the refusal names
+  // that ancestor beside the row it refused rather than in a banner above five of them.
+  await admin.page.getByRole("button", { name: `Restore ${leaf.title}` }).click();
+  const error = admin.page.locator(".del-error");
+  await expect(error).toContainText(mid.title);
+  await expect(error).toContainText(mid.path);
+  await expect(error).toContainText("Restore that page first");
+  expect(await db.page.count({ where: { id: leaf.id, deletedAt: { not: null } } })).toBe(1);
+
+  // Now the ancestor, which brings the leaf with it: the subtree the delete took, restored by
+  // the one delete's own stamp.
+  await admin.page.getByRole("button", { name: `Restore ${mid.title}` }).click();
+  await expect(admin.page.locator(".del-empty")).toContainText(
+    "Nothing in Engineering has been deleted.",
+  );
+  await expect(admin.page.locator(".del-list")).toHaveCount(0);
+
+  expect(
+    await db.page.count({ where: { id: { in: [mid.id, leaf.id] }, deletedAt: null } }),
+  ).toBe(2);
+
+  // Back where they were, and the redirects that pointed away from them are gone rather than
+  // still shadowing the live pages underneath.
+  expect(
+    await db.redirect.count({
+      where: { fromPath: { in: [mid.path, leaf.path] } },
+    }),
+  ).toBe(0);
+  for (const back of [mid, leaf]) {
+    const response = await admin.page.goto(`/engineering/${back.path}`);
+    expect(response?.status()).toBe(200);
+    expect(new URL(admin.page.url()).pathname).toBe(`/engineering/${back.path}`);
+    await expect(
+      admin.page.getByRole("heading", { level: 1, name: back.title }),
+    ).toBeVisible();
+  }
+
+  // And in the rail again, under the ancestor that never moved.
+  await admin.page.goto("/engineering");
+  await expect(
+    admin.page
+      .getByRole("navigation", { name: "Engineering navigation" })
+      .getByRole("link", { name: leaf.title }),
+  ).toBeVisible();
+
+  await editor.context.close();
+  await admin.context.close();
+});
+
 /* ---------------------------------------------------- the two properties only HTTP sees ---- */
 
 test("a dormant redirect does not shadow the live page standing at its path", async ({ page }) => {
