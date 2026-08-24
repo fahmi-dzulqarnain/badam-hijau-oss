@@ -66,7 +66,7 @@ function loaded(result: EditablePageResult) {
 test("a published page with no draft opens on the published text", async () => {
   // Kills a loader that opens a blank document over a live page: the editor would then
   // autosave an empty draft two seconds later and publishing it would wipe the page.
-  const { page, asEditor } = await fixture();
+  const { space, page, asEditor } = await fixture();
 
   const loadedPage = loaded(await getPageForEditing(asEditor, page.id));
   // The title comes from `Page`, the body from the published `PageVersion`, and the fixture
@@ -80,7 +80,21 @@ test("a published page with no draft opens on the published text", async () => {
   expect(loadedPage.seen).toBeNull();
   expect(loadedPage.path).toBe("architecture/mqtt-contracts");
   expect(loadedPage.docType).toBe("ADR");
-  expect(loadedPage.space).toEqual({ key: "engineering", name: "Engineering handbook" });
+  // `id` as well as the display fields: the editor route lists this space's pages, for the
+  // move form's parent picker and the delete confirmation's subtree, and `listSpacePages` is
+  // keyed by space id. Dropping it makes both of those surfaces unbuildable without a second
+  // query for a row this read already had open.
+  expect(loadedPage.space).toEqual({
+    id: space.id,
+    key: "engineering",
+    name: "Engineering handbook",
+  });
+  // The move form's starting values. `movePage` requires BOTH on every call and refuses to
+  // treat a missing field as "keep the current value", so a caller that cannot read the
+  // current slug and parent cannot reparent without renaming — or would send `null` and
+  // silently move the page to the space root.
+  expect(loadedPage.slug).toBe("mqtt-contracts");
+  expect(loadedPage.parentId).toBeNull();
 });
 
 test("a draft wins over the published version, and brings the timestamp the first save needs", async () => {
