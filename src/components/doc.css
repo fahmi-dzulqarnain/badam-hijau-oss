@@ -210,3 +210,26 @@
  * putting it into drift. The same rule collision that sent `stripControl` to its own module.
  */
 .body :is(h1, h2, h3, h4, h5, h6) { overflow-wrap: anywhere; }
+
+/*
+ * The FIFTH shape of the same class, and the one Task 8's fix was one selector short of.
+ *
+ * `.body`'s guard covers everything the Markdown pipeline renders. The page **title** is not
+ * that: the reader route paints it from `Page.title` into `.doc > h1`, and repeats it as the
+ * last breadcrumb — both outside `.body`, so neither inherited the heading rule above.
+ * Measured on a page whose title is one 300-character unbreakable token, at 1280px:
+ * **4321px of horizontal overflow**, with `.doc h1` reporting a 5295px scrollWidth inside a
+ * 694px box. `min-width: 0` on `.doc` keeps the grid *track* honest and does nothing about
+ * inline content overflowing the box it sits in.
+ *
+ * `text-wrap: balance` on `.doc h1` is deliberately left in place: it decides where breaks go
+ * and this decides whether a break is allowed at all, so they are not the same knob.
+ *
+ * Found by Task 14 while writing the injection probe the previous fix asked for — which is the
+ * point of that probe, and the reason this rule is verified by injection too rather than by the
+ * one seeded title that happens to be short. Fourth time in this project that a fix for this
+ * class has been too narrow, and every time it was silent about it: the reported instance
+ * genuinely disappears and the class stays open.
+ */
+.doc > h1,
+.crumbs { overflow-wrap: anywhere; }

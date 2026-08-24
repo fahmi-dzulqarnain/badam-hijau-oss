@@ -1,11 +1,24 @@
 import { expect, test } from "@playwright/test";
+import { db, measureOverflow, signIn } from "./support";
 
-async function signIn(page: import("@playwright/test").Page, email: string) {
-  await page.goto("/api/auth/signin");
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: /test login/i }).click();
-  await expect(page).not.toHaveURL(/signin/);
-}
+/**
+ * The summary the bug-reporting check below sends. Named so the `afterAll` can take the row
+ * back out: this suite writes to the developer's own database, and an insert with no matching
+ * delete accumulates one row per run forever. `scripts/smoke.sh` has always cleaned up its
+ * equivalent; this spec did not, which made "run the suite twice and compare the counts" a
+ * check nobody could pass.
+ */
+const BUG_SUMMARY = "The table of contents skips a heading.";
+
+/** A 300-character unbreakable token: the shape that has widened this layout five times. */
+const HOSTILE = "x".repeat(300);
+
+test.afterAll(async () => {
+  // Scoped to this suite's own summary rather than a TRUNCATE, so a developer's real reports
+  // survive — the same choice the smoke script makes for the same reason.
+  await db.bugReport.deleteMany({ where: { summary: BUG_SUMMARY } });
+  await db.$disconnect();
+});
 
 test("test login is offered only because the e2e flag is set", async ({ request }) => {
   const providers = (await (await request.get("/api/auth/providers")).json()) as Record<
@@ -54,6 +67,11 @@ test("no page scrolls horizontally, whatever the content", async ({ page }) => {
   // the top bar and both rails are sticky in that same scroll container they slide out of
   // alignment. Images, paragraphs and the mermaid placeholder were each fixed separately
   // after the first two were found by hand; this asserts the class, not the instances.
+  //
+  // Kept, and no longer the whole story: it can only see what the seed happens to contain,
+  // which is why the two injection probes below exist. This one still earns its place — it is
+  // the only check that visits every route shape (space landing, one level, three levels deep,
+  // a second space) with real content in real proportions.
   await signIn(page, "aisyah@example.com");
 
   for (const path of [
@@ -63,11 +81,106 @@ test("no page scrolls horizontally, whatever the content", async ({ page }) => {
     "/handbook/welcome",
   ]) {
     await page.goto(path);
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    );
+    const { overflow, width } = await measureOverflow(page);
+    // A zero-width viewport makes the subtraction come out at zero as well, which reads as a
+    // pass. Playwright fronts the page it drives, so this is a tripwire rather than a live
+    // hazard — but it is the exact false alarm a backgrounded tab produced in Task 7.
+    expect(width, `${path} reported a zero-width viewport`).toBeGreaterThan(0);
     expect(overflow, `${path} scrolls horizontally by ${overflow}px`).toBe(0);
   }
+});
+
+test("injected hostile content does not widen the reader", async ({ page }) => {
+  // **The guard above was testing its corpus, not its class.** It stayed green for the whole of
+  // Phase 1 while the reader overflowed 4,660px on a long heading, because no seeded page has
+  // an unbreakable one; the bug surfaced only when Phase 2's preview pane rendered hostile
+  // content. Injecting the hostile case tests what the suite claims to test, writes nothing to
+  // the database, and would have caught it.
+  //
+  // Measured per element rather than all at once, so a failure names the tag that broke. All
+  // three mutants were confirmed visible from here — with `doc.css`'s three guards stripped,
+  // this reports h2 2609px, p 1308px, pre 1293px, and passes again once they are restored.
+  await signIn(page, "aisyah@example.com");
+  await page.goto("/engineering/architecture/mqtt-contracts");
+
+  const baseline = await measureOverflow(page);
+  expect(baseline.width).toBeGreaterThan(0);
+  expect(baseline.overflow, "the page overflowed before anything was injected").toBe(0);
+
+  for (const tag of ["h2", "p", "pre"] as const) {
+    const overflow = await page.evaluate(
+      ({ tag, token }) => {
+        const body = document.querySelector(".doc .body");
+        if (!body) throw new Error("no .doc .body to inject into");
+        const el = document.createElement(tag);
+        el.textContent = token;
+        body.appendChild(el);
+        // Read after the append so layout is flushed by the measurement itself.
+        const measured =
+          document.documentElement.scrollWidth - document.documentElement.clientWidth;
+        el.remove();
+        return measured;
+      },
+      { tag, token: HOSTILE },
+    );
+    expect(overflow, `a <${tag}> carrying an unbreakable token widens the reader`).toBe(0);
+  }
+
+  // And all three at once, because a guard that holds one at a time can still be defeated by
+  // the widest of them setting the column's intrinsic size for the others.
+  const together = await page.evaluate((token) => {
+    const body = document.querySelector(".doc .body")!;
+    const nodes = (["h2", "p", "pre"] as const).map((tag) => {
+      const el = document.createElement(tag);
+      el.textContent = token;
+      body.appendChild(el);
+      return el;
+    });
+    const measured =
+      document.documentElement.scrollWidth - document.documentElement.clientWidth;
+    nodes.forEach((node) => node.remove());
+    return measured;
+  }, HOSTILE);
+  expect(together).toBe(0);
+
+  // The probe cleans up after itself in the DOM as well: a leftover node would make every
+  // later assertion in this file measure a page the product never renders.
+  const after = await measureOverflow(page);
+  expect(after.overflow).toBe(0);
+  await expect(page.getByRole("heading", { level: 1, name: "MQTT contracts" })).toBeVisible();
+});
+
+test("an injected hostile page title does not widen the reader", async ({ page }) => {
+  // The fifth shape of the class, and the one the `.body` probe above cannot see. The page
+  // title is painted by the route from `Page.title` into `.doc > h1` and repeated as the last
+  // breadcrumb — both **outside** `.body`, so Task 8's heading fix did not reach them.
+  // Measured before the fix, at 1280px with a 300-character title: 4,321px of overflow, with
+  // `.doc h1` reporting a 5,295px scrollWidth inside a 694px box. No seeded title is long
+  // enough to have shown it, and a title arrives from a text input rather than from Markdown,
+  // so nothing about the document's content could ever have exercised it.
+  await signIn(page, "aisyah@example.com");
+  await page.goto("/engineering/architecture/mqtt-contracts");
+
+  for (const selector of [".doc > h1", '.crumbs [aria-current="page"]']) {
+    const overflow = await page.evaluate(
+      ({ selector, token }) => {
+        const target = document.querySelector(selector);
+        if (!target) throw new Error(`no ${selector} to probe`);
+        const original = target.textContent;
+        target.textContent = token;
+        const measured =
+          document.documentElement.scrollWidth - document.documentElement.clientWidth;
+        target.textContent = original;
+        return measured;
+      },
+      { selector, token: HOSTILE },
+    );
+    expect(overflow, `an unbreakable title in ${selector} widens the reader`).toBe(0);
+  }
+
+  const after = await measureOverflow(page);
+  expect(after.overflow).toBe(0);
+  await expect(page.getByRole("heading", { level: 1, name: "MQTT contracts" })).toBeVisible();
 });
 
 test("a non-member gets not-found rather than forbidden", async ({ page }) => {
@@ -94,8 +207,10 @@ test("the alpha badge and build string are visible, and a bug can be reported", 
 
   await page.getByRole("button", { name: "Report bug" }).click();
   const dialog = page.getByRole("dialog", { name: "Report a bug" });
-  await dialog.getByLabel("What happened?").fill("The table of contents skips a heading.");
+  await dialog.getByLabel("What happened?").fill(BUG_SUMMARY);
   await dialog.getByRole("button", { name: "Send report" }).click();
 
   await expect(dialog.getByText(/Thanks/)).toBeVisible();
+  // The row is real, and `afterAll` is what takes it back out.
+  expect(await db.bugReport.count({ where: { summary: BUG_SUMMARY } })).toBe(1);
 });

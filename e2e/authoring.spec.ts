@@ -1,0 +1,494 @@
+/**
+ * End-to-end coverage of authoring (Phase 2, Task 14).
+ *
+ * Every test here writes to the **development** database and takes its rows back out; see
+ * `support.ts` for why that is the only database it can be and how the sweep works. The
+ * `afterAll` at the bottom asserts the counts are back where `beforeAll` found them, so a leak
+ * fails the run instead of making the *next* run fail on an occupied path.
+ *
+ * Two of these tests exist because they are the only place their property can be pinned:
+ *
+ * - **The redirect lookup's position in the request.** Task 11 measured that hoisting the
+ *   lookup above the page read returns a 308 away from a page that renders — and that the
+ *   entire vitest suite still passed, because the ordering is a property of the route, not of
+ *   any function. Verified here by mutation: with the lookup hoisted this test sees 308.
+ * - **Two identities at once.** The conflict banner needs a genuinely different editor name,
+ *   which needs two sessions. `browser.newContext()` gives two cookie jars in one browser —
+ *   see `actorContext`.
+ */
+import { expect, test } from "@playwright/test";
+import {
+  actorContext,
+  db,
+  engineeringId,
+  formatCounts,
+  measureOverflow,
+  seedPublishedPage,
+  signIn,
+  snapshotCounts,
+  sweep,
+  viewerFor,
+  type Counts,
+} from "./support";
+import { createPage } from "@/lib/pages/create";
+import { movePage } from "@/lib/pages/move";
+import { deletePage } from "@/lib/pages/delete";
+
+/**
+ * A 300-character unbreakable token — the shape that has now widened this application's layout
+ * five times, and the length Task 8 measured a 4,660-pixel reader overflow from. The fifth was
+ * found by this task; see the tail of `doc.css` and the title probe in `reader.spec.ts`.
+ */
+const HOSTILE = "x".repeat(300);
+
+/** Meaty enough that "the preview matches" is a claim about the pipeline, not about a word. */
+const RICH_MARKDOWN = [
+  "Intro paragraph with `inline code` and a [link](https://example.com/a/b).",
+  "",
+  "## A heading with an id",
+  "",
+  "| Segment | Owner |",
+  "| --- | --- |",
+  "| `outlet` | Provisioning |",
+  "",
+  "```ts",
+  "await client.subscribe('acme/+/kiosk/#');",
+  "```",
+  "",
+  "```mermaid",
+  "C4Context",
+  "```",
+  "",
+  "### Deeper heading",
+  "",
+  "Closing paragraph.",
+  "",
+].join("\n");
+
+let baseline: Counts;
+
+test.beforeAll(async () => {
+  await sweep();
+  baseline = await snapshotCounts();
+  console.log(`[e2e] dev DB before authoring: ${formatCounts(baseline)}`);
+});
+
+// Not just `afterEach`. A fixture surviving a crashed run makes the next run's `createPage`
+// fail with `path-occupied`, which looks like a product bug and is not one.
+test.beforeEach(sweep);
+
+test.afterAll(async () => {
+  await sweep();
+  const after = await snapshotCounts();
+  console.log(`[e2e] dev DB after authoring:  ${formatCounts(after)}`);
+  // The idempotence contract, asserted rather than described. The suite runs against a database
+  // a person also uses, so "it cleaned up" has to be a test result and not a promise in a
+  // comment — and a suite that only passes on a fresh database is a suite that fails on its
+  // second run.
+  expect(after, "the authoring suite did not leave the dev database as it found it").toEqual(
+    baseline,
+  );
+  await db.$disconnect();
+});
+
+/* ------------------------------------------------------------------ the headline flow ---- */
+
+test("an editor creates a page, writes Markdown, autosaves, publishes, and a member reads it", async ({
+  browser,
+}) => {
+  const editor = await actorContext(browser, "aisyah@example.com");
+
+  await editor.page.goto("/new");
+  await editor.page.getByLabel("Title").fill("Kiosk runbook");
+  // The slug is prefilled from the title and then taken over, which is also how every fixture
+  // in this file acquires the `e2e-` marker the sweep keys on.
+  await expect(editor.page.getByLabel("Slug")).toHaveValue("kiosk-runbook");
+  await editor.page.getByLabel("Slug").fill("e2e-kiosk-runbook");
+  await editor.page.getByRole("button", { name: /create draft/i }).click();
+
+  await expect(editor.page).toHaveURL(/\/edit\/[a-z0-9]+$/);
+  const pageId = new URL(editor.page.url()).pathname.split("/").pop()!;
+
+  // A page created this way is a draft, so it is not readable yet — the property the nav rail
+  // and the reader have both relied on since Phase 1.
+  const beforePublish = await editor.page.request.get("/engineering/e2e-kiosk-runbook");
+  expect(beforePublish.status()).toBe(404);
+
+  // The document lives in CodeMirror, not in React state. `fill` on the contenteditable goes
+  // through `insertText`, which is the same path a paste takes, so the newlines survive — a
+  // `keyboard.type` would instead hand every newline to the Markdown language's Enter binding
+  // and get list markers continued for us.
+  const surface = editor.page.locator(".cm-content");
+  await surface.click();
+  await surface.fill(RICH_MARKDOWN);
+
+  const status = editor.page.locator(".ed-status");
+  // Autosave is a 2 s debounce armed by the first edit, so there is a real interval in which
+  // the indicator must say the work is not stored yet. That it says so is the assertion.
+  await expect(status).toHaveText("Unsaved changes");
+  await expect(status).toHaveText(/^Saved \d/, { timeout: 15_000 });
+
+  // What landed is what was typed — the indicator is not taken on trust.
+  const draft = await db.pageDraft.findUniqueOrThrow({
+    where: { pageId },
+    select: { markdown: true, title: true },
+  });
+  expect(draft.markdown).toBe(RICH_MARKDOWN);
+  expect(draft.title).toBe("Kiosk runbook");
+
+  await editor.page.getByRole("button", { name: "Publish" }).click();
+  await expect(editor.page).toHaveURL(/\/engineering\/e2e-kiosk-runbook$/, {
+    timeout: 15_000,
+  });
+  await expect(
+    editor.page.getByRole("heading", { level: 1, name: "Kiosk runbook" }),
+  ).toBeVisible();
+
+  // Publish deletes the draft; the version is the durable copy.
+  expect(await db.pageDraft.count({ where: { pageId } })).toBe(0);
+  expect(await db.pageVersion.count({ where: { pageId } })).toBe(1);
+
+  // Read by a *different* member, in their own session, so this is the reader's permission
+  // path and not the author's cached render.
+  const reader = await actorContext(browser, "efcorporates@gmail.com");
+  const response = await reader.page.goto("/engineering/e2e-kiosk-runbook");
+  expect(response?.status()).toBe(200);
+  await expect(
+    reader.page.getByRole("heading", { level: 1, name: "Kiosk runbook" }),
+  ).toBeVisible();
+  await expect(
+    reader.page.getByRole("navigation", { name: "On this page" }),
+  ).toContainText("A heading with an id");
+
+  await editor.context.close();
+  await reader.context.close();
+});
+
+test("the preview pane renders exactly what the published page renders", async ({ page }) => {
+  // The one thing a preview exists to rule out is preview and published output disagreeing, so
+  // the assertion is string equality of the two `.body` subtrees rather than a spot check on a
+  // heading. Both come from `renderMarkdown` — the editor's through `/api/preview`, the
+  // reader's through the route — and if the preview ever stops going through the shared
+  // pipeline this is the test that says so.
+  const fixture = await seedPublishedPage({
+    slug: "e2e-preview-parity",
+    title: "Preview parity",
+    markdown: RICH_MARKDOWN,
+  });
+
+  await signIn(page, "aisyah@example.com");
+
+  await page.goto(`/edit/${fixture.id}`);
+  const previewBody = page.locator(".ed-preview .body");
+  await expect(previewBody).toBeVisible();
+  // The first render is fired on mount from the same seed the view is built from; wait for it
+  // to have produced something rather than comparing an empty pane to a full one.
+  await expect(previewBody.locator("h2")).toBeVisible();
+  const previewHtml = await previewBody.innerHTML();
+
+  await page.goto(`/engineering/${fixture.path}`);
+  const publishedHtml = await page.locator(".doc .body").innerHTML();
+
+  expect(previewHtml).toBe(publishedHtml);
+  // Guards the comparison itself: two empty strings are also equal.
+  expect(previewHtml).toContain("<h2");
+  expect(previewHtml).toContain("shiki");
+  expect(previewHtml).toContain("mermaid-source");
+});
+
+/* --------------------------------------------------------------- the conflict contract ---- */
+
+test("a second editor's save conflicts; Load theirs replaces the text and Keep mine wins", async ({
+  browser,
+}) => {
+  const viewer = await viewerFor("aisyah@example.com");
+  const created = await createPage(viewer, {
+    spaceId: await engineeringId(),
+    parentId: null,
+    slug: "e2e-conflict",
+    title: "Contested page",
+    docType: "DOC",
+  });
+  if (!created.ok) throw new Error(`createPage: ${JSON.stringify(created)}`);
+  const pageId = created.page.id;
+
+  // Two cookie jars, two people. See `actorContext` for why this replaces Task 7's scripted
+  // second actor: the banner has to name someone, and it can only name whoever the server
+  // resolved from the session that made the earlier save.
+  const aisyah = await actorContext(browser, "aisyah@example.com");
+  const fahmi = await actorContext(browser, "efcorporates@gmail.com");
+
+  // Both load before either types, so both hold the same `seen`. Opening them in the other
+  // order would hand the second editor an already-current timestamp and no conflict.
+  await aisyah.page.goto(`/edit/${pageId}`);
+  await fahmi.page.goto(`/edit/${pageId}`);
+  await expect(aisyah.page.locator(".cm-content")).toBeVisible();
+  await expect(fahmi.page.locator(".cm-content")).toBeVisible();
+
+  await aisyah.page.locator(".cm-content").fill("Aisyah's first paragraph.\n");
+  await expect(aisyah.page.locator(".ed-status")).toHaveText(/^Saved \d/, { timeout: 15_000 });
+
+  await fahmi.page.locator(".cm-content").fill("Fahmi's competing paragraph.\n");
+  const banner = fahmi.page.locator(".ed-conflict");
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  // The name is the whole point of two identities: with one session this reads "Fahmi D."
+  // regardless of whether the conflict logic works.
+  await expect(banner).toContainText("Aisyah R.");
+  await expect(banner).toContainText("Your changes have not been saved");
+  // Autosave suspends behind an unanswered banner rather than 409ing every two seconds.
+  await expect(fahmi.page.locator(".ed-hint")).toHaveText(/Autosave is paused/);
+  // Nothing was written: the refusal is a refusal, and Fahmi's text is only on his screen.
+  await expect(fahmi.page.locator(".cm-content")).toContainText("Fahmi's competing paragraph.");
+  expect(
+    (await db.pageDraft.findUniqueOrThrow({ where: { pageId }, select: { markdown: true } }))
+      .markdown,
+  ).toBe("Aisyah's first paragraph.\n");
+
+  // Load theirs: the editor is replaced by their text, and the banner goes.
+  await banner.getByRole("button", { name: "Load theirs" }).click();
+  await expect(fahmi.page.locator(".cm-content")).toContainText("Aisyah's first paragraph.");
+  await expect(fahmi.page.locator(".cm-content")).not.toContainText("competing");
+  await expect(banner).toHaveCount(0);
+  await expect(fahmi.page.locator(".ed-hint")).toHaveText(/Saves automatically/);
+
+  // Now the other resolution. Aisyah saves again, which makes Fahmi's `seen` stale a second
+  // time; this time he overwrites.
+  await aisyah.page.locator(".cm-content").fill("Aisyah's second paragraph.\n");
+  await expect(aisyah.page.locator(".ed-status")).toHaveText(/^Saved \d/, { timeout: 15_000 });
+
+  await fahmi.page.locator(".cm-content").fill("Fahmi keeps his own.\n");
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await banner.getByRole("button", { name: "Keep mine" }).click();
+  await expect(fahmi.page.locator(".ed-status")).toHaveText(/^Saved \d/, { timeout: 15_000 });
+  await expect(banner).toHaveCount(0);
+
+  // Keep mine is an explicit overwrite of a version he was shown, so his text and his name are
+  // what the row now carries.
+  const final = await db.pageDraft.findUniqueOrThrow({
+    where: { pageId },
+    select: { markdown: true, updatedBy: { select: { name: true } } },
+  });
+  expect(final.markdown).toBe("Fahmi keeps his own.\n");
+  expect(final.updatedBy.name).toBe("Fahmi D.");
+
+  await aisyah.context.close();
+  await fahmi.context.close();
+});
+
+/* -------------------------------------------------------------------- move and delete ---- */
+
+test("a moved page's old URL permanently redirects to the new one", async ({ page }) => {
+  const fixture = await seedPublishedPage({
+    slug: "e2e-move-from",
+    title: "Relocatable runbook",
+    markdown: "Recovery steps for the kiosk bridge.\n",
+  });
+
+  await signIn(page, "aisyah@example.com");
+  expect((await page.goto(`/engineering/${fixture.path}`))?.status()).toBe(200);
+
+  // Phase 2 ships `movePage` as a module with no HTTP surface and no UI — see the report on
+  // this task. The redirect this test is about is a property of the *reader*, and it is
+  // reached over HTTP; the move itself goes through the product's own function rather than a
+  // hand-written `Redirect` insert, so the rows under test are the rows a move really writes.
+  const moved = await movePage(await viewerFor("aisyah@example.com"), fixture.id, {
+    newParentId: null,
+    newSlug: "e2e-move-to",
+  });
+  if (!moved.ok) throw new Error(`movePage: ${JSON.stringify(moved)}`);
+  expect(moved.page.path).toBe("e2e-move-to");
+
+  // 308 and not the spec's 301, deliberately: `permanentRedirect()` emits 308, which forbids
+  // an intermediary rewriting the method on the retry. Recorded as spec §14 drift by Task 11.
+  const raw = await page.request.get(`/engineering/${fixture.path}`, { maxRedirects: 0 });
+  expect(raw.status()).toBe(308);
+  expect(raw.headers()["location"]).toBe("/engineering/e2e-move-to");
+
+  // And it actually lands, rather than merely pointing somewhere.
+  const followed = await page.goto(`/engineering/${fixture.path}`);
+  expect(followed?.status()).toBe(200);
+  expect(new URL(page.url()).pathname).toBe("/engineering/e2e-move-to");
+  await expect(page.getByRole("heading", { level: 1, name: fixture.title })).toBeVisible();
+});
+
+test("a deleted page 404s and leaves the nav rail", async ({ page }) => {
+  const fixture = await seedPublishedPage({
+    slug: "e2e-deletable",
+    title: "Deletable decision",
+    markdown: "This page is about to go.\n",
+  });
+
+  await signIn(page, "aisyah@example.com");
+  await page.goto("/engineering");
+  const railLink = page
+    .getByRole("navigation", { name: "Engineering navigation" })
+    .getByRole("link", { name: fixture.title });
+  await expect(railLink).toBeVisible();
+  expect((await page.goto(`/engineering/${fixture.path}`))?.status()).toBe(200);
+
+  const deleted = await deletePage(await viewerFor("aisyah@example.com"), fixture.id);
+  if (!deleted.ok) throw new Error(`deletePage: ${JSON.stringify(deleted)}`);
+  // A deleted root page gets no redirect: `Redirect.toPageId` is not nullable and there is no
+  // surviving ancestor to aim at, so the 404 below is the answer rather than a 308 to nowhere.
+  expect(deleted.page.redirectTo).toBeNull();
+
+  const gone = await page.goto(`/engineering/${fixture.path}`);
+  expect(gone?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
+
+  await page.goto("/engineering");
+  await expect(railLink).toHaveCount(0);
+  // Not only unlinked — absent. A deleted page rendered as inert text in the rail would still
+  // be leaking its title, which is the same shape of leak 404-not-403 exists to close.
+  await expect(page.locator("body")).not.toContainText(fixture.title);
+});
+
+/* ---------------------------------------------------- the two properties only HTTP sees ---- */
+
+test("a dormant redirect does not shadow the live page standing at its path", async ({ page }) => {
+  // A `Redirect` row and a live page can legitimately share a path: a redirect goes dormant the
+  // moment something is created or moved on top of it, and a move only reclaims the ones it
+  // makes live itself. So the reader must read the page FIRST and consult redirects only on a
+  // miss.
+  //
+  // Task 11 measured the mutation — the lookup hoisted above the page read — returning a 308
+  // away from a page that renders, while the whole vitest suite stayed green, because the
+  // ordering is a property of the route and not of either function. This is the check that
+  // sees it. Mutation-verified: with the lookup hoisted, `expect(200)` below reads 308.
+  const live = await seedPublishedPage({
+    slug: "e2e-shadowed",
+    title: "Shadowed but live",
+    markdown: "This page exists and renders.\n",
+  });
+  const spaceId = await engineeringId();
+  const elsewhere = await db.page.findFirstOrThrow({
+    where: { spaceId, path: "architecture" },
+    select: { id: true, path: true },
+  });
+  await db.redirect.create({
+    data: { spaceId, fromPath: live.path, toPageId: elsewhere.id },
+    select: { id: true },
+  });
+
+  await signIn(page, "aisyah@example.com");
+
+  const raw = await page.request.get(`/engineering/${live.path}`, { maxRedirects: 0 });
+  expect(
+    raw.status(),
+    "the redirect lookup ran before the page read: a live page was redirected away from",
+  ).toBe(200);
+
+  const response = await page.goto(`/engineering/${live.path}`);
+  expect(response?.status()).toBe(200);
+  expect(new URL(page.url()).pathname).toBe(`/engineering/${live.path}`);
+  await expect(page.getByRole("heading", { level: 1, name: live.title })).toBeVisible();
+
+  // The dormant row is still there — it was shadowed, not consumed — which is what makes the
+  // assertion above about ordering rather than about the row having been cleaned up.
+  expect(await db.redirect.count({ where: { spaceId, fromPath: live.path } })).toBe(1);
+});
+
+test("no editor route scrolls horizontally", async ({ page }) => {
+  // The guard that has caught three regressions in three shapes, pointed at the two routes
+  // Phase 2 adds.
+  //
+  // Scope worth being honest about: `.ed-preview` is `overflow: auto` by deliberate design, so
+  // hostile Markdown scrolls inside the pane and this measurement can never see a `.body`
+  // wrapping regression — verified by mutation, where stripping all three `doc.css` guards left
+  // both editor routes at 0 and the reader at 2,609px. What this pins is the editor *chrome*:
+  // the top bar, the split grid's `minmax(0, 1fr)` tracks, the CodeMirror surface's
+  // `min-width: 0` and its `lineWrapping`. The `.body` class is pinned by the injection probe
+  // in `reader.spec.ts`, which is the surface everyone actually reads.
+  const fixture = await seedPublishedPage({
+    slug: "e2e-overflow",
+    title: `Overflow probe ${HOSTILE.slice(0, 200)}`,
+    markdown: [`## ${HOSTILE}`, "", HOSTILE, "", "```", HOSTILE, "```", ""].join("\n"),
+  });
+
+  await signIn(page, "aisyah@example.com");
+
+  for (const path of ["/new", `/edit/${fixture.id}`]) {
+    await page.goto(path);
+    if (path.startsWith("/edit")) {
+      // Measured only once the hostile content is actually on screen in both panes.
+      await expect(page.locator(".cm-content")).toContainText(HOSTILE.slice(0, 40));
+      await expect(page.locator(".ed-preview .body h2")).toBeVisible();
+    }
+    const { overflow, width } = await measureOverflow(page);
+    // A zero-width viewport makes the subtraction zero too, which reads as a pass. Task 7 lost
+    // time to exactly that against a backgrounded tab.
+    expect(width, `${path} reported a zero-width viewport`).toBeGreaterThan(0);
+    expect(overflow, `${path} scrolls horizontally by ${overflow}px`).toBe(0);
+  }
+
+  // The editor also has to survive the document being typed into it rather than loaded with
+  // it, which is the case the split grid's intrinsic sizing decides.
+  await page.goto(`/edit/${fixture.id}`);
+  const surface = page.locator(".cm-content");
+  await surface.click();
+  await surface.fill(`# ${HOSTILE}\n\n${HOSTILE}\n`);
+  await expect(page.locator(".ed-status")).toHaveText(/^Saved \d/, { timeout: 15_000 });
+  const typed = await measureOverflow(page);
+  expect(typed.width).toBeGreaterThan(0);
+  expect(typed.overflow, `the editor scrolls horizontally by ${typed.overflow}px once typed into`).toBe(0);
+});
+
+/* --------------------------------------------------------------------------- the viewer ---- */
+
+test("a viewer sees no edit affordance and cannot reach the editor by URL", async ({ page }) => {
+  // `stranger@example.com` is a member of nothing, which makes them exactly the "readable but
+  // not editable" case `editable.ts` names: they can READ `handbook` because it is ALL_STAFF,
+  // and they hold no role there, so `can(..., "EDIT")` is false. The seed has no VIEWER-role
+  // user; this is the same authorisation outcome by the other route.
+  const hidden = await seedPublishedPage({
+    slug: "e2e-viewer-cannot-see",
+    title: "Members only content",
+    markdown: "Only engineering members read this.\n",
+  });
+  const welcome = await db.page.findFirstOrThrow({
+    where: { space: { key: "handbook" }, path: "welcome" },
+    select: { id: true },
+  });
+
+  await signIn(page, "stranger@example.com");
+  await page.goto("/handbook/welcome");
+  await expect(page.getByRole("heading", { level: 1, name: "Welcome" })).toBeVisible();
+  // No affordance anywhere on a page they can read. Phase 2 ships no reader-to-editor link for
+  // anyone, so this currently asserts an absence that is universal rather than role-dependent —
+  // reported as drift. The three checks below are the ones that pin the authorisation.
+  await expect(page.locator('a[href^="/edit/"], a[href^="/new"]')).toHaveCount(0);
+
+  // Readable but not editable: say so. They can already see the page, so naming the refusal
+  // discloses nothing, and a 404 would be a lie they could disprove by clicking through.
+  await page.goto(`/edit/${welcome.id}`);
+  await expect(page.getByRole("heading", { name: "You cannot edit this page" })).toBeVisible();
+  await expect(page.locator(".cm-content")).toHaveCount(0);
+
+  // Not readable at all: not-found, never forbidden. A 403 here would confirm the page exists.
+  const unreadable = await page.goto(`/edit/${hidden.id}`);
+  expect(unreadable?.status()).toBe(404);
+  await expect(page.locator("body")).not.toContainText(hidden.title);
+
+  // The route check authorises the render only; every write re-authorises. Posting by hand is
+  // the case the form's filtered `<select>` cannot cover.
+  const save = await page.request.put(`/api/drafts/${welcome.id}`, {
+    headers: { "content-type": "application/json" },
+    data: { title: "Rewritten", markdown: "Not mine to write.", seen: null },
+  });
+  expect(save.status()).toBe(403);
+  const publish = await page.request.post(`/api/pages/${welcome.id}/publish`);
+  expect(publish.status()).toBe(403);
+  const preview = await page.request.post("/api/preview", {
+    headers: { "content-type": "application/json" },
+    data: { pageId: welcome.id, markdown: "# Free HTML rendering service" },
+  });
+  expect(preview.status()).toBe(403);
+
+  // Creating: the form offers no space, because there is none they may edit.
+  await page.goto("/new");
+  await expect(page.locator(".np-empty")).toContainText("You do not have edit access");
+  await expect(page.getByRole("button", { name: /create draft/i })).toHaveCount(0);
+
+  // Nothing was written by any of the above.
+  expect(await db.pageDraft.count({ where: { pageId: welcome.id } })).toBe(0);
+});
