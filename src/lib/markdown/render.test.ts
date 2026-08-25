@@ -107,3 +107,52 @@ test("a heading with no text yields no table of contents entry", async () => {
   );
   expect(headings.map((h) => h.text)).toEqual(["Real"]);
 });
+
+test("frontmatter is stripped, and leaves nothing in the table of contents", async () => {
+  // The exact input from the phase plan's "A bug this phase inherits". Before
+  // `remark-frontmatter` was in the pipeline this produced, measured:
+  //
+  //   <hr>
+  //   <h2 id="status-acceptedsupersedes-decisionsadr-0031">status: ACCEPTED
+  //   supersedes: decisions/adr-0031</h2>
+  //   <h1 id="title">…
+  //
+  // and a table of contents holding that id. The TOC half is a SEPARATE output from the HTML
+  // and is asserted separately: `collectHeadings` runs inside the pipeline, so HTML that looks
+  // right is not evidence the rail does.
+  const { html, headings } = await renderMarkdown(
+    "---\nstatus: ACCEPTED\nsupersedes: decisions/adr-0031\n---\n\n# Title\n\nBody.\n",
+  );
+
+  expect(html).not.toContain("<hr>");
+  expect(html).not.toContain("<h2");
+  expect(html).not.toContain("ACCEPTED");
+  expect(html).not.toContain("adr-0031");
+  expect(html).toContain('<h1 id="title">');
+  expect(headings).toEqual([]);
+});
+
+test("frontmatter does not disturb the headings below it", async () => {
+  const { headings } = await renderMarkdown(
+    "---\nstatus: ACCEPTED\n---\n\n## Context\n\n### Detail\n",
+  );
+  expect(headings).toEqual([
+    { id: "context", text: "Context", depth: 2 },
+    { id: "detail", text: "Detail", depth: 3 },
+  ]);
+});
+
+test("`---` mid-document is still a thematic break", async () => {
+  // Stripping frontmatter must not cost the author a horizontal rule they meant to write.
+  const { html } = await renderMarkdown("Before.\n\n---\n\nAfter.\n");
+  expect(html).toContain("<hr>");
+});
+
+test("`---` inside a fenced code block survives rendering", async () => {
+  // The shape that catches a regex-based stripper: an author showing a reader what an ADR
+  // header looks like. It is content, and it must reach the page.
+  const { html } = await renderMarkdown(
+    "# Title\n\n```yaml\n---\nstatus: NOT_FRONTMATTER\n---\n```\n",
+  );
+  expect(html).toContain("NOT_FRONTMATTER");
+});

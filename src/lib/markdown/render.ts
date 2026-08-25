@@ -1,5 +1,6 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
+import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import remarkRehype from "remark-rehype";
 import rehypeSanitize, { defaultSchema, type Options } from "rehype-sanitize";
@@ -8,6 +9,7 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeShiki from "@shikijs/rehype";
 import rehypeStringify from "rehype-stringify";
 import { collectHeadings, type Heading } from "./toc";
+import { FRONTMATTER_MATTER } from "./frontmatter";
 import { extractMermaid } from "./mermaid";
 import { wrapTables } from "./wrap";
 
@@ -35,6 +37,16 @@ export async function renderMarkdown(markdown: string): Promise<RenderedDoc> {
 
   const file = await unified()
     .use(remarkParse)
+    // Frontmatter becomes its own mdast node, which `remarkRehype` then drops. Without this
+    // the leading `---` is a thematic break, the keys below it are a setext `<h2>` whose id
+    // is the keys concatenated, and `collectHeadings` puts that id in the table of contents.
+    // Measured on the shipped code before this line existed; see `frontmatter.ts`.
+    //
+    // The matter list is IMPORTED, not spelled out. It is the same declaration
+    // `splitFrontmatter` parses with, so what this pipeline removes and what that function
+    // reads cannot drift apart — and the preview pane, the reader and the published version
+    // all go through here, so there is one answer for all three.
+    .use(remarkFrontmatter, [...FRONTMATTER_MATTER])
     .use(remarkGfm)
     .use(remarkRehype, { allowDangerousHtml: false })
     // Sanitise first, then add our own ids — otherwise sanitising rewrites them.
