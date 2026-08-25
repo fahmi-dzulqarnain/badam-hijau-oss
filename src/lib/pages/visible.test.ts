@@ -219,6 +219,28 @@ const MODULES: Record<string, Registration> = {
     covered: ["saveDraft"],
     exempt: [],
   },
+  "src/lib/lifecycle/resolve.ts": {
+    load: () => import("@/lib/lifecycle/resolve"),
+    // Soft-delete tests: tests/integration/relation-resolve.test.ts. Three page-reaching
+    // queries, and they do not all filter the same way — which is the reason for listing them
+    // rather than the module:
+    //   `findLive` carries `visiblePage()`, covered by "a reference to a soft-deleted page is
+    //   refused" — dropped, a deleted page resolves as a live relation target and Task 8's
+    //   cascade would go on to set a status on it;
+    //   `findViaRedirect` reaches `Page` only through `toPage: visiblePage(...)` — the shape
+    //   the sweep below cannot see at all, and the fourth reason it was widened — covered by
+    //   "a redirect to a soft-deleted page does not resolve";
+    //   `findDeleted` deliberately does NOT filter: it inverts to `deletedAt: { not: null }`,
+    //   because its whole job is to find the deleted row that explains why the other two
+    //   missed. Covered by "a reference to a soft-deleted page is refused", which fails in
+    //   both directions — inverted the wrong way it reports every live page as deleted — and
+    //   by "a stranger cannot tell a deleted page from a missing one", which pins that the
+    //   inverted filter did not take the permission predicate with it. That pairing is the
+    //   same one `restorePage` and `listDeletedPages` need, and for the same reason: a query
+    //   looking for deleted rows is the one place a specific refusal could leak.
+    covered: ["resolveRelations"],
+    exempt: [],
+  },
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.
