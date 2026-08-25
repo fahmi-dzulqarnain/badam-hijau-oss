@@ -16,9 +16,16 @@ Generated indexes list a space's ADRs and RFCs, filterable by status.
   — which is what the author already sees in the URL and the nav rail. Resolved to a page id at
   publish time, so a later move cannot break the stored row. No document-number column, no
   second identity to keep in step with the slug.
-- **Templates are Markdown files in the repo**, versioned and reviewed like code, beside the zod
-  schema that validates what they produce. Making them editable content is Phase 6's problem,
-  and building an admin surface here would build it twice.
+- **Templates are one-file modules in the repo**, versioned and reviewed like code, beside the
+  zod schema that validates what they produce. Making them editable content is Phase 6's
+  problem, and building an admin surface here would build it twice.
+
+  This was chosen as "**Markdown files** in the repo", and the `.md` extension turned out to be
+  unworkable — see Task 4, which measured four mechanisms against a real build. The substance is
+  unchanged: files in the repo, one per doc type, each a one-file diff that reads like a
+  document, as against editable content with an admin surface. What is given up is Markdown
+  syntax highlighting in an editor, and a backtick inside a template needing an escape — which
+  TypeScript reports at compile time.
 
 ## What Phase 3 does NOT do
 
@@ -260,11 +267,37 @@ Two more things Task 2 established that this step should not rediscover:
 
 ---
 
-## Task 4: Templates
+## Task 4: Templates ✅
 
-**Files:** `src/lib/templates/{adr,rfc,runbook,doc}.md`, a loader + tests, `NewPageForm`.
+**Files:** `src/lib/templates/{adr,rfc,runbook,doc}.ts` (**not** `.md` — see below), a loader
++ tests, `create.ts`, `NewPageForm`.
 
-- [ ] **Step 1: The four templates**
+**`.md` files cannot work here, and the measurement is the useful part.** Four mechanisms were
+probed against a real `next build`, with the `.md` files moved out of the tree to stand in for a
+deployment shipping `.next` without `src/`:
+
+| Mechanism | Result |
+|---|---|
+| `readFileSync(join(process.cwd(), "src/lib/templates/adr.md"))` | `ENOENT` — nothing traces `src/` into the output. **Works in a checkout**, which is what makes it dangerous |
+| the same, with the paths hoisted into a `const` | Build fails: *"Static analysis determined that this filesystem access causes the whole project to be traced"*. One level of indirection is one too many |
+| `readFileSync(new URL("./adr.md", import.meta.url))` at module load | Build fails — a cross-realm `URL` in the sandbox Next evaluates route modules in |
+| the same, read lazily inside a function | **Builds, and passes from an API route — then fails from a Server Component** |
+
+That last row is the finding. Turbopack recognises `new URL(<literal>, import.meta.url)` as an
+asset reference, but **rewrites it differently per layer**: a route handler gets
+`.next/server/assets/adr.<hash>.md`, a real file it can open, while the RSC/SSR layer gets
+`/_next/static/media/adr.<hash>.md` — a **browser** URL, with no file there for the server to
+read. `templateFor` is reached from the server action in `(editor)/new/page.tsx`, which is the
+half that fails.
+
+And it fails *only* there: vitest green, `next build` green, an API-route probe green. Precisely
+the "works in vitest and 404s in production" shape this task was warned about.
+
+A `.md`-to-string loader would be layer-independent, but needs a `turbopack.rules` entry, a
+Vite-side equivalent for vitest, and a `declare module "*.md"` — three mechanisms across two
+toolchains for four short documents, with the same one-environment-only failure if any is wrong.
+
+- [x] **Step 1: The four templates**
 
 ADR: Context / Decision / Consequences. RFC: Summary / Motivation / Design / Open questions.
 Runbook: Symptoms / Checks / Fix / Escalation. Doc: minimal.
@@ -272,12 +305,12 @@ Runbook: Symptoms / Checks / Fix / Escalation. Doc: minimal.
 Each opens with frontmatter carrying the keys its type accepts, so an author sees the shape
 rather than discovering it from a validation error.
 
-- [ ] **Step 2: A new page opens on its template**
+- [x] **Step 2: A new page opens on its template**
 
 The template becomes the draft's initial markdown at create time — **not** a placeholder the
 editor renders, which would vanish on first keystroke and leave an empty page.
 
-- [ ] **Step 3: The templates must pass their own schemas**
+- [x] **Step 3: The templates must pass their own schemas**
 
 A test that loads each template, parses its frontmatter, and validates it against that type's
 schema. Otherwise the product ships a template that cannot be published, which is the most
