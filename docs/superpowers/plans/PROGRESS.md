@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **634 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **659 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -24,8 +24,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 2. Frontmatter out of the rendered body | ✅ |
 | 3. Per-doc-type frontmatter schemas | ✅ |
 | 4. Templates | ✅ |
-| **5. Resolving a relation reference** | **next** |
-| 6–13 | not started |
+| 5. Resolving a relation reference | ✅ |
+| **6. Relation guardrails** | **next** |
+| 7–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -46,6 +47,15 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **A plan can specify the same predicate in two tasks, and that is the untestable-duplicate
+  failure arriving by a new route.** Phase 3's plan listed self-reference under both Task 5 and
+  Task 6. Implemented twice, mutating away either copy would leave the suite green — the exact
+  `resolveRedirect` shape. It lives in Task 5, because only resolution catches a reference to a
+  page's own **pre-move** path, which a path-string comparison writes as a relation to itself.
+- **When a stated measurement goes stale, correct it rather than leaving it to be trusted.**
+  Task 3 justified its relation cap partly as "each target costs a resolution query"; Task 5
+  batches, so that is three queries regardless. The cap survives on its other reasons — cycle
+  walks and row locks do not batch — but the dead third was removed.
 - **A bundler's asset-reference rewriting is layer-dependent, and only one layer gets a
   filesystem path.** The identical `readFileSync(new URL("./x.md", import.meta.url))` reads a
   real file from a route handler and receives a **browser** URL in a Server Component —

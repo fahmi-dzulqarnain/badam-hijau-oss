@@ -233,8 +233,13 @@ non-empty, whitespace-padding refused rather than trimmed, JSON-safe — because
 passthrough would let `systems: {a: {b: 1}}` into the `Json` column for Phase 6 to clean up.
 
 **`MAX_RELATION_TARGETS = 20`, because `MAX_FRONTMATTER_ENTRIES` does not bound this.** The
-entry cap cannot tell 200 list items from 200 round trips: each target costs Task 5 a resolution
-query, Task 6 a cycle walk, and Task 8 a row lock — all inside one transaction.
+entry cap cannot tell 200 list items from 200 units of work inside one transaction.
+
+**One third of that reasoning went stale the moment Task 5 shipped, and saying so is better than
+leaving a measurement a future reader would trust.** It originally read "each target costs Task 5
+a resolution query" — Task 5 batches, so resolution is **three** queries regardless of how many
+references there are. The cap is still right, and for the surviving reasons: Task 6's cycle walk
+and Task 8's row locks do **not** batch, and both run with a transaction open.
 
 **`status` is validated by `publishableStatuses(docType)`, derived from `PUBLISHABLE_INTO`** and
 added to `transition.ts` rather than to this module, because Task 10's status filter needs the
@@ -318,23 +323,50 @@ embarrassing possible bug in this phase.
 
 ---
 
-## Task 5: Resolving a relation reference
+## Task 5: Resolving a relation reference ✅
 
 **Files:** `src/lib/lifecycle/resolve.ts` + integration tests.
 
-- [ ] **Step 1: Path → page**
+- [x] **Step 1: Path → page**
 
 Within the same space. Resolve through `Redirect` as the reader does, so a reference to a moved
 page still lands — and record what it resolved *to*, not the path it was written as.
 
-- [ ] **Step 2: The refusals, each with its own message**
+- [x] **Step 2: The refusals, each with its own message**
 
 Unreadable target, missing target, soft-deleted target, **self-reference**, and a target in
 another space. Cross-space is refused in Phase 3: `SUPERSEDES` between spaces raises a
 permission question this phase should not answer quietly, and no seeded case needs it.
 
 **A refusal must not leak.** "No such page" and "you cannot read that page" have to be the same
-answer, exactly as the reader's 404-not-403 rule requires.
+answer, exactly as the reader's 404-not-403 rule requires. They are merged into one `not-found`,
+and the tests assert the two answers are `toEqual` for the **same** reference string resolved
+twice — once unreadable, once after a hard delete — so any leaked field fails.
+
+The other three refusals are specific because each is safe to be. `deleted` is only reachable
+inside a readable space, so for a stranger it collapses back into `not-found` — pinned by its own
+`toEqual` test. `self-reference` is checked on the **resolved** page. `cross-space` is decided
+from the reference's own text before any query runs, so `/handbook/x` and `/ghost-space/x` get
+the same answer and it is not a second way to ask whether something exists.
+
+**This step did not say how a cross-space reference is even expressible, so "refuse it" was
+unimplementable as written** — a space-relative path scoped to `spaceId` can never name another
+space, and the refusal would have been dead code. The grammar is now: a reference beginning with
+`/` is read as a reader URL, `/{spaceKey}/{path}`. A different space key is `cross-space`; this
+space's own key resolves normally, because the author pasted their address bar; a malformed
+absolute form (`/`, `/engineering`, `//x`) is `not-found` rather than a fifth code for
+punctuation.
+
+**One documented blind spot, pinned rather than fixed.** A page moved *and then* soft-deleted
+gets `not-found`, not `deleted`: the reference names the old path while the deleted row sits at
+the new one. Closing it needs a fourth query joining `Redirect` to deleted pages, to improve the
+wording of a case requiring two separate accidents. The part that matters — that it does not
+*resolve* — is what kills the `toPage: visiblePage(...)` mutant.
+
+**A target is not required to be published.** Requiring it would be judging rather than
+resolving; an unpublished page resolves carrying `status: DRAFT` for Task 6 to rule on. Not a
+leak: `listSpacePages` already shows unpublished pages in the nav rail of anyone who can read
+the space.
 
 ---
 
@@ -342,9 +374,18 @@ answer, exactly as the reader's 404-not-403 rule requires.
 
 **Files:** `src/lib/lifecycle/relations.ts` + tests. Pure where it can be.
 
-Spec §6.3, each with its own test:
+Spec §6.3, each with its own test.
 
-- [ ] A page cannot supersede itself.
+**Self-reference is NOT here. It is Task 5's, and restating it would break the rule this project
+enforces most carefully.** The plan originally listed it in both tasks — which is a permission-
+shaped predicate stated twice, exactly the `resolveRedirect` failure PROGRESS records: mutating
+away either copy leaves the suite green, so neither is testable. Task 5 owns it because only
+resolution can catch the case that matters — a reference to the page's **own pre-move path**,
+which resolves through the redirect back to itself and which a path-string comparison would
+happily write as a relation to itself. Task 5 checks the **resolved** page, for all four relation
+types. Record it here as subsumed; do not add a guardrail.
+
+- [x] ~~A page cannot supersede itself~~ — subsumed by Task 5, see above.
 - [ ] `SUPERSEDES` is legal only between two pages of the **same** doc type.
 - [ ] `DECIDES` is legal only from an `ADR` to an `RFC`.
 - [ ] **Cycle detection rejects a supersede chain that loops.** Walk the existing
