@@ -17,6 +17,7 @@
  */
 import { config } from "dotenv";
 import { expect, type Browser, type Page } from "@playwright/test";
+import type { DocStatus, DocType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { viewerForEmail } from "@/lib/users/viewer";
 import { createPage } from "@/lib/pages/create";
@@ -54,6 +55,18 @@ if (new URL(databaseUrl).pathname.endsWith("_test")) {
 export const E2E_SLUG_PREFIX = "e2e-";
 
 /**
+ * A 300-character unbreakable token — the shape that has widened this application's layout six
+ * times (paragraphs, images, the mermaid placeholder, `.body` headings, the page title, and
+ * Task 9's banner), and the length Phase 2 measured a 4,660-pixel reader overflow from.
+ *
+ * Here rather than in each spec, because it had grown a copy in `reader.spec.ts` and another in
+ * `authoring.spec.ts` and Phase 3 needs a third — and 300 is not an arbitrary number: it is
+ * exactly `TITLE_MAX_LENGTH`, which is what lets the lifecycle spec put it in a real `Page.title`
+ * and drive the banner and the index with a row rather than with a DOM edit.
+ */
+export const HOSTILE = "x".repeat(300);
+
+/**
  * When this worker started. Redirect and audit rows are swept by age as well as by page,
  * because a move writes a `Redirect` and every mutation writes an `AuditLog` — and audit rows
  * deliberately have no foreign key, so deleting the page they describe leaves them behind.
@@ -68,6 +81,7 @@ export type Counts = {
   drafts: number;
   audit: number;
   redirects: number;
+  relations: number;
   softDeleted: number;
 };
 
@@ -79,6 +93,10 @@ export async function snapshotCounts(): Promise<Counts> {
     drafts: await db.pageDraft.count(),
     audit: await db.auditLog.count(),
     redirects: await db.redirect.count(),
+    // Phase 3. A relation row has no `e2e-` marker of its own — it is two page ids — so this
+    // count is how a leak announces itself: `PageRelation` cascades from both ends, so a
+    // non-zero difference here means a fixture page survived the sweep.
+    relations: await db.pageRelation.count(),
     softDeleted: await db.page.count({ where: { deletedAt: { not: null } } }),
   };
 }
@@ -87,7 +105,7 @@ export function formatCounts(counts: Counts): string {
   return (
     `${counts.spaces} spaces / ${counts.pages} pages / ${counts.versions} versions / ` +
     `${counts.drafts} drafts / ${counts.audit} audit / ${counts.redirects} redirects / ` +
-    `${counts.softDeleted} soft-deleted`
+    `${counts.relations} relations / ${counts.softDeleted} soft-deleted`
   );
 }
 
@@ -191,6 +209,18 @@ export async function seedPublishedPage(opts: {
   title: string;
   markdown: string;
   parentId?: string | null;
+  /** Defaults to `DOC`, which is every Phase 2 fixture. Phase 3 needs ADRs and RFCs. */
+  docType?: DocType;
+  /**
+   * The status to publish into, when the fixture needs one its frontmatter does not ask for.
+   *
+   * `publishPage`'s own `options.status`, which its docstring reserves for exactly this: "a
+   * test, the seed and the e2e helper". It outranks the document's `status:` line, so a fixture
+   * passes one **or** writes the line, never both — the lifecycle spec drives the line through
+   * the editor's picker where the point is the picker, and passes this where the point is the
+   * page it is setting up.
+   */
+  status?: DocStatus;
 }): Promise<Fixture> {
   if (!opts.slug.startsWith(E2E_SLUG_PREFIX)) {
     throw new Error(`Fixture slug "${opts.slug}" must start with "${E2E_SLUG_PREFIX}".`);
@@ -202,7 +232,7 @@ export async function seedPublishedPage(opts: {
     parentId: opts.parentId ?? null,
     slug: opts.slug,
     title: opts.title,
-    docType: "DOC",
+    docType: opts.docType ?? "DOC",
   });
   if (!created.ok) throw new Error(`createPage: ${JSON.stringify(created)}`);
 
@@ -219,7 +249,11 @@ export async function seedPublishedPage(opts: {
   });
   if (!saved.ok) throw new Error(`saveDraft: ${JSON.stringify(saved)}`);
 
-  const published = await publishPage(viewer, created.page.id, {});
+  const published = await publishPage(
+    viewer,
+    created.page.id,
+    opts.status ? { status: opts.status } : {},
+  );
   if (!published.ok) throw new Error(`publishPage: ${JSON.stringify(published)}`);
 
   return { id: created.page.id, path: published.page.path, title: opts.title };

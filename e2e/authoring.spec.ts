@@ -22,6 +22,7 @@ import {
   db,
   engineeringId,
   formatCounts,
+  HOSTILE,
   measureOverflow,
   seedPublishedPage,
   signIn,
@@ -34,12 +35,10 @@ import { createPage } from "@/lib/pages/create";
 import { movePage } from "@/lib/pages/move";
 import { deletePage } from "@/lib/pages/delete";
 
-/**
- * A 300-character unbreakable token — the shape that has now widened this application's layout
- * five times, and the length Task 8 measured a 4,660-pixel reader overflow from. The fifth was
- * found by this task; see the tail of `doc.css` and the title probe in `reader.spec.ts`.
- */
-const HOSTILE = "x".repeat(300);
+// The 300-character unbreakable token — the shape that has now widened this application's layout
+// six times, and the length Task 8 measured a 4,660-pixel reader overflow from. The fifth was
+// found by this task; see the tail of `doc.css` and the title probe in `reader.spec.ts`. It moved
+// to `support.ts` when Phase 3's lifecycle spec became the third file to need it.
 
 /** Meaty enough that "the preview matches" is a claim about the pipeline, not about a word. */
 const RICH_MARKDOWN = [

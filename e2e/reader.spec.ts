@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { db, measureOverflow, signIn } from "./support";
+import { db, HOSTILE, measureOverflow, signIn } from "./support";
 
 /**
  * The summary the bug-reporting check below sends. Named so the `afterAll` can take the row
@@ -10,8 +10,9 @@ import { db, measureOverflow, signIn } from "./support";
  */
 const BUG_SUMMARY = "The table of contents skips a heading.";
 
-/** A 300-character unbreakable token: the shape that has widened this layout five times. */
-const HOSTILE = "x".repeat(300);
+// The 300-character unbreakable token this file used to declare for itself now lives in
+// `support.ts`: Phase 3's lifecycle spec is the third file to need it, and a constant with
+// three copies is the shape this project has twice watched a *rule* be dropped in.
 
 test.afterAll(async () => {
   // Scoped to this suite's own summary rather than a TRUNCATE, so a developer's real reports
