@@ -38,6 +38,30 @@ export type PublishField = "title" | "markdown" | "status";
 export type PublishErrorCode =
   | "title-empty"
   | "draft-empty"
+  /**
+   * The draft is not empty and its **body** is: frontmatter, and nothing under it.
+   *
+   * Task 7 found this and handed it to Task 11 as "refuse, or warn". It is a refusal, and it is
+   * a **second code beside `draft-empty` rather than a widening of it**, which is the part the
+   * plan flagged as a Phase 2 rule with its own message and test.
+   *
+   * *Refuse, not warn.* The reader is handed a title over a blank page — before Task 2 that
+   * block rendered as visible garbage, so at least something was there; now it renders as
+   * nothing, and nothing is indistinguishable from a rendering bug. There is also no mechanism
+   * for a warning that is not a new one: publish is a single round trip with a boolean outcome,
+   * so "warn" means either a message nobody has to read or a confirm-and-resend handshake with a
+   * "yes I meant it" flag — a second control path for a document nobody wants to publish. The
+   * shape Phase 2 settled — *a draft accepts what publish refuses* — already covers this: the
+   * author keeps the draft, keeps every character, and is told what is missing.
+   *
+   * *Beside `draft-empty`, not instead of it.* They are two different situations and the useful
+   * sentence differs: one is "you have written nothing", the other is "you have written only
+   * metadata". Rewriting `draft-empty` to measure `split.body` would have made the whole-document
+   * case unreachable and retired a Phase 2 message that is still correct for it. Both are
+   * reachable and both are tested — the order below is what decides which one an entirely blank
+   * draft gets, and it gets `draft-empty`.
+   */
+  | "body-empty"
   | "no-draft"
   | "draft-is-not-a-destination"
   | "illegal-transition"
@@ -912,6 +936,25 @@ export async function publishPage(
           message:
             "There is nothing in this draft to publish. Write something first, or delete " +
             "the page.",
+        });
+      }
+
+      // And the case the whole-document test cannot see: a draft that is **only** frontmatter.
+      // `split.body` is what the renderer will be given — the same declaration strips it — so
+      // this measures the text a reader would actually get, which is empty for
+      // `---\nstatus: ACCEPTED\n---`. See `body-empty` for why this is a refusal, and why it is
+      // a second code rather than a rewrite of the one above.
+      //
+      // Trimmed for the comparison and never for storage, exactly as the check above is: the
+      // preview pane rendered these bytes and the version must hold the same ones.
+      if (split.body.trim().length === 0) {
+        return invalid({
+          field: "markdown",
+          key: null,
+          code: "body-empty",
+          message:
+            "This draft is only frontmatter, so the published page would be a title over a " +
+            "blank page. Write the document below the closing `---`.",
         });
       }
 

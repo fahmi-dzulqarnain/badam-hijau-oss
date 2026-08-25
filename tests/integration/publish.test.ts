@@ -419,6 +419,60 @@ test("an empty draft is refused as a field error, and nothing is written", async
 });
 
 /**
+ * Task 11's answer to the hole Task 7 found and handed on: `draft-empty` measures the whole
+ * markdown, so a document that is nothing but frontmatter is "not empty" and publishes with an
+ * empty body — a title over a blank page, which before Task 2 at least rendered as visible
+ * garbage and now renders as nothing at all.
+ *
+ * Kills a publish that measures only `draft.markdown`, which is what shipped until now. It
+ * cannot be killed by the `draft-empty` test beside it, and that is the point of the two being
+ * separate: this draft is 26 characters long.
+ */
+test("a draft that is only frontmatter is refused, and nothing is written", async () => {
+  const { page, asAisyah } = await fixture({ docType: "ADR" });
+  await declaring(page.id, "status: PROPOSED");
+  // Everything under the closing fence, gone. Whitespace only, for the same reason the
+  // `draft-empty` test uses whitespace: a `length === 0` check would let it through.
+  await db.pageDraft.update({
+    where: { pageId: page.id },
+    data: { markdown: "---\nstatus: PROPOSED\n---\n \n" },
+  });
+
+  const before = await snapshot(page.id);
+  const error = rejection(await publishPage(asAisyah, page.id));
+  expect(error.field).toBe("markdown");
+  expect(error.code).toBe("body-empty");
+  // The sentence has to say what is missing and where. "Nothing to publish" would be a lie
+  // about a document the author can see text in.
+  expect(error.message).toMatch(/only frontmatter/i);
+  expect(await snapshot(page.id)).toEqual(before);
+});
+
+/**
+ * The other half of the pair, and the reason `body-empty` did not replace `draft-empty`: an
+ * entirely blank draft is still the Phase 2 case, with the Phase 2 sentence. The order of the
+ * two checks is what decides it, and this pins that order.
+ */
+test("an entirely blank draft is still draft-empty, not body-empty", async () => {
+  const { page, asAisyah } = await fixture();
+  await db.pageDraft.update({ where: { pageId: page.id }, data: { markdown: "\n \t\n" } });
+
+  expect(rejection(await publishPage(asAisyah, page.id)).code).toBe("draft-empty");
+});
+
+/**
+ * The direction that would be lost by measuring the body too eagerly. A page with no
+ * frontmatter at all — every page written before Phase 3 — has `body === markdown`, so this
+ * must publish exactly as it always did.
+ */
+test("a document with no frontmatter and a real body still publishes", async () => {
+  const { page, asAisyah } = await fixture();
+  await declaring(page.id, null);
+
+  expect(published(await publishPage(asAisyah, page.id)).status).toBe("CURRENT");
+});
+
+/**
  * Task 5 allows an empty title at autosave deliberately, so an editor clearing the field to
  * retype it does not have saving start failing mid-keystroke. Publish is where that stops.
  *
