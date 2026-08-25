@@ -247,9 +247,33 @@ async function main() {
       );
     }
 
+    // `update: {}` everywhere else, deliberately — re-running the seed must not clobber an
+    // editor's work. The one exception is a status this doc type's vocabulary cannot hold: that
+    // is not an edit, it is data the product cannot produce, and it was reachable because this
+    // very line used to write `CURRENT` to everything. Without the repair the fix only helps a
+    // *fresh* database — `npm run smoke` re-seeds `badam` without dropping it, so a stale row
+    // would keep an illegal status forever and the ADR index would keep reporting it.
+    //
+    // Narrow on purpose: a legal status is left alone even when it differs from the derived one,
+    // so an editor who published an ADR to `ACCEPTED` keeps it.
+    const existing = await db.page.findUnique({
+      where: { spaceId_path: { spaceId: engineering.id, path } },
+      select: { status: true, docType: true },
+    });
+    const repair =
+      existing &&
+      existing.status !== "DRAFT" &&
+      !publishableStatuses(existing.docType).includes(existing.status);
+    if (repair) {
+      console.warn(
+        `[seed] repairing ${path}: ${existing.docType} at ${existing.status} is not in that ` +
+          `doc type's vocabulary, setting ${status}`,
+      );
+    }
+
     const page = await db.page.upsert({
       where: { spaceId_path: { spaceId: engineering.id, path } },
-      update: {},
+      update: repair ? { status } : {},
       create: {
         spaceId: engineering.id,
         parentId: parentId ?? null,
