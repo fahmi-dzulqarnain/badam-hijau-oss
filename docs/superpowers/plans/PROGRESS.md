@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **564 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **604 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -22,8 +22,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 |---|---|
 | 1. Schema: relations and frontmatter | ✅ |
 | 2. Frontmatter out of the rendered body | ✅ |
-| **3. Per-doc-type frontmatter schemas** | **next** |
-| 4–13 | not started |
+| 3. Per-doc-type frontmatter schemas | ✅ |
+| **4. Templates** | **next** |
+| 5–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -41,6 +42,11 @@ Findings worth carrying from Task 2:
 - **The stripper and the parser agree by construction, not convention** — one declaration of
   what frontmatter is, and the split slices on the parsed node's offset. A regex cannot see a
   fenced code block.
+- **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
+  200 list items from 200 round trips, so relation targets get their own cap: each one costs a
+  resolution query, a cycle walk and a row lock inside one transaction.
+- **`z.strictObject`, not `z.object`** — one word between refusing a typo and stripping it
+  silently. A mistyped `supersedez:` is a relation the author believes exists.
 - **Three shapes go the opposite way from a line scanner's guess**: a code fence opening the
   document, a leading blank line, and `Title\n---` (a setext h1). Any implementation that
   `trimStart()`s or skips to the first `---` gets all three wrong.

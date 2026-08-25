@@ -182,8 +182,14 @@ Route segments beginning `-` are reserved for application routes and rejected as
 
 ### 6.1 Status vocabulary per doc type
 
-Vocabulary and legal transitions live in code (`lib/lifecycle/vocab.ts`), not in the
-editable template body, and are enforced on publish.
+Vocabulary and legal transitions live in code, not in the editable template body, and are
+enforced on publish.
+
+> **Path correction.** This section and §16 name `lib/lifecycle/vocab.ts`. It shipped in Phase 2
+> as `src/lib/pages/transition.ts`, because the publish transaction that enforces it lives in
+> `src/lib/pages/`. Phase 3's `src/lib/lifecycle/` holds the frontmatter schema and the relation
+> rules. The transition table was not moved mid-phase — publish, the cascades and the status
+> filter all import it — but the spec's path is not the code's.
 
 | Doc type | States |
 |---|---|

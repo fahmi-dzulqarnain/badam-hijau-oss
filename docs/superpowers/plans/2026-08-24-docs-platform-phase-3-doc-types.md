@@ -199,22 +199,47 @@ desynchronise the offsets the body is sliced on.
 
 ---
 
-## Task 3: Per-doc-type frontmatter schemas
+## Task 3: Per-doc-type frontmatter schemas ✅
 
 **Files:** `src/lib/lifecycle/schema.ts` + tests.
 
-- [ ] **Step 1: A zod schema per doc type**
+- [x] **Step 1: A zod schema per doc type**
 
 Shared keys (`status`, `systems`, `related`) plus per-type keys — an ADR takes `supersedes`,
 `amends`, `decides`; a runbook takes none of those. **Reject unknown keys** rather than ignoring
 them: a typo'd `supersedez:` that is silently dropped is a relation the author believes exists.
 
-Decide what happens to `systems:` — Phase 6 owns the catalogue. Rejecting it blocks authors from
-writing frontmatter the spec tells them to write; ignoring it silently loses data. A third
-option is to accept and store it unvalidated, with the validation arriving in Phase 6. Choose,
-and record why.
+**Decided: `systems:` is accepted, stored, shape-checked, and not validated against a
+catalogue.** Rejecting it would ship a template that cannot be published and refuse the one
+thing §7 documents about the key. Ignoring it is the exact silent loss this module exists to
+prevent — the author's systems vanish, the page becomes indistinguishable from one that declared
+nothing, and Phase 6 arrives with nothing to migrate from. Accepting it means the declaration
+survives in `PageVersion.frontmatter` and Phase 6 populates `PageSystem` from data that already
+exists.
 
-- [ ] **Step 2: Field-level errors, not exceptions**
+This is **not** a hole in "reject unknown keys": `systems` is a *known* key in every doc type's
+table, carrying a `TODO(phase-6)`. Only *which* system keys exist is deferred.
+
+The wording here was tightened during implementation, from "unvalidated" to
+**catalogue-unvalidated**. Phase 3 checks everything it can know — text or a list of text,
+non-empty, whitespace-padding refused rather than trimmed, JSON-safe — because a full
+passthrough would let `systems: {a: {b: 1}}` into the `Json` column for Phase 6 to clean up.
+
+**`MAX_RELATION_TARGETS = 20`, because `MAX_FRONTMATTER_ENTRIES` does not bound this.** The
+entry cap cannot tell 200 list items from 200 round trips: each target costs Task 5 a resolution
+query, Task 6 a cycle walk, and Task 8 a row lock — all inside one transaction.
+
+**`status` is validated by `publishableStatuses(docType)`, derived from `PUBLISHABLE_INTO`** and
+added to `transition.ts` rather than to this module, because Task 10's status filter needs the
+same list. `DRAFT` falls out for free — it appears in no row's value — so no doc type accepts
+`status: DRAFT` and nothing special-cases it.
+
+**`amends` is ADR-only, and that is the one cell with no derivation behind it.** `AMENDS` fires
+no cascade, so the vocabulary says nothing and Task 6 defines no guardrail. An RFC amending an
+RFC is plausible. Erring strict here is a decision, not an omission: **if Task 6 wants RFC
+`amends`, it needs a guardrail for it in the same change**, not a table entry on its own.
+
+- [x] **Step 2: Field-level errors, not exceptions**
 
 Reuse the `FieldError` shape from `src/lib/pages/slug.ts`. Publishing must be able to say *which
 key* is wrong, in the editor, against the field.
@@ -295,6 +320,11 @@ Spec §6.3, each with its own test:
       returning an answer.
 - [ ] The source must reach `ACCEPTED` for a cascade to fire, so a draft cannot retire a live
       decision.
+- [ ] **Decide `AMENDS`.** Task 3 made it ADR-only by erring strict, and flagged it as the one
+      cell in its table with no derivation behind it: `AMENDS` fires no cascade, so the
+      vocabulary constrains nothing and no guardrail exists. An RFC amending an RFC is
+      plausible. Either write the guardrail and widen the table in the same change, or record
+      why ADR-only is right — but do not widen the table alone.
 
 ---
 
@@ -394,7 +424,10 @@ permission rules as everything else.
 
 - [ ] Publishing into a chosen status, from the legal destinations `PUBLISHABLE_INTO` gives for
       the page's current status — not a free list.
-- [ ] Frontmatter validation errors shown against the offending key.
+- [ ] Frontmatter validation errors shown against the offending key. Task 3 returns **all**
+      errors, not the first — frontmatter is several keys written in one pass, unlike a slug.
+      `PublishResult` currently carries a single `error`, so this step has to choose: take
+      `errors[0]`, or make the publish error plural. One line either way, but it is a choice.
 - [ ] Autosave must **not** start failing because frontmatter is momentarily malformed. Phase 2
       settled this shape for the title: a draft accepts what publish refuses.
 
