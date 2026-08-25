@@ -96,14 +96,21 @@ export const KEY_FOR_RELATION = {
  *   target half is Task 6's, and the `CLOSED` cascade it implies is reachable only in the RFC
  *   vocabulary, so the two halves agree.
  *
- * - **`amends` is ADR-only because nothing asks for more.** This is the one cell with no
- *   derivation behind it: `AMENDS` fires no cascade (§6.3 lists two, and this is not one of
- *   them), so the vocabulary has nothing to say about it, and Task 6 defines no guardrail for
- *   it. The plan names it for the ADR and nothing in the spec names it anywhere else. An RFC
- *   amending an RFC is a plausible future; it is one entry in this table plus a guardrail, and
- *   until someone wants it, `related:` says the weaker thing. Erring strict here is the same
- *   trade as the rest of the module: a refusal is visible, an accepted relation nothing
- *   validates is not.
+ * - **`amends` is for the ADR and the RFC, derived from which types hold records.** This was the
+ *   one cell with no derivation behind it, and it was ADR-only on the explicit ground that
+ *   `AMENDS` fires no cascade (§6.3 lists two, and this is not one of them) so nothing
+ *   validated it — accepting it more widely would have been accepting a key nothing checks.
+ *   Task 6 wrote that guardrail (`AMENDS` is legal only between two pages of the same doc type,
+ *   `src/lib/lifecycle/relations.ts`), which removed the reason, so the row moved in the same
+ *   change rather than a table entry going in on its own.
+ *
+ *   The derivation: `AMENDS` is the relation for a document that must not be rewritten in
+ *   place — you do not edit an accepted decision, you publish another one that amends it. Those
+ *   are exactly the doc types whose vocabulary has a **terminal status**, one they can be
+ *   published into and never out of: the ADR and the RFC. A `DOC` and a `RUNBOOK` have none —
+ *   `ARCHIVED` publishes back into `CURRENT` — because they are living pages, and "I amended it"
+ *   is what their version history already says. `schema.test.ts` asserts that equivalence
+ *   against `terminalStatuses`, not the row, so a vocabulary change moves this table with it.
  *
  * - **`related` is universal.** `RELATES_TO` is non-directional and has no cascade, so it
  *   cannot retire anything or contradict a vocabulary.
@@ -111,7 +118,7 @@ export const KEY_FOR_RELATION = {
 const RELATION_KEYS_BY_TYPE: Record<DocType, readonly RelationKey[]> = {
   DOC: ["related"],
   RUNBOOK: ["related"],
-  RFC: ["related"],
+  RFC: ["related", "amends"],
   ADR: ["related", "supersedes", "amends", "decides"],
 };
 

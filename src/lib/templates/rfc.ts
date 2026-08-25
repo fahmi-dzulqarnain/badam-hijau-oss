@@ -4,13 +4,16 @@ export const RFC_TEMPLATE = `---
 # unfilled template publishes: \`status:\` asks for no particular status, so the first publish
 # uses this type's entry state.
 #
-# \`related:\` names its target by space-relative page path — what you see in the URL and the
-# nav rail — for example decisions/adr-0031-mqtt-topic-naming. One path, or a list of them.
+# \`related:\` and \`amends:\` name their target by space-relative page path — what you see in
+# the URL and the nav rail — for example proposals/rfc-0004-fuel-price-sync. One path, or a
+# list of them. \`amends:\` names another RFC this one modifies without replacing: an accepted
+# RFC is a record, so it is amended by a later RFC rather than rewritten.
 # An RFC does not declare \`supersedes:\` or \`decides:\`; the ADR that closes this RFC declares
 # \`decides:\` pointing back here.
 status:
 systems:
 related:
+amends:
 ---
 
 ## Summary

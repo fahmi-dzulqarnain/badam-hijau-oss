@@ -132,6 +132,34 @@ export function publishableStatuses(docType: DocType): readonly DocStatus[] {
   return statuses;
 }
 
+/**
+ * The statuses a page of this type can be published **into** and never **out of** — the
+ * absorbing states of its vocabulary.
+ *
+ * Derived from `PUBLISHABLE_INTO`, like `publishableStatuses` and for the same reason: it is a
+ * property of the table, and a list typed out beside it is a second source of truth that agrees
+ * on the day it is written. A status is terminal when it appears as somebody's destination and
+ * has no row of its own — which is exactly how `validateTransition` already treats it, refusing
+ * every publish with *"cannot be published into another status"*.
+ *
+ * It comes out empty for `DOC` and `RUNBOOK` and non-empty for `ADR` and `RFC`, and that split
+ * is the answer to a question the vocabulary is otherwise silent on: **which doc types hold
+ * records rather than living pages.** A doc and a runbook always have a way back to `CURRENT`,
+ * so they are edited in place; an ADR that has been superseded, deprecated or rejected, and an
+ * RFC that has been closed, withdrawn or rejected, are finished — the document stays readable
+ * as history (§6.4) and the only way to change what it says is to publish another document that
+ * says so.
+ *
+ * Which is why `src/lib/lifecycle/relations.ts` uses it to decide who may declare `amends:`,
+ * asserted there as an equivalence rather than as a row. Nothing else needs it yet; when
+ * something wants "is this document final", this is the question to ask rather than a list of
+ * status names to match against.
+ */
+export function terminalStatuses(docType: DocType): readonly DocStatus[] {
+  const row = PUBLISHABLE_INTO[docType];
+  return publishableStatuses(docType).filter((status) => row[status] === undefined);
+}
+
 export type TransitionErrorCode = "draft-is-not-a-destination" | "illegal-transition";
 
 /** Attached to a field so the caller renders it in place, never thrown. */

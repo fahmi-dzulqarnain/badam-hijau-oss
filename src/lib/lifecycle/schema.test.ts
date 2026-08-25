@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import type { DocType, RelationType } from "@prisma/client";
 import { splitFrontmatter } from "@/lib/markdown/frontmatter";
 import { MAX_PATH_BYTES } from "@/lib/pages/slug";
-import { publishableStatuses } from "@/lib/pages/transition";
+import { publishableStatuses, terminalStatuses } from "@/lib/pages/transition";
 import {
   KEY_FOR_RELATION,
   MAX_RELATION_TARGETS,
@@ -115,17 +115,51 @@ test("a runbook declaring `decides:` is refused, and told which types may", () =
   expect(error.message).toContain("only ADR");
 });
 
-test("`supersedes`, `amends` and `decides` are ADR-only; `status`, `systems`, `related` are universal", () => {
+test("`supersedes` and `decides` are ADR-only; `status`, `systems`, `related` are universal", () => {
   for (const docType of DOC_TYPES) {
     const keys = frontmatterKeys(docType);
     expect(keys).toContain("status");
     expect(keys).toContain("systems");
     expect(keys).toContain("related");
 
-    for (const adrOnly of ["supersedes", "amends", "decides"]) {
+    for (const adrOnly of ["supersedes", "decides"]) {
       expect(keys.includes(adrOnly)).toBe(docType === "ADR");
     }
   }
+});
+
+test("`amends` is accepted exactly where the vocabulary has a terminal status", () => {
+  // Phase 3 Task 6's decision, asserted as the equivalence rather than as two rows. `amends`
+  // is for a document that must not be rewritten in place — which is a document whose
+  // vocabulary can put it somewhere it never publishes out of again. A DOC and a RUNBOOK
+  // always have a way back to CURRENT, so they are edited instead, and their version history
+  // is the amendment.
+  //
+  // Written this way so that a vocabulary change moves the key table with it: give a runbook a
+  // terminal status and this fails until `RELATION_KEYS_BY_TYPE` follows.
+  for (const docType of DOC_TYPES) {
+    expect(frontmatterKeys(docType).includes("amends")).toBe(
+      terminalStatuses(docType).length > 0,
+    );
+  }
+  // Not vacuous in either direction: the equivalence would also hold if no type had `amends`
+  // and none had a terminal status.
+  expect(frontmatterKeys("RFC")).toContain("amends");
+  expect(frontmatterKeys("RUNBOOK")).not.toContain("amends");
+});
+
+test("an RFC may declare `amends`, and a DOC may not", () => {
+  // The reachable case the widening buys: an RFC amending an RFC validates here, and Task 6's
+  // same-doc-type guardrail is what refuses an RFC amending an ADR. Before the widening the
+  // guardrail could only be exercised from a hand-built argument list.
+  expect(accepted("RFC", { amends: "proposals/rfc-0004" }).relations.AMENDS).toEqual([
+    "proposals/rfc-0004",
+  ]);
+
+  const error = theRefusal("DOC", { amends: "handbook/onboarding" });
+  expect(error.code).toBe("key-not-for-doc-type");
+  expect(error.key).toBe("amends");
+  expect(error.message).toContain("only ADR, RFC");
 });
 
 test("`supersedes` is accepted exactly where the vocabulary can reach SUPERSEDED", () => {

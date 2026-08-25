@@ -244,6 +244,20 @@ const MODULES: Record<string, Registration> = {
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.
+  "src/lib/lifecycle/relations.ts": {
+    reachesPage: false,
+    why:
+      "walks the supersede graph over PageRelation and selects `toId` — no Page row, directly " +
+      "or through a relation filter. It is blind to page state on purpose, and the absence is " +
+      "pinned rather than merely allowed: tests/integration/relation-guardrails.test.ts, 'a " +
+      "cycle through a soft-deleted page is still refused'. Filtering the walk to live pages " +
+      "would need a join to `Page` and would admit exactly the cycles that matter — a " +
+      "soft-deleted page can be restored, relations are only checked at publish time, and a " +
+      "loop hidden behind one would never be looked at again. Every page it reads about was " +
+      "already resolved through `resolveRelations`' readable queries, or is joined to the " +
+      "source page by relation rows a publish in that space wrote; no page identity leaves " +
+      "the module.",
+  },
   "src/lib/audit/log.ts": {
     reachesPage: false,
     why:
