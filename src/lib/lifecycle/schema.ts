@@ -45,11 +45,19 @@ import { publishableStatuses } from "@/lib/pages/transition";
  * Most relation targets one key may name.
  *
  * The upstream caps do not bound this. `MAX_FRONTMATTER_ENTRIES` is 200 across the whole
- * block, so `supersedes:` with 200 entries passes it — and every target costs Task 5 a
- * *resolution query* inside the publish transaction, plus Task 6 a cycle walk and Task 8 a row
- * lock. 200 of those in one transaction is not a frontmatter problem, it is a lock-duration
- * problem, and the entry cap cannot see the difference between 200 list items and 200 database
- * round trips.
+ * block, so `supersedes:` with 200 entries passes it, and the entry cap cannot see the
+ * difference between 200 list items and 200 units of work inside one transaction.
+ *
+ * **Two thirds of the original reasoning here has gone stale, and it is corrected rather than
+ * left to be trusted.** It used to say every target costs a resolution query, a cycle walk and a
+ * row lock. Resolution batches — three queries regardless of count — and the cycle walk batches
+ * within a walk *and* shares one 200-page budget across the whole call, so both are independent
+ * of the target count. What remains is **row locks**, which genuinely do not batch and are held
+ * for the rest of the publish transaction.
+ *
+ * (The correction reached this phase's plan and PROGRESS.md when it was found, and did not reach
+ * this comment for three tasks. Correcting a plan is not correcting the code comment that says
+ * the same thing.)
  *
  * 20 is far past any real document: the largest plausible case is one ADR retiring a handful of
  * predecessors at once.

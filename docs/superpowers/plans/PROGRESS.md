@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **777 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **827 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -30,8 +30,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 8. Cascades | ✅ |
 | 9. Reading relations, and the retired banner | ✅ |
 | 10. Generated indexes | ✅ |
-| **11. The editor's status and frontmatter surface** | **next** |
-| 12–13 | not started |
+| 11. The editor's status and frontmatter surface | ✅ |
+| **12. End-to-end** | **next** |
+| 13. Extend the smoke test | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -52,6 +53,11 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **Correcting a plan is not correcting the code comment that says the same thing.**
+  `MAX_RELATION_TARGETS`'s reasoning was corrected twice in the phase plan and once here as tasks
+  measured it wrong — and the docstring in `schema.ts` went on stating the original for three more
+  tasks, where a reader would meet it first. When a stated measurement goes stale, grep the code
+  for it too (with `rg` or Python — see above).
 - **An equivalence assertion over two derived sets needs a non-vacuity companion.** Task 9
   changed a vocabulary table and re-derived `terminalStatuses`; had it not, `amends` would have
   silently vanished from the frontmatter keys — and `schema.test.ts`'s equivalence assertion would
@@ -223,29 +229,11 @@ All 15 tasks approved and every exit criterion verified.
 
 ## Test suite
 
-128 vitest tests, 18 files: 88 pure unit (no database), 40 integration against real
-Postgres. Plus 8 Playwright specs in `e2e/`, run separately with `npm run test:e2e`.
-
-| File | Tests |
-|---|---|
-| `src/lib/users/gate.test.ts` | 15 |
-| `src/lib/authz/can.test.ts` | 14 |
-| `tests/integration/pages-repo.test.ts` | 12 |
-| `src/lib/markdown/render.test.ts` | 12 |
-| `src/lib/bugs/schema.test.ts` | 10 |
-| `src/lib/pages/tree.test.ts` | 9 |
-| `src/lib/spaces/landing.test.ts` | 8 |
-| `src/lib/pages/href.test.ts` | 8 |
-| `tests/integration/bug-route.test.ts` | 6 |
-| `src/lib/version/build.test.ts` | 6 |
-| `tests/integration/bug-context.test.ts` | 5 |
-| `tests/integration/viewer.test.ts` | 4 |
-| `tests/integration/user-upsert.test.ts` | 4 |
-| `tests/integration/bug-report.test.ts` | 4 |
-| `tests/integration/authz-where.test.ts` | 3 |
-| `src/lib/auth/test-login.test.ts` | 3 |
-| `src/lib/auth/providers.test.ts` | 3 |
-| `tests/integration/spaces.test.ts` | 2 |
+**827 vitest tests over 53 files**, plus **21 Playwright specs** in `e2e/` and a **37-check
+cold-start smoke script**. The per-file table that used to sit here described Phase 1's 128 tests
+over 18 files and had been wrong for two phases — a table that has to be edited by hand on every
+task is a table that ends up lying, so the counts live in one place now and
+`npm test` prints the rest.
 
 ## Running it
 

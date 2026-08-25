@@ -746,23 +746,60 @@ permission rules as everything else.
 
 ---
 
-## Task 11: The editor's status and frontmatter surface
+## Task 11: The editor's status and frontmatter surface ✅
 
-- [ ] Publishing into a chosen status, from the legal destinations `PUBLISHABLE_INTO` gives for
+- [x] Publishing into a chosen status, from the legal destinations `PUBLISHABLE_INTO` gives for
       the page's current status — not a free list.
-- [ ] **Refuse, or warn about, a document that is only frontmatter.** Task 7 found that
+
+      **The picker writes the document; it does not send a status**, and that is the load-bearing
+      call rather than a convenience. `publishPage`'s precedence is
+      `options.status ?? frontmatter.status ?? default`, so a picker sending its own value would
+      **outrank the author's `status:` line** — and because `PageVersion.frontmatter` stores what
+      validation accepted, an ADR whose document says `ACCEPTED`, published through a picker set
+      to `PROPOSED`, would commit a version whose stored frontmatter and whose page status
+      disagree. That is precisely the §6.3 divergence Task 7's frontmatter wiring exists to close,
+      and repairing it would have meant inventing a refusal for a contradiction the surface itself
+      created. So choosing an option rewrites the `status:` line as a minimal editor change, and
+      autosave carries it like any keystroke. The route still reads no body.
+- [x] **Refused, as a new `body-empty` code beside `draft-empty` — not instead of it.** Warning
+      has no mechanism that is not a new one: publish is one round trip, so a warning means either
+      a message nobody must read or a confirm-and-resend handshake. And rewriting `draft-empty` to
+      measure `split.body` would have made the whole-document case unreachable while retiring a
+      Phase 2 sentence that is still right for it. Both are reachable, both tested, and the check
+      order is pinned by a test.
+
+      Original wording: Task 7 found that
       `draft-empty` measures the whole markdown, so `---\nstatus:\n---` publishes and the reader
       gets a title over a blank page. Before Task 2 it rendered as visible garbage; now it
       renders as nothing. Testing `split.body` is the one-line fix, but it changes a Phase 2 rule
       that has its own message and test.
-- [ ] **Tell an author when their cascade is dormant.** Task 6 gates a cascade on publishing into
+- [x] **The dormant cascade is derived server-side**, next to `cascadeFor` where the `ACCEPTED`
+      gate is already stated, so the editor holds no copy of the rule — a notice built in the
+      component from "type is SUPERSEDES and status is not ACCEPTED" would be a duplicate that no
+      test on either side of the HTTP boundary could kill. Three conditions: the cascade did not
+      fire, the type cascades at all, and **the target is not already at that status** — otherwise
+      "this did not retire it" about an already-retired page sends the author hunting.
+
+      A publish carrying a dormant entry renders its notice and **does not navigate**: a message
+      on a component about to be replaced is a message nobody reads.
+
+      Original wording: Task 6 gates a cascade on publishing into
       `ACCEPTED`, so an ADR published at `PROPOSED` carries a `supersedes:` that does nothing
       yet. The flag exists; the sentence does not. Without it, "I said it supersedes ADR-31 and
       ADR-31 is still current" reads as a bug.
-- [ ] Frontmatter validation errors shown against the offending key. Task 3 returns **all**
-      errors, not the first — frontmatter is several keys written in one pass, unlike a slug.
-      `PublishResult` currently carries a single `error`, so this step has to choose: take
-      `errors[0]`, or make the publish error plural. One line either way, but it is a choice.
+- [x] Frontmatter validation errors shown against the offending key. **This bullet went stale
+      before it was reached**: it said `PublishResult` carries a single `error` so this step must
+      choose between `errors[0]` and going plural. Task 7 had already done neither-and-both —
+      `error` *and* `errors`, with `errors[0] === error` pinned — and said so in its own section.
+      The remaining choice was which the editor *renders*, and it renders all of them.
+
+      Placed by **1-based line number** in the frontmatter block, with a control that scrolls to
+      and selects that line — as close to "against the key" as a surface whose frontmatter is
+      prose in one textarea can get. The line scanner borrows the parser's own rule (frontmatter
+      is the first node or it is not), so the three trap shapes Task 2 measured — a leading blank
+      line, an opening code fence, `Title\n---` — all answer `null` rather than pointing at prose.
+      Every uncertain case answers `null`, so a message loses its line rather than pointing at the
+      wrong one.
 - [ ] Autosave must **not** start failing because frontmatter is momentarily malformed. Phase 2
       settled this shape for the title: a draft accepts what publish refuses.
 
