@@ -22,6 +22,15 @@ type Props = {
    * permission ends up being decided in two places.
    */
   manageHref: string | null;
+  /**
+   * The generated indexes worth offering for this space — Task 10, spec §11.
+   *
+   * A prop for the same reason `manageHref` is one: the layout has already loaded the page rows,
+   * so it can answer "does this space hold any ADRs" from values in hand, and no query pays for
+   * this. A space of nothing but docs and runbooks gets an empty array and no section, because a
+   * link to two pages that both explain they are empty is not navigation.
+   */
+  indexes: { href: string; label: string }[];
 };
 
 function NavNode({ spaceKey, node }: { spaceKey: string; node: TreeNode }) {
@@ -56,7 +65,14 @@ function NavNode({ spaceKey, node }: { spaceKey: string; node: TreeNode }) {
   );
 }
 
-export function NavRail({ spaceKey, spaceName, tree, build, manageHref }: Props) {
+export function NavRail({
+  spaceKey,
+  spaceName,
+  tree,
+  build,
+  manageHref,
+  indexes,
+}: Props) {
   return (
     <div className="rail-l">
       <nav aria-label={`${spaceName} navigation`}>
@@ -64,6 +80,22 @@ export function NavRail({ spaceKey, spaceName, tree, build, manageHref }: Props)
           <NavNode key={node.id} spaceKey={spaceKey} node={node} />
         ))}
       </nav>
+      {/*
+        The generated indexes, outside the page navigation for the same reason the admin link
+        below is: they are application routes under `-/`, not pages in the space, and listing them
+        among the documents would put a route in a tree of documents — the page-navigation
+        landmark is what the e2e suite asserts a deleted page has left. Above the admin section
+        because every reader sees these and only an admin sees that one.
+      */}
+      {indexes.length > 0 ? (
+        <nav className="rail-admin" aria-label={`${spaceName} indexes`}>
+          {indexes.map((index) => (
+            <Link key={index.href} href={index.href as Route}>
+              {index.label}
+            </Link>
+          ))}
+        </nav>
+      ) : null}
       {/*
         Outside the page navigation, in its own labelled nav: it is not a page in the space and
         listing it among them would put an application route in a tree of documents — and the

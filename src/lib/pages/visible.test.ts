@@ -305,6 +305,27 @@ const MODULES: Record<string, Registration> = {
     covered: ["getPageRelations"],
     exempt: [],
   },
+  "src/lib/lifecycle/index-read.ts": {
+    load: () => import("@/lib/lifecycle/index-read"),
+    // Soft-delete tests: tests/integration/doc-index.test.ts. Task 10's index has TWO page
+    // queries and they must agree, which is the reason for listing them rather than the module:
+    //   the `findMany` that renders the list carries `visiblePage()`, covered by "a soft-deleted
+    //   ADR is absent from the list and from the counts";
+    //   the `groupBy` that produces the filter counts carries its own `visiblePage()` — the
+    //   same test covers it, and it has to assert both halves because they are two separate
+    //   calls: with the filter dropped from the aggregate alone, the list is right and the
+    //   `ACCEPTED 3` chip beside it counts a page nobody can open.
+    //
+    //   Neither page query carries `readableSpace`, and that absence is deliberate and pinned
+    //   rather than merely allowed. The predicate is stated once, on the space read above them —
+    //   see the module docstring for the argument, which is `resolveRedirect`'s: both page
+    //   queries are bounded by `spaceId` to the space verified three lines earlier, so a copy of
+    //   the predicate on either of them could be deleted with the whole suite green. Covered by
+    //   "a stranger cannot list a space's ADRs, and cannot tell it from an empty space", which
+    //   fails the moment the one predicate that exists is removed.
+    covered: ["listDocTypePages"],
+    exempt: [],
+  },
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.

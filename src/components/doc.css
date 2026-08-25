@@ -489,3 +489,131 @@
   text-transform: uppercase;
   color: var(--ink-3);
 }
+
+/*
+ * The generated indexes (Task 10), on `/{space}/-/adrs` and `/{space}/-/rfcs`.
+ *
+ * Here for the reason every block above it is: `doc.css` is imported by the space layout, and
+ * Phase 1 measured what a route importing its own stylesheet does — `.doc` computed
+ * `max-width: none` on a hard load and `820px` on a soft navigation to the same route. Every
+ * selector is prefixed `idx-` and defined in exactly one place.
+ *
+ * `overflow-wrap: anywhere` on the row, the title, the path and the note is the guard for a class
+ * that has now bitten six times: `Page.title` and `Page.path` are user-typed strings painted
+ * OUTSIDE `.body`, so the `.body` rule near the top of this file has never reached them, and a
+ * 300-character unbreakable title widened the reader by 4,321px before `.doc > h1` got the same
+ * treatment. `.idx-note` carries it too, because it echoes back a value off the query string.
+ *
+ * `min-width: 0` on the flex row keeps the grid track honest and does nothing about inline content
+ * overflowing its box — two different jobs, and both are needed.
+ */
+.idx-lead {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 66ch;
+}
+
+.idx-empty,
+.idx-note {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.idx-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.idx-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  color: var(--ink-2);
+  text-decoration: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.idx-chip:hover {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+/* The active filter. `aria-current` is the state, so the selector reads off the state rather
+   than off a second class the component would have to keep in step with it. */
+.idx-chip[aria-current="page"] {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+.idx-n { color: var(--ink-3); }
+.idx-chip[aria-current="page"] .idx-n { color: var(--accent-ink); }
+
+.idx-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.idx-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 9px 0;
+  font-size: 13.5px;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.idx-status {
+  flex: none;
+  min-width: 8.5ch;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+/* `flex: 1 1 0` and not `1 1 auto`: an `auto` basis is the content width, which for an
+   unbreakable 300-character title is wider than the row and pushes the page sideways — the
+   lesson `.del-what` and `.rel-title` above both carry, in the same shape. */
+.idx-title {
+  flex: 1 1 0;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* Never published, so `getPublishedPage` would 404 it for everyone: named, and not offered as a
+   link, matching the nav rail's inert drafts. `.tag-draft` is global and shared as-is. */
+.idx-inert { font-weight: 400; color: var(--ink-3); }
+
+.idx-path {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.idx-when {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-3);
+}
