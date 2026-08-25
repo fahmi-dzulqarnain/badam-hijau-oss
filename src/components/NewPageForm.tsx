@@ -186,6 +186,13 @@ export function NewPageForm({
       ) : null}
 
       <label htmlFor="np-doctype">Doc type</label>
+      {/*
+       * The doc type decides two things at once, and the hint below says so because only one
+       * of them is reversible by editing: it picks the lifecycle vocabulary the page publishes
+       * into, and it picks the template the draft is created on. The template is written into
+       * the draft at create time — server-side, in `createPage` — so this component never
+       * loads the template text and stays free of `node:fs`.
+       */}
       <select
         id="np-doctype"
         name="docType"
@@ -199,6 +206,11 @@ export function NewPageForm({
           </option>
         ))}
       </select>
+      <p className="np-hint">
+        The draft opens on this type&rsquo;s template &mdash; its headings, and a frontmatter
+        block listing the keys the type accepts. Change the type here, not after: the template
+        is written when the draft is created.
+      </p>
 
       <div className="np-actions">
         <button type="submit" disabled={pending || title.trim() === ""}>

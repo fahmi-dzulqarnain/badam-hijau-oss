@@ -4,6 +4,8 @@ import { createPage } from "@/lib/pages/create";
 import type { CreatePageResult } from "@/lib/pages/create";
 import { getPublishedPage, listSpacePages } from "@/lib/pages/repo";
 import { MAX_PATH_BYTES, SLUG_MAX_LENGTH } from "@/lib/pages/slug";
+import { templateFor } from "@/lib/templates/load";
+import type { DocType } from "@prisma/client";
 import type { Viewer } from "@/lib/authz/types";
 
 beforeEach(resetDb);
@@ -116,7 +118,7 @@ test("a top-level page is created as a draft, with its draft row and an audit en
 
   const draft = await db.pageDraft.findUniqueOrThrow({ where: { pageId: page.id } });
   expect(draft.title).toBe("ADR 0042: MQTT topic naming");
-  expect(draft.markdown).toBe("");
+  expect(draft.markdown).toBe(templateFor("ADR"));
   expect(draft.baseVersionId).toBeNull();
   expect(draft.updatedById).toBe(aisyah.id);
 
@@ -129,6 +131,36 @@ test("a top-level page is created as a draft, with its draft row and an audit en
 
   // Nothing was published as a side effect.
   expect(await db.pageVersion.count()).toBe(0);
+});
+
+/**
+ * The draft opens on its doc type's template, and on **its own** — the four templates are
+ * distinct strings, so a `templateFor` fed a constant, or fed the wrong end of the input,
+ * fails here rather than passing three times out of four.
+ *
+ * Written as one page per type in one space, which also pins that the template is chosen from
+ * the `docType` that was asked for and not from anything about the path.
+ */
+test("a new page's draft starts on its doc type's template, not empty", async () => {
+  const { space, asAisyah } = await fixture();
+  const types: readonly DocType[] = ["DOC", "RUNBOOK", "ADR", "RFC"];
+
+  for (const docType of types) {
+    const page = created(
+      await createPage(
+        asAisyah,
+        input({ spaceId: space.id, slug: `page-${docType.toLowerCase()}`, docType }),
+      ),
+    );
+    const draft = await db.pageDraft.findUniqueOrThrow({ where: { pageId: page.id } });
+    expect(draft.markdown, `${docType} draft`).toBe(templateFor(docType));
+    // Not the placeholder story: the text is in the database, before the editor has rendered
+    // anything and before any autosave has run.
+    expect(draft.markdown.length).toBeGreaterThan(0);
+  }
+
+  // And the four are not the same string, so the loop above compared four different things.
+  expect(new Set(types.map(templateFor)).size).toBe(types.length);
 });
 
 /**

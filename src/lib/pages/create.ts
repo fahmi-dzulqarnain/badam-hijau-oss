@@ -12,6 +12,7 @@ import {
   type SlugErrorCode,
 } from "@/lib/pages/slug";
 import { stripControl } from "@/lib/text/control";
+import { templateFor } from "@/lib/templates/load";
 import { TITLE_MAX_LENGTH } from "@/lib/drafts/schema";
 import type { Viewer } from "@/lib/authz/types";
 
@@ -260,11 +261,19 @@ export async function createPage(
     // The editor opens on this row, so it exists from the start rather than being created by
     // the first autosave — which would make the editor's first save a create racing its own
     // second save, and would leave a page with no draft if the tab were closed immediately.
+    //
+    // The doc type's template is written into it HERE, at create time, and that is a decision
+    // rather than a convenience. The alternative — rendering the template as the editor's
+    // placeholder — puts text on screen that is not in the database: it vanishes on the first
+    // keystroke, so an author who types one word has silently discarded the frontmatter and
+    // the headings, and an author who closes the tab has a page whose stored draft is empty
+    // while the screen showed a document. Written here, the draft row and the pane agree from
+    // the first render, and the frontmatter the author is meant to fill in is already theirs.
     await tx.pageDraft.create({
       data: {
         pageId: page.id,
         title,
-        markdown: "",
+        markdown: templateFor(input.docType),
         // Null, and honestly so: there is no published version to depart from yet.
         baseVersionId: null,
         updatedById: viewer.id,
