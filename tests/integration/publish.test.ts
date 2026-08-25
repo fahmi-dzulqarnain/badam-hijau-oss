@@ -1550,6 +1550,69 @@ test("a proposed ADR writes the relation and retires nothing", async () => {
 });
 
 /**
+ * Task 11's fourth item, from the transaction that decided it: the same publish as above also
+ * has to **say** that nothing was retired. Without the sentence, "I said it supersedes ADR-30
+ * and ADR-30 is still ACCEPTED" reads as a bug.
+ *
+ * On the success result, because the publish succeeded — this is an account of what it did, not
+ * a reason it did not. Kills a `publishPage` that drops the dormant list at the boundary, which
+ * would leave the editor with nothing to render and no test to notice.
+ */
+test("a proposed ADR reports the cascade it did not fire, on the success result", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const target = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: PROPOSED", `supersedes: ${target.path}`].join("\n"));
+  const proposed = published(await publishPage(asAisyah, page.id));
+
+  expect(proposed.dormant).toEqual([
+    // The author's own line, not the target's current path: a move can change the second and
+    // never the first, and the notice quotes what they typed.
+    { type: "SUPERSEDES", ref: target.path, wouldRetireInto: "SUPERSEDED" },
+  ]);
+
+  // And the accepting publish has nothing dormant to report, because it fired.
+  await redeclaring(
+    asAisyah,
+    page.id,
+    ["status: ACCEPTED", `supersedes: ${target.path}`].join("\n"),
+  );
+  expect(published(await publishPage(asAisyah, page.id)).dormant).toEqual([]);
+});
+
+test("a publish with no relations at all reports an empty dormant list, not a missing one", async () => {
+  // Always present, for the reason `RelationDiff` gives: a key that appears on some results and
+  // not others cannot be told from a key somebody forgot to plumb.
+  const { page, asAisyah } = await fixture();
+  expect(published(await publishPage(asAisyah, page.id)).dormant).toEqual([]);
+});
+
+test("a related: link is never dormant, however the page is published", async () => {
+  // `RELATES_TO` retires nothing at any status, so there is no dormancy to report — only an
+  // author whose expectation is already right. A notice here would fire on every `related:`
+  // link in the space.
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const target = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: PROPOSED", `related: ${target.path}`].join("\n"));
+  expect(published(await publishPage(asAisyah, page.id)).dormant).toEqual([]);
+});
+
+/**
  * **Task 8's first decision, and the case Task 6 deliberately did not answer.** An ADR at
  * `PROPOSED` cannot reach `SUPERSEDED` — `PUBLISHABLE_INTO` says so — and this is the choice
  * between refusing the publish and skipping the cascade. It refuses, and the argument is at

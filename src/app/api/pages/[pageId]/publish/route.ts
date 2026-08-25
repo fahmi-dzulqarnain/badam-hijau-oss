@@ -48,6 +48,21 @@ export async function POST(
         status: result.page.status,
         versionId: result.page.versionId,
         href: pageHref(result.page.spaceKey, result.page.path),
+        // **The relations this publish recorded and did not act on** — Phase 3 Task 11. A
+        // cascade fires only on the publish that reaches `ACCEPTED`, so an ADR published at
+        // `PROPOSED` carries a `supersedes:` that retires nothing yet, and until now nothing
+        // said so: "I said it supersedes ADR-31 and ADR-31 is still current" reads as a bug.
+        //
+        // Mapped field by field, as the `invalid` branch below is, and for the same reason:
+        // what crosses this boundary is stated here rather than inherited from whatever shape
+        // the module that produced it happens to have. Always present, empty on almost every
+        // publish — a key that appears on some replies and not others is indistinguishable from
+        // one somebody forgot to plumb.
+        dormant: result.page.dormant.map((cascade) => ({
+          type: cascade.type,
+          ref: cascade.ref,
+          wouldRetireInto: cascade.wouldRetireInto,
+        })),
       },
       { status: 200 },
     );

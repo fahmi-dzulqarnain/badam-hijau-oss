@@ -91,6 +91,20 @@ test("a published page comes back with the reader URL, encoded per segment", asy
   expect(row.publishedVersionId).toBe(body.versionId);
 });
 
+/**
+ * Phase 3 Task 11. The editor's dormant-cascade notice is rendered from this key, so it has to
+ * cross the boundary — and it has to be here on the ordinary publish too, empty, or an editor
+ * cannot tell "nothing was dormant" from "the server does not send this".
+ */
+test("the success body always carries a dormant list", async () => {
+  const { page, asEditor } = await fixture();
+  const POST = await routeAs(asEditor);
+
+  const { request, context } = post(page.id);
+  const body = await (await POST(request, context)).json();
+  expect(body.dormant).toEqual([]);
+});
+
 test("an unauthenticated caller gets 401 and nothing is published", async () => {
   const { page } = await fixture();
   const POST = await routeAs(null);

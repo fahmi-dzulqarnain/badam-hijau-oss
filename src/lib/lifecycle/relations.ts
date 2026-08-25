@@ -369,6 +369,45 @@ function cascadeFor(type: RelationType, publishingInto: DocStatus): DocStatus | 
   return publishingInto === CASCADE_REQUIRES ? status : null;
 }
 
+/**
+ * What this relation **would** have retired its target into, had the publish reached `ACCEPTED`
+ * — or `null` when there is nothing to say.
+ *
+ * The inverse of `cascadeFor`, and Task 11's whole basis for the sentence the plan asks for:
+ * *"I said it supersedes ADR-31 and ADR-31 is still current"* reads as a bug, and it is not one.
+ * An ADR's first publish lands at `PROPOSED`, the cascade is gated on `ACCEPTED` (argued at
+ * `cascadeFor`), so the relation row is written and the target is untouched — correctly, and
+ * silently until now.
+ *
+ * **Derived here rather than in the editor, and that is the point.** The gate is
+ * `publishingInto === ACCEPTED`, stated once, at `cascadeFor`. A notice built in the component
+ * from "the type is `SUPERSEDES` and the status is not `ACCEPTED`" would be that rule written a
+ * second time, on the other side of an HTTP boundary — and this project has measured what that
+ * costs twice over: mutate away either copy and the suite stays green. So the editor is told
+ * *what happened*, by the transaction that decided it, and owns only the wording.
+ *
+ * Three conditions, and the third is the one that keeps the notice honest:
+ *
+ * - the relation **did not** cascade on this publish (`cascade === null`);
+ * - its type is one that cascades **at all** — `AMENDS` and `RELATES_TO` retire nothing ever, so
+ *   there is no dormancy to report, only the author's correct expectation;
+ * - and the target is **not already** at that status. An ADR at `PROPOSED` superseding an ADR
+ *   that is already `SUPERSEDED` has nothing dormant about it: nothing is waiting to happen,
+ *   because the target is where the cascade would put it. Telling the author "this did not
+ *   retire it" about a page that *is* retired would send them looking for a fault.
+ *
+ * Pure, and it reads the status resolution captured for the target, which is the same value
+ * `planCascades` would have validated. It is a message rather than a write, so a target whose
+ * status changes between resolution and the reply costs a slightly stale sentence and nothing
+ * else — which is why this does not take the lock the cascade path takes.
+ */
+export function dormantCascade(relation: CheckedRelation): DocStatus | null {
+  if (relation.cascade !== null) return null;
+  const would = CASCADE_INTO[relation.type];
+  if (would === null || relation.page.status === would) return null;
+  return would;
+}
+
 type WalkOutcome = "clear" | "cycle" | "budget-exhausted";
 
 /**

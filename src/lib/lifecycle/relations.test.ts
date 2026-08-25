@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import type { DocStatus, DocType, RelationType } from "@prisma/client";
-import { checkRelations, type RelationCheck, type RelationGuardClient } from "./relations";
+import {
+  checkRelations,
+  dormantCascade,
+  type RelationCheck,
+  type RelationGuardClient,
+} from "./relations";
 import type { ResolvedRelation } from "./resolve";
 
 /**
@@ -32,6 +37,18 @@ const noGraph = {
 } as unknown as RelationGuardClient;
 
 /**
+ * A graph with no rows in it, for the cases where a legal `SUPERSEDES` *must* be walked.
+ *
+ * Only the dormancy tests below use it, and only because `dormantCascade` is a property of a
+ * relation that passed. The walk itself is covered against a real chain in
+ * `tests/integration/relation-guardrails.test.ts` — an empty stub proves nothing about it, which
+ * is why every other test here keeps `noGraph`.
+ */
+const emptyGraph = {
+  pageRelation: { findMany: async () => [] },
+} as unknown as RelationGuardClient;
+
+/**
  * One resolved relation, as `resolveRelations` would hand it over.
  *
  * Every field defaults to something distinguishable — the id, the path and the ref are three
@@ -60,9 +77,9 @@ function resolvedRelation(opts: {
 /** `checkRelations` with an ADR source that is publishing into `ACCEPTED`, unless overridden. */
 function check(
   relations: ResolvedRelation[],
-  source?: { docType?: DocType; publishingInto?: DocStatus },
+  source?: { docType?: DocType; publishingInto?: DocStatus; graph?: RelationGuardClient },
 ): Promise<RelationCheck> {
-  return checkRelations(noGraph, {
+  return checkRelations(source?.graph ?? noGraph, {
     source: {
       id: "page-source",
       docType: source?.docType ?? "ADR",
@@ -286,6 +303,79 @@ test("the gate reads the destination status, not the target's own", async () => 
     ),
   );
   expect(relations[0]?.cascade).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Dormancy: the cascade that did not fire, and is worth saying so about
+// ---------------------------------------------------------------------------
+
+/**
+ * Task 11's notice, at the only place the `ACCEPTED` gate is stated. The editor is told *what
+ * happened* and owns only the wording, so a rule restated in the component — which no test on
+ * either side of the HTTP boundary could then kill — never gets written.
+ */
+test("a SUPERSEDES published at PROPOSED is dormant, and names where the target would go", async () => {
+  const relations = passed(
+    await check([resolvedRelation({ type: "SUPERSEDES", docType: "ADR" })], {
+      publishingInto: "PROPOSED",
+      graph: emptyGraph,
+    }),
+  );
+
+  expect(relations[0]?.cascade).toBeNull();
+  expect(dormantCascade(relations[0]!)).toBe("SUPERSEDED");
+});
+
+test("a DECIDES published at PROPOSED is dormant into CLOSED, not into SUPERSEDED", async () => {
+  // Two cascading types with two destinations. A `dormantCascade` that returned one constant
+  // passes the test above and fails this one.
+  const relations = passed(
+    await check([resolvedRelation({ type: "DECIDES", docType: "RFC", status: "IN_REVIEW" })], {
+      publishingInto: "PROPOSED",
+    }),
+  );
+
+  expect(dormantCascade(relations[0]!)).toBe("CLOSED");
+});
+
+test("a cascade that fired is not dormant", async () => {
+  const relations = passed(
+    await check([resolvedRelation({ type: "SUPERSEDES", docType: "ADR" })], {
+      publishingInto: "ACCEPTED",
+      graph: emptyGraph,
+    }),
+  );
+
+  expect(relations[0]?.cascade).toBe("SUPERSEDED");
+  expect(dormantCascade(relations[0]!)).toBeNull();
+});
+
+test("a relation type that never cascades is never dormant, at any status", async () => {
+  // `AMENDS` and `RELATES_TO` retire nothing ever, so there is no dormancy to report — only an
+  // author whose expectation is already correct. A notice here would be noise on every
+  // `related:` link in the space.
+  for (const type of ["AMENDS", "RELATES_TO"] as RelationType[]) {
+    for (const publishingInto of ["PROPOSED", "ACCEPTED"] as DocStatus[]) {
+      const relations = passed(
+        await check([resolvedRelation({ type, docType: "ADR" })], { publishingInto }),
+      );
+      expect(dormantCascade(relations[0]!), `${type} at ${publishingInto}`).toBeNull();
+    }
+  }
+});
+
+test("a target already at the cascade status is not dormant — nothing is waiting to happen", async () => {
+  // The third condition, and the one that keeps the notice honest. "Publishing this did not
+  // retire ADR-0030" about a page that *is* SUPERSEDED sends the author looking for a fault
+  // that is not there.
+  const relations = passed(
+    await check([resolvedRelation({ type: "SUPERSEDES", docType: "ADR", status: "SUPERSEDED" })], {
+      publishingInto: "PROPOSED",
+      graph: emptyGraph,
+    }),
+  );
+
+  expect(dormantCascade(relations[0]!)).toBeNull();
 });
 
 // ---------------------------------------------------------------------------

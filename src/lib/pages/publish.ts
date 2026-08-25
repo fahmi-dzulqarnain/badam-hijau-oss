@@ -17,6 +17,7 @@ import { resolveRelations, type RelationRefusalCode } from "@/lib/lifecycle/reso
 import {
   article,
   checkRelations,
+  dormantCascade,
   type CheckedRelation,
   type RelationGuardCode,
 } from "@/lib/lifecycle/relations";
@@ -102,6 +103,27 @@ export type PublishFieldError = {
   message: string;
 };
 
+/**
+ * A relation this publish **wrote** and did **not** act on — Task 11's dormant cascade.
+ *
+ * Not an error and not a warning that could have been avoided: publishing a proposal that says
+ * what it would retire is the shape a reviewer needs, and `cascadeFor` argues at length why the
+ * relation is written at `PROPOSED` rather than deferred to a second edit at acceptance time.
+ * What was missing was anyone *saying so*. It travels on the **success** result for that reason:
+ * the publish happened, the row exists, and this is an account of what it did rather than a
+ * reason it did not.
+ *
+ * `ref` is the author's own line, so the sentence can quote what they typed rather than the
+ * target's current path — which a move may since have changed.
+ */
+export type DormantCascade = {
+  type: RelationType;
+  /** Verbatim what the author wrote in the frontmatter. */
+  ref: string;
+  /** Where the target would go once this page reaches the status the cascade is gated on. */
+  wouldRetireInto: DocStatus;
+};
+
 export type PublishedPage = {
   id: string;
   path: string;
@@ -110,6 +132,12 @@ export type PublishedPage = {
   status: DocStatus;
   publishedAt: Date;
   versionId: string;
+  /**
+   * Empty on almost every publish, and **always present** — the reason `accessDetail` and
+   * `RelationDiff` give for their own always-present fields: a key that appears on some results
+   * and not others cannot be told from a key somebody forgot to plumb.
+   */
+  dormant: DormantCascade[];
 };
 
 export type PublishResult =
@@ -1167,6 +1195,16 @@ export async function publishPage(
       // and processed asynchronously. Publishing must work without it, which is the property
       // Phase 5 exists to prove rather than assert.
 
+      // What this publish wrote and deliberately did not act on. Derived from the checked
+      // relations by `dormantCascade`, which owns the rule — this loop only carries the answer
+      // out, so the `ACCEPTED` gate stays stated in exactly one place.
+      const dormant: DormantCascade[] = [];
+      for (const relation of checked.relations) {
+        const wouldRetireInto = dormantCascade(relation);
+        if (wouldRetireInto === null) continue;
+        dormant.push({ type: relation.type, ref: relation.ref, wouldRetireInto });
+      }
+
       return {
         ok: true,
         page: {
@@ -1177,6 +1215,7 @@ export async function publishPage(
           status,
           publishedAt,
           versionId: version.id,
+          dormant,
         },
       };
     });
