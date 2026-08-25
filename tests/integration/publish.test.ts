@@ -1575,7 +1575,7 @@ test("a proposed ADR reports the cascade it did not fire, on the success result"
   expect(proposed.dormant).toEqual([
     // The author's own line, not the target's current path: a move can change the second and
     // never the first, and the notice quotes what they typed.
-    { type: "SUPERSEDES", ref: target.path, wouldRetireInto: "SUPERSEDED" },
+    { type: "SUPERSEDES", key: "supersedes", ref: target.path, wouldRetireInto: "SUPERSEDED" },
   ]);
 
   // And the accepting publish has nothing dormant to report, because it fired.

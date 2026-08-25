@@ -11,6 +11,7 @@ import {
   KEY_FOR_RELATION,
   validateFrontmatter,
   type FrontmatterSchemaErrorCode,
+  type RelationKey,
   type ValidatedFrontmatter,
 } from "@/lib/lifecycle/schema";
 import { resolveRelations, type RelationRefusalCode } from "@/lib/lifecycle/resolve";
@@ -118,6 +119,16 @@ export type PublishFieldError = {
  */
 export type DormantCascade = {
   type: RelationType;
+  /**
+   * The frontmatter key that declared it — `supersedes`, `decides`.
+   *
+   * Carried rather than derived by the reader, because `KEY_FOR_RELATION` lives in
+   * `src/lib/lifecycle/schema.ts` beside `zod` and the whole per-doc-type table, and the reader
+   * here is a client component. Re-deriving it there would put a second copy of the one map
+   * that exists to have no second copy — the same argument `article` settled when the cascade
+   * refusal needed a four-character helper.
+   */
+  key: RelationKey;
   /** Verbatim what the author wrote in the frontmatter. */
   ref: string;
   /** Where the target would go once this page reaches the status the cascade is gated on. */
@@ -1202,7 +1213,12 @@ export async function publishPage(
       for (const relation of checked.relations) {
         const wouldRetireInto = dormantCascade(relation);
         if (wouldRetireInto === null) continue;
-        dormant.push({ type: relation.type, ref: relation.ref, wouldRetireInto });
+        dormant.push({
+          type: relation.type,
+          key: KEY_FOR_RELATION[relation.type],
+          ref: relation.ref,
+          wouldRetireInto,
+        });
       }
 
       return {

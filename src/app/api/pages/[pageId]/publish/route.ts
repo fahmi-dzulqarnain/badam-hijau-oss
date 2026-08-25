@@ -60,6 +60,7 @@ export async function POST(
         // one somebody forgot to plumb.
         dormant: result.page.dormant.map((cascade) => ({
           type: cascade.type,
+          key: cascade.key,
           ref: cascade.ref,
           wouldRetireInto: cascade.wouldRetireInto,
         })),
