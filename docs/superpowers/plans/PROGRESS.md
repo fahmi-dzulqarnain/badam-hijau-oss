@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `phase-1-foundations-reader` · **520 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **564 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -20,13 +20,30 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 
 | Task | State |
 |---|---|
-| **1. Schema: relations and frontmatter** | **next** |
-| 2–13 | not started |
+| 1. Schema: relations and frontmatter | ✅ |
+| 2. Frontmatter out of the rendered body | ✅ |
+| **3. Per-doc-type frontmatter schemas** | **next** |
+| 4–13 | not started |
 
-**It starts by fixing a bug it inherits.** The render pipeline turns frontmatter into an `<hr>`
-plus a heading with an id derived from the concatenated keys — which also puts a junk entry in
-the table of contents. Invisible today because nothing writes frontmatter; visible on every ADR
-the moment Phase 3 does. Measured, in the plan.
+**It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
+`<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
+invisible for two phases because nothing wrote frontmatter.
+
+Findings worth carrying from Task 2:
+
+- **Count entries, not keys.** A key cap leaves `related: [0…100000]` open — one key, depth 2,
+  passes both a key cap and a depth cap. Same "count the right unit" lesson as the byte cap.
+- **A cyclic YAML anchor is two lines, parses with no errors, and yields a self-referential
+  object** that makes `JSON.stringify` throw — so it would have reached the `Json` column and
+  turned four words into a 500 on autosave. A naive recursive walk blows the stack first.
+- **An alias bomb only explodes during `toJS()`**, so a post-parse walk never sees a value;
+  `yaml`'s `maxAliasCount` is what catches it.
+- **The stripper and the parser agree by construction, not convention** — one declaration of
+  what frontmatter is, and the split slices on the parsed node's offset. A regex cannot see a
+  fenced code block.
+- **Three shapes go the opposite way from a line scanner's guess**: a code fence opening the
+  document, a leading blank line, and `Title\n---` (a setext h1). Any implementation that
+  `trimStart()`s or skips to the first `---` gets all three wrong.
 
 ## Phase 2 — authoring
 

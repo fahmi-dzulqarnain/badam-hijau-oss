@@ -1902,6 +1902,11 @@ export function wrapTables() {
 
 - [ ] **Step 7: Create `src/lib/markdown/render.ts`**
 
+> **Superseded by Phase 3 Task 2.** The pipeline now carries `remark-frontmatter` between
+> `remarkParse` and `remarkGfm`, which this fence predates — without it, frontmatter renders
+> as an `<hr>` plus a heading whose id lands a junk entry in the table of contents. Read
+> `src/lib/markdown/render.ts` for the current version.
+
 ```ts
 import { unified } from "unified";
 import remarkParse from "remark-parse";

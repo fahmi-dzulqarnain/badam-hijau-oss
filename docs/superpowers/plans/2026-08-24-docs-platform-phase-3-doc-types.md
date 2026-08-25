@@ -132,34 +132,70 @@ precisely so this phase would not face that migration.
 
 ---
 
-## Task 2: Frontmatter out of the rendered body
+## Task 2: Frontmatter out of the rendered body ✅
 
 Fixes the inherited bug. Nothing else in this phase should be built on top of it.
 
 **Files:** `src/lib/markdown/render.ts`, `src/lib/markdown/frontmatter.ts` + tests.
 
-- [ ] **Step 1: Strip frontmatter from the render pipeline**
+- [x] **Step 1: Strip frontmatter from the render pipeline**
 
 `remark-frontmatter` in the pipeline, before `remarkRehype`. Verify against the exact input in
 "A bug this phase inherits" above and assert the `<hr>` and the junk `<h2>` are both gone —
 **and that the table of contents no longer contains an entry for it**, which is the half that
 is easy to miss.
 
-- [ ] **Step 2: Parse it separately, with `yaml`**
+- [x] **Step 2: Parse it separately, with `yaml`**
 
 A pure module: text in, `{ frontmatter, body }` out. It must **not** throw on malformed YAML —
 an author mid-keystroke produces malformed YAML constantly, and autosave runs every two
 seconds. Return a typed failure the editor can show and the publish path can refuse.
 
 Guard the parse: `yaml` will happily construct large or deeply nested structures, and this input
-arrives from an HTTP body. Cap depth and key count, and test the cap.
+arrives from an HTTP body. Cap depth and **entries**, and test the caps.
 
-- [ ] **Step 3: Prove the two halves agree**
+**"Key count" was wrong, and the correction is the useful part.** A key-only cap leaves the
+obvious hole open: `related: [0, 1, … 100000]` has exactly **one** key and a depth of 2, so it
+passes a key cap and a depth cap both. Count mapping keys *and* sequence items at every level —
+the same "count the right unit" lesson as the byte cap, one level up. Shipped as
+`MAX_FRONTMATTER_ENTRIES = 200`, with `MAX_FRONTMATTER_DEPTH = 6` (the deepest shape the spec
+asks for is 3) and `MAX_FRONTMATTER_BYTES = 16_384` in **UTF-8 bytes**, checked before the parse
+so the structure is never built. Without that byte cap, a one-megabyte document could be one
+megabyte of YAML — `MAX_DRAFT_BODY_BYTES` is the only other bound.
 
-The renderer strips exactly what the parser consumes. A property test over a handful of shapes —
-no frontmatter, empty frontmatter, frontmatter-only, `---` inside a fenced code block, `---`
-used as a real thematic break mid-document — is worth more than three examples. The
-code-block case is the one that breaks naive implementations.
+**Two hazards this step did not anticipate, both real and both silent:**
+
+- **Cyclic anchors.** `a: &x\n  b: *x` is two lines, produces no YAML errors at all, and yields
+  a self-referential object. `JSON.stringify` throws on it, so it would have reached the `Json`
+  column and turned four words of bad input into a 500 on autosave — and a naive recursive walk
+  blows the stack before getting there. Detected with an ancestor-path set, reported as
+  `frontmatter-cyclic`.
+- **Alias expansion.** A billion-laughs bomb is tiny on the wire, syntactically clean, and only
+  explodes *during* `toJS()`, so a post-parse walk never sees a value. `yaml`'s `maxAliasCount`
+  throws first.
+
+Also verified and pinned: `yaml` v2 defines a literal `__proto__` key as an **own** property
+rather than assigning it, so `Object.prototype` is not polluted. That is a library behaviour
+being relied on, so it gets a test.
+
+- [x] **Step 3: Prove the two halves agree**
+
+The renderer strips exactly what the parser consumes. **They agree by construction rather than
+by convention**: one declaration of what frontmatter is (`FRONTMATTER_MATTER`), imported by the
+pipeline, and the split locates the block by *parsing* and slicing on the mdast node's
+`position.end.offset`. A regex was never viable — a regex cannot see a fenced code block.
+
+Fifteen shapes are pinned, asserting both the HTML and the headings. Three go the **opposite**
+way from what a line scanner would guess, and those are the valuable ones:
+
+- **A code fence opening the document** — ` ```\n---\na: 1\n---\n``` ` is not frontmatter, so
+  anything that skips to the first `---` line is wrong.
+- **A leading blank line** — `\n---\na: 1\n---` demotes it to a thematic break plus a setext
+  heading. Anything that `trimStart()`s first strips content the renderer keeps.
+- **`Title\n---`** — a setext h1, and the mistake runs the other direction.
+
+CRLF is read directly: YAML 1.2 accepts it, and normalising line endings before parsing would
+desynchronise the offsets the body is sliced on.
 
 ---
 
@@ -182,6 +218,20 @@ and record why.
 
 Reuse the `FieldError` shape from `src/lib/pages/slug.ts`. Publishing must be able to say *which
 key* is wrong, in the editor, against the field.
+
+**Task 2 flagged that `field` alone cannot deliver that promise.** Frontmatter has no per-key
+input — it is prose in one textarea — so `field: "markdown"` can only underline the whole pane.
+This step's error shape needs a `key`, or a line number, alongside `field`.
+
+Two more things Task 2 established that this step should not rediscover:
+
+- **YAML 1.2's core schema admits `.nan` and `.inf`**, and `JSON.stringify` turns both into
+  `null` — so they would land in the `Json` column silently altered. Reject non-finite numbers
+  explicitly rather than inheriting that.
+- **Duplicate keys already fail** in Task 2 as `frontmatter-unparseable` (`yaml` reports "Map
+  keys must be unique"), before any schema sees them. A repeated `supersedes:` is an author who
+  believes both relations exist, so failing is right — but do not write a second duplicate check
+  here expecting to be the one that catches it.
 
 ---
 
