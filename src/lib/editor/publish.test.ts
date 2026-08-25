@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
   dormantNotice,
   frontmatterKeyLine,
+  minimalReplacement,
   placeErrors,
   publishOutcome,
   readFrontmatterStatus,
@@ -188,6 +189,62 @@ test("setting the status twice is the same as setting it once", () => {
   expect(setFrontmatterStatus(once, "CURRENT")).toBe(once);
   // And the second block is never created — the write finds the one it made.
   expect(setFrontmatterStatus(once, "ARCHIVED").split("---").length).toBe(once.split("---").length);
+});
+
+/* --------------------------------------------------------------------- the minimal edit ---- */
+
+/** Applies a replacement the way CodeMirror would, so the property is checked and not assumed. */
+function apply(before: string, edit: ReturnType<typeof minimalReplacement>): string {
+  if (edit === null) return before;
+  return before.slice(0, edit.from) + edit.insert + before.slice(edit.to);
+}
+
+test("the minimal edit reproduces the new document, over every write this module makes", () => {
+  const documents = [
+    ...Object.values(SHAPES),
+    "---\nstatus: PROPOSED\nsystems: [order-hub]\n---\n\n# Topics\n",
+    "---\nstatus:\n---\n\n# Topics\n",
+  ];
+  for (const before of documents) {
+    for (const status of ["ACCEPTED", "PROPOSED", "CURRENT"]) {
+      const after = setFrontmatterStatus(before, status);
+      expect(apply(before, minimalReplacement(before, after))).toBe(after);
+    }
+  }
+});
+
+test("the edit is small: replacing a status touches the value and not the document", () => {
+  // The property the whole function exists for. A `{ from: 0, to: doc.length }` dispatch also
+  // produces the right text and moves the caret to the end of a document somebody is typing in.
+  const before = "---\nstatus: PROPOSED\n---\n\n# Topics\n\nA long body.\n";
+  const edit = minimalReplacement(before, setFrontmatterStatus(before, "ACCEPTED"));
+
+  expect(edit).not.toBeNull();
+  // `PROPOS` → `ACCEPT`, because `ED` is a shared suffix. Minimal really does mean minimal, and
+  // what matters is the bound: the range is inside the status line and touches nothing else.
+  expect(before.slice(edit!.from, edit!.to)).toBe("PROPOS");
+  expect(edit!.insert).toBe("ACCEPT");
+  expect(edit!.from).toBeGreaterThan(before.indexOf("status:"));
+  expect(edit!.to).toBeLessThan(before.indexOf("# Topics"));
+});
+
+test("an unchanged document is no edit at all", () => {
+  expect(minimalReplacement("same", "same")).toBeNull();
+});
+
+test("repetitive text does not produce an overlapping range", () => {
+  // `aaa` → `aaaa`: the prefix and the suffix would each claim the same characters, and an
+  // unclamped version returns `to` before `from`, which CodeMirror throws on.
+  for (const [before, after] of [
+    ["aaa", "aaaa"],
+    ["aaaa", "aaa"],
+    ["", "x"],
+    ["x", ""],
+  ] as const) {
+    const edit = minimalReplacement(before, after);
+    expect(edit!.to).toBeGreaterThanOrEqual(edit!.from);
+    expect(apply(before, edit)).toBe(after);
+  }
 });
 
 /* ------------------------------------------------------------------- placing the errors ---- */

@@ -128,6 +128,42 @@
   opacity: 0.55;
 }
 
+/*
+ * The status picker, between the save indicator and the Publish button — where the decision it
+ * belongs to is taken. `flex: none` so a long status name cannot make it a flex base size and
+ * widen the bar, which is the class of failure this file's other `min-width: 0`s exist for.
+ */
+.ed-pick {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+}
+
+.ed-pick-label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.ed-pick-select {
+  max-width: 22ch;
+  padding: 5px 7px;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.ed-pick-select[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* Its own line, full width, wrapping — every message it carries is a whole sentence. */
 .ed-publish-error {
   margin: 12px 0 0;
@@ -139,6 +175,73 @@
   border-radius: 6px;
   overflow-wrap: anywhere;
 }
+
+.ed-publish-lead {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/*
+ * The refusal list, and the dormant list. One item per thing that needs saying, because the
+ * count is not bounded: an ADR can declare twenty relation targets and a frontmatter block can
+ * be wrong in every key at once. A paragraph that ran them together would stop being readable
+ * at three.
+ *
+ * `overflow-wrap: anywhere` because every message quotes something the author typed — a page
+ * path, a key — and a long unbroken one is exactly the shape that has widened this application's
+ * layout five times.
+ */
+.ed-problems {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.ed-problems li + li { margin-top: 5px; }
+
+/*
+ * The control that makes "against the offending key" real in a surface with one textarea: it
+ * selects the line. Styled as the link it behaves like rather than as a button, so a list of
+ * them does not read as a row of actions.
+ */
+.ed-problem-where {
+  padding: 0;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--accent);
+}
+
+/* The same label where there is no line to go to — a key the document never declared. */
+.ed-problem-plain {
+  color: var(--ink-3);
+  cursor: default;
+  border-bottom: 0;
+}
+
+/*
+ * The dormant-cascade notice. Deliberately NOT the amber of a refusal: the page was published,
+ * and this is an account of what that publish did. Colouring it as a failure would trade one
+ * wrong reading for another.
+ */
+.ed-dormant {
+  margin: 12px 0 0;
+  padding: 11px 13px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.ed-dormant-lead { margin: 0; font-size: 13px; font-weight: 500; }
+.ed-dormant-go { margin: 9px 0 0; font-size: 13px; }
 
 .ed-conflict {
   margin: 16px 0 0;

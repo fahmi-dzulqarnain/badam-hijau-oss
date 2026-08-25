@@ -260,6 +260,48 @@ export function setFrontmatterStatus(markdown: string, status: string): string {
 }
 
 /**
+ * The smallest single-range edit that turns `before` into `after`, or `null` if they are equal.
+ *
+ * The status picker produces a whole new document, and dispatching that as
+ * `{ from: 0, to: doc.length }` would work and would be wrong: CodeMirror maps the cursor, the
+ * selection and the scroll position **through** a change, so replacing everything moves the
+ * caret to the end of a document somebody is in the middle of typing, and puts the entire file
+ * into the undo history as one entry. Replacing only the run that actually differs leaves a
+ * cursor further down the document exactly where it was, and undoes as one small edit.
+ *
+ * Common prefix and common suffix, which is enough because every write this module makes is one
+ * contiguous run — a value replaced, or a line inserted. It is also correct, if not minimal, for
+ * anything else: the range it names always contains every difference.
+ *
+ * The two runs are clamped so they cannot overlap on repetitive text (`aaa` → `aaaa`, where the
+ * prefix and suffix would otherwise each claim the same characters and produce a negative range).
+ */
+export function minimalReplacement(
+  before: string,
+  after: string,
+): { from: number; to: number; insert: string } | null {
+  if (before === after) return null;
+
+  let prefix = 0;
+  const shortest = Math.min(before.length, after.length);
+  while (prefix < shortest && before[prefix] === after[prefix]) prefix += 1;
+
+  let suffix = 0;
+  while (
+    suffix < shortest - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  return {
+    from: prefix,
+    to: before.length - suffix,
+    insert: after.slice(prefix, after.length - suffix),
+  };
+}
+
+/**
  * What the editor does with one publish reply.
  *
  * The same shape as `saveOutcome`: one response in, one thing to render out, so the component

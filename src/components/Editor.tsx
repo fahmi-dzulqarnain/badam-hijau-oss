@@ -9,6 +9,14 @@ import { EditorView } from "@codemirror/view";
 import { createSaveScheduler, type SaveScheduler } from "@/lib/editor/scheduler";
 import { saveOutcome, shouldRetry } from "@/lib/editor/save";
 import {
+  dormantNotice,
+  minimalReplacement,
+  publishOutcome,
+  readFrontmatterStatus,
+  setFrontmatterStatus,
+  type PublishOutcome,
+} from "@/lib/editor/publish";
+import {
   editorReducer,
   initialEditorState,
   saveStatusLabel,
@@ -30,6 +38,25 @@ export type EditorPage = {
   updatedAt: string | null;
   title: string;
   markdown: string;
+  /**
+   * The statuses this page can be published into **from the status it is in now** —
+   * `publishDestinations`, computed on the server from `PUBLISHABLE_INTO`.
+   *
+   * Not the doc type's whole vocabulary, and not a list this component builds. Spec §6.1 owns
+   * the vocabulary and §6.3 says it is never maintained in two places; a menu with its own idea
+   * of the legal statuses would offer an `ACCEPTED` ADR a `PROPOSED` that publish then refuses,
+   * and would hide a legal choice the day a row is widened.
+   */
+  statusOptions: readonly string[];
+  /**
+   * Where a publish lands when the document declares no `status:` —
+   * `defaultPublishStatus(docType, status)`, again from the server.
+   *
+   * The picker shows it as the current selection **without writing it**: a control that edited
+   * the document on mount would mark every page dirty the moment it was opened, and autosave
+   * would write a version of the file nobody typed.
+   */
+  defaultStatus: string;
 };
 
 /**
@@ -72,11 +99,26 @@ export function Editor({ page }: { page: EditorPage }) {
    * different failures with different remedies, and folding them into one indicator would
    * mean a publish refusal wiping out the save state — or, worse, "Saved 14:22" sitting
    * beside a publish that did not happen.
+   *
+   * `outcome` is whatever `publishOutcome` made of the last reply, unchanged — including the
+   * `published` branch, which this surface now sometimes has to *render* rather than navigate
+   * away from. See `publish` below.
    */
-  const [publishing, setPublishing] = useState<{ pending: boolean; error: string | null }>({
-    pending: false,
-    error: null,
-  });
+  const [publishing, setPublishing] = useState<{
+    pending: boolean;
+    outcome: PublishOutcome | null;
+  }>({ pending: false, outcome: null });
+  /**
+   * The `status:` the document declares, as text, or null when it declares none.
+   *
+   * React state and not a read of the view, because it has to drive a `<select>`. Kept in step
+   * by the update listener, which re-reads a **bounded prefix** of the document rather than the
+   * whole of it — the alternative is a full `doc.toString()` per keystroke, and this component's
+   * first rule is that typing costs nothing it does not have to.
+   */
+  const [declaredStatus, setDeclaredStatus] = useState<string | null>(() =>
+    readFrontmatterStatus(page.markdown),
+  );
   const [preview, setPreview] = useState<PreviewState>({
     html: "",
     pending: true,
@@ -343,6 +385,19 @@ export function Editor({ page }: { page: EditorPage }) {
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
             if (!update.docChanged) return;
+            // The status picker's own write lands here too, deliberately: it IS an edit, it has
+            // to be saved like one, and this is what keeps the select in step with a `status:`
+            // the author types by hand.
+            //
+            // A bounded prefix, never `doc.toString()`. `MAX_FRONTMATTER_BYTES` is 16KB, so any
+            // block the publish path will accept is inside this window; a `status:` beyond it
+            // belongs to a document publish refuses anyway, and the cost of being sure would be
+            // copying the whole file on every keystroke.
+            setDeclaredStatus(
+              readFrontmatterStatus(
+                update.state.doc.sliceString(0, Math.min(update.state.doc.length, 20_000)),
+              ),
+            );
             // Our own document replacement is not an edit. See `FromServer`.
             if (update.transactions.some((tr) => tr.annotation(FromServer))) return;
             schedulerRef.current?.edited();
@@ -393,6 +448,21 @@ export function Editor({ page }: { page: EditorPage }) {
 
   const conflict = state.conflict;
   const theirs = conflict?.theirs ?? null;
+
+  /**
+   * What the picker shows: the document's own `status:` when it declares one, and otherwise the
+   * status a publish would land on if nobody chose anything.
+   *
+   * The fallback is **displayed and not written**. Writing it on mount would mark every page
+   * dirty the moment it was opened and autosave a line nobody typed; showing it is honest,
+   * because it is exactly where `defaultPublishStatus` will put the page.
+   */
+  const effectiveStatus = declaredStatus ?? page.defaultStatus;
+
+  const notice =
+    publishing.outcome?.type === "published"
+      ? dormantNotice(publishing.outcome.dormant, publishing.outcome.status)
+      : null;
 
   const loadTheirs = () => {
     const view = viewRef.current;
@@ -464,17 +534,68 @@ export function Editor({ page }: { page: EditorPage }) {
     return false;
   }, []);
 
+  /**
+   * Selects one line of the document and puts the cursor in it — how a refusal that names a
+   * frontmatter key becomes something a person can see.
+   *
+   * This is the plan's question answered as a control rather than as a sentence. Frontmatter has
+   * no per-key input, so an error can only be *placed* against text; a button that scrolls the
+   * offending line into view and selects it is the nearest thing to an underlined field a single
+   * textarea has. `placeErrors` decides which line, from the document as it stands.
+   *
+   * Clamped, because the document may have been edited since the refusal came back — the author
+   * is invited to fix it, after all — and `doc.line()` throws on a line that no longer exists.
+   * A selection change is not a document change, so the update listener ignores it and nothing
+   * is marked dirty.
+   */
+  const goToLine = (line: number) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const target = view.state.doc.line(Math.min(Math.max(line, 1), view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: target.from, head: target.to },
+      scrollIntoView: true,
+    });
+    view.focus();
+  };
+
+  /**
+   * The status picker: it **writes the document's `status:`** rather than sending a status of
+   * its own with the publish request.
+   *
+   * The argument is at `setFrontmatterStatus` and it is short: `publishPage`'s precedence is
+   * `options.status ?? frontmatter.status ?? default`, so a picker with its own value would
+   * outrank the author's own line and could commit a version whose stored frontmatter and whose
+   * page status disagree — the §6.3 divergence the frontmatter wiring exists to close.
+   *
+   * The edit is a **minimal** replacement, not a whole-document dispatch: CodeMirror maps the
+   * cursor, the selection and the scroll position through a change, and replacing everything
+   * would throw the caret to the end of a document somebody is typing in.
+   */
+  const chooseStatus = (next: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const before = view.state.doc.toString();
+    const change = minimalReplacement(before, setFrontmatterStatus(before, next));
+    // Already says exactly this. Nothing to write, nothing to save, nothing to undo.
+    if (change === null) return;
+    // No `FromServer` annotation: this IS an edit, and the update listener has to treat it as
+    // one — autosave it, re-render the preview, and re-read the select's own value from it.
+    view.dispatch({ changes: change });
+  };
+
   const publish = async () => {
     if (publishing.pending) return;
-    setPublishing({ pending: true, error: null });
+    setPublishing({ pending: true, outcome: null });
+
+    const failed = (message: string) =>
+      setPublishing({ pending: false, outcome: { type: "failed", message } });
 
     if (!(await settleSaves())) {
-      setPublishing({
-        pending: false,
-        error:
-          "Not published — your latest changes are not saved yet. Deal with the notice " +
+      failed(
+        "Not published — your latest changes are not saved yet. Deal with the notice " +
           "above first, then publish.",
-      });
+      );
       return;
     }
 
@@ -482,36 +603,38 @@ export function Editor({ page }: { page: EditorPage }) {
     try {
       response = await fetch(`/api/pages/${page.id}/publish`, { method: "POST" });
     } catch {
-      setPublishing({
-        pending: false,
-        error: "Not published — the browser could not reach the server.",
-      });
+      failed("Not published — the browser could not reach the server.");
       return;
     }
 
     const body = await response.json().catch(() => null);
-    if (!response.ok || typeof body?.href !== "string") {
-      setPublishing({
-        pending: false,
-        // The endpoint's own sentence, verbatim. Every refusal `publishPage` produces is
-        // already written for the person who has to act on it — an empty title, an empty
-        // draft, a transition that is not allowed — and re-wording it here would give this
-        // surface a second, worse copy of each one.
-        error:
-          typeof body?.message === "string"
-            ? body.message
-            : `Not published — the server refused it (${response.status}).`,
-      });
-      return;
-    }
+    // The document as the server saw it: `settleSaves` has just confirmed there is nothing
+    // unsent, so what is in the view is what was published — and it is what every refusal is
+    // placed against. Read from the view rather than from React state, as every other read in
+    // this component is.
+    const markdown = viewRef.current?.state.doc.toString() ?? page.markdown;
+    const outcome = publishOutcome({ status: response.status, body, markdown });
+    setPublishing({ pending: false, outcome });
 
-    // The draft row no longer exists. Stop both clocks before navigating: a pending autosave
-    // firing into a deleted draft would 409 with `theirs: null` and raise the "this draft is
-    // gone" banner over a page that is on its way out, which is a true statement and a
-    // baffling one to be shown a moment after a successful publish.
+    if (outcome.type !== "published") return;
+
+    // **A publish with something to say does not navigate.**
+    //
+    // Everything else does, exactly as before: the draft row is gone, both clocks are stopped
+    // so a pending autosave cannot fire into it and raise the "this draft is gone" banner over
+    // a page on its way out, and the reader URL is the endpoint's own `pageHref`.
+    //
+    // A dormant cascade is the exception, because the notice is the entire point of this task
+    // and a message rendered on a component that is being replaced is a message nobody reads.
+    // The clocks are deliberately left running in that branch: `settleSaves` proved there is
+    // nothing pending, so nothing fires on its own, and if the author goes back to typing they
+    // are starting a new revision — for which the vanished-draft banner is the accurate answer
+    // and offers the right action.
+    if (outcome.dormant.length > 0) return;
+
     schedulerRef.current?.stop();
     previewRef.current?.stop();
-    router.push(body.href as Parameters<typeof router.push>[0]);
+    router.push(outcome.href as Parameters<typeof router.push>[0]);
   };
 
   const onTitleChange = (value: string) => {
@@ -539,6 +662,44 @@ export function Editor({ page }: { page: EditorPage }) {
           >
             {saveStatusLabel(state, hydrated ? formatTime : null)}
           </span>
+          {/*
+            The status picker. Its options are `publishDestinations` — the statuses reachable
+            from the one this page is in — computed on the server so this component holds no
+            copy of the vocabulary.
+
+            It is labelled "Publish as" rather than "Status" because that is what it does: it
+            does not change the page's status, it changes the `status:` line the next publish
+            will read. Choosing here and never pressing Publish leaves the page exactly where
+            it was, with a draft that says where it is going.
+          */}
+          <label className="ed-pick" htmlFor="ed-status-pick">
+            <span className="ed-pick-label">Publish as</span>
+            <select
+              id="ed-status-pick"
+              className="ed-pick-select"
+              value={effectiveStatus}
+              disabled={page.statusOptions.length === 0}
+              onChange={(event) => chooseStatus(event.target.value)}
+            >
+              {/*
+                A declared status the vocabulary cannot reach from here — `status: banana`, or a
+                `SUPERSEDED` on a page that has never been accepted — is shown and disabled
+                rather than silently replaced by something else. A control that displays a value
+                other than the text underneath it is the worse failure, and publish refuses this
+                one with a sentence that names the line.
+              */}
+              {page.statusOptions.includes(effectiveStatus) ? null : (
+                <option value={effectiveStatus} disabled>
+                  {effectiveStatus} — not available from {page.status}
+                </option>
+              )}
+              {page.statusOptions.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="button"
             className="ed-publish"
@@ -551,14 +712,82 @@ export function Editor({ page }: { page: EditorPage }) {
       </div>
 
       {/*
-        A publish refusal gets its own alert rather than the save indicator's slot. The two
-        say different things — "your work is not stored" versus "your work is stored and did
-        not go out" — and the second must not overwrite the first.
+        A publish outcome gets its own alert rather than the save indicator's slot. The two say
+        different things — "your work is not stored" versus "your work is stored and did not go
+        out" — and the second must not overwrite the first.
       */}
-      {publishing.error ? (
+      {publishing.outcome?.type === "failed" ? (
         <p className="ed-publish-error" role="alert">
-          {publishing.error}
+          {publishing.outcome.message}
         </p>
+      ) : null}
+
+      {/*
+        Every refusal, each against something the author can see.
+
+        The plan left "which of `error` and `errors` to render, and where" to this task. All of
+        them: they were declared in one pass and fixing them one publish attempt at a time is a
+        bad loop. `placeErrors` decided where each belongs, from the document as it stands — a
+        line in the frontmatter, the title input, or the document as a whole — and the button is
+        what makes "against the offending key" real in a surface with one textarea.
+      */}
+      {publishing.outcome?.type === "refused" ? (
+        <div className="ed-publish-error" role="alert">
+          <p className="ed-publish-lead">
+            Not published. {publishing.outcome.errors.length === 1
+              ? "One thing needs fixing:"
+              : `${publishing.outcome.errors.length} things need fixing:`}
+          </p>
+          <ul className="ed-problems">
+            {publishing.outcome.errors.map((problem, index) => (
+              // Indexed, because the same code can legitimately appear twice — two entries of
+              // one `supersedes:` list, each naming a page that does not exist.
+              <li key={`${problem.code}-${problem.key ?? ""}-${index}`}>
+                {problem.placement.kind === "line" ? (
+                  <button
+                    type="button"
+                    className="ed-problem-where"
+                    onClick={() => goToLine(problem.placement.kind === "line"
+                      ? problem.placement.line
+                      : 1)}
+                  >
+                    line {problem.placement.line} · {problem.placement.key}:
+                  </button>
+                ) : problem.placement.kind === "key" ? (
+                  <span className="ed-problem-where ed-problem-plain">
+                    {problem.placement.key}:
+                  </span>
+                ) : problem.placement.kind === "title" ? (
+                  <span className="ed-problem-where ed-problem-plain">title</span>
+                ) : null}{" "}
+                {problem.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {/*
+        The dormant cascade. A publish that recorded a `supersedes:` and retired nothing is
+        correct and looks exactly like a bug, which is the whole reason this notice exists.
+
+        It is not an error and does not wear the error's colour: the page went out. It is also
+        the one success this surface does not navigate away from — see `publish`.
+      */}
+      {notice ? (
+        <div className="ed-dormant" role="status">
+          <p className="ed-dormant-lead">{notice.lead}</p>
+          <ul className="ed-problems">
+            {notice.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+          <p className="ed-dormant-go">
+            <a href={publishing.outcome?.type === "published" ? publishing.outcome.href : "#"}>
+              Open the published page
+            </a>
+          </p>
+        </div>
       ) : null}
 
       {conflict ? (

@@ -3,6 +3,7 @@ import { requireViewer } from "@/lib/auth/viewer";
 import { getPageForEditing } from "@/lib/pages/editable";
 import { listSpacePages } from "@/lib/pages/repo";
 import { descendantsOf, isInSubtree } from "@/lib/pages/slug";
+import { defaultPublishStatus, publishDestinations } from "@/lib/pages/transition";
 import { Editor } from "@/components/Editor";
 import { PageActions } from "@/components/PageActions";
 
@@ -95,6 +96,14 @@ export default async function EditPage({
           // as one anyway. Null means "no draft row", which routes that save to the create
           // branch instead of conflicting against a row that does not exist.
           updatedAt: page.seen?.toISOString() ?? null,
+          // The status picker's options and its fallback, both derived from `PUBLISHABLE_INTO`
+          // **here** rather than in the client component. Two reasons, and neither is about
+          // bundle size: spec §6.3 says the vocabulary is never maintained in two places, and a
+          // list computed in the browser would be a second place; and the table is keyed by
+          // `DocType` and `DocStatus`, which are real types on this side of the boundary and
+          // plain strings on the other.
+          statusOptions: publishDestinations(page.docType, page.status),
+          defaultStatus: defaultPublishStatus(page.docType, page.status),
         }}
       />
       {/*
