@@ -1,4 +1,4 @@
-import type { DocStatus } from "@prisma/client";
+import type { DocStatus, Prisma, RelationType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
@@ -6,20 +6,61 @@ import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { defaultPublishStatus, validateTransition } from "@/lib/pages/transition";
 import { stripControl } from "@/lib/text/control";
+import { splitFrontmatter, type FrontmatterErrorCode } from "@/lib/markdown/frontmatter";
+import {
+  validateFrontmatter,
+  type FrontmatterSchemaErrorCode,
+  type ValidatedFrontmatter,
+} from "@/lib/lifecycle/schema";
+import { resolveRelations, type RelationRefusalCode } from "@/lib/lifecycle/resolve";
+import {
+  checkRelations,
+  type CheckedRelation,
+  type RelationGuardCode,
+} from "@/lib/lifecycle/relations";
 import type { Viewer } from "@/lib/authz/types";
 
 /** The fields a rejection can be attached to, so the editor renders it in place. */
 export type PublishField = "title" | "markdown" | "status";
 
+/**
+ * Every reason a publish can be refused with a field error.
+ *
+ * The four unions are **imported, not restated**. Frontmatter validation, schema validation,
+ * reference resolution and the relation guardrails each own their own codes and each has its
+ * own module and tests; a copy of those names here would be a second list that agrees on the
+ * day it is written. It also means a caller that switches on a code is switching on the same
+ * value the module that produced it exported — Task 11's editor surface, and Phase 4's search
+ * indexer, both need that.
+ */
 export type PublishErrorCode =
   | "title-empty"
   | "draft-empty"
   | "no-draft"
   | "draft-is-not-a-destination"
-  | "illegal-transition";
+  | "illegal-transition"
+  /** `src/lib/markdown/frontmatter.ts` — the block did not parse, or breached a cap. */
+  | FrontmatterErrorCode
+  /** `src/lib/lifecycle/schema.ts` — it parsed and the doc type does not accept it. */
+  | FrontmatterSchemaErrorCode
+  /** `src/lib/lifecycle/resolve.ts` — a relation names no page this viewer can relate to. */
+  | RelationRefusalCode
+  /** `src/lib/lifecycle/relations.ts` — the relation is legal to write and illegal to mean. */
+  | RelationGuardCode;
 
 export type PublishFieldError = {
   field: PublishField;
+  /**
+   * The frontmatter key at fault, or `null` when the fault is not attributable to one.
+   *
+   * Carried because `field` alone cannot deliver what the plan promised: frontmatter has no
+   * input of its own — it is the first few lines of the one textarea — so `field: "markdown"`
+   * can only underline the whole pane, and "your frontmatter is wrong, somewhere in these six
+   * lines" is not a message anyone can act on. `FrontmatterKeyError` and `RelationRefusal`
+   * both already carry it; dropping it at this boundary would throw away the only thing that
+   * lets Task 11 point at the offending line.
+   */
+  key: string | null;
   code: PublishErrorCode;
   message: string;
 };
@@ -50,14 +91,56 @@ export type PublishResult =
    * space they do not belong to. Safe to be specific: they can already see the page.
    */
   | { ok: false; reason: "forbidden" }
-  /** Something about the draft or the transition. Always attached to a field, never thrown. */
-  | { ok: false; reason: "invalid"; error: PublishFieldError };
+  /**
+   * Something about the draft, its frontmatter, its relations or the transition. Always
+   * attached to a field, never thrown.
+   *
+   * **`error` and `errors` both, and that is Task 7's answer to a question the plan gives to
+   * Task 11.** Three of the four modules this now calls return *every* error rather than the
+   * first — frontmatter is several keys written in one pass, and fixing them one publish
+   * attempt at a time is a bad loop — while this result carried a single `error`. The choices
+   * were: take `errors[0]` and drop the rest, or make the field plural and change every
+   * consumer.
+   *
+   * Neither, because both give something up. `error` stays exactly what it was, so the route,
+   * the editor and every existing test keep working and no surface had to be redesigned by the
+   * task that happens to have plumbed the errors; `errors` carries all of them, non-empty by
+   * construction, with `errors[0] === error` as an invariant a test pins. Nothing is dropped
+   * and nothing is broken, and Task 11's actual decision — which of them the *editor renders*,
+   * and against which line — is untouched and still open.
+   */
+  | {
+      ok: false;
+      reason: "invalid";
+      /** The first of `errors`. Kept for every caller written before frontmatter existed. */
+      error: PublishFieldError;
+      errors: [PublishFieldError, ...PublishFieldError[]];
+    };
 
 const invalid = (error: PublishFieldError): PublishResult => ({
   ok: false,
   reason: "invalid",
   error,
+  errors: [error],
 });
+
+/**
+ * The same refusal from a module that reports all of its errors at once.
+ *
+ * Takes a non-empty tuple rather than an array, so "there is at least one error" is checked by
+ * the compiler at each of the three call sites instead of by a runtime guard that would need a
+ * branch no test could reach. `FrontmatterKeyError`, `RelationRefusal` and `RelationGuardError`
+ * are all structurally `PublishFieldError` already — same four fields, and their code unions are
+ * members of `PublishErrorCode` — so nothing is mapped or rewritten on the way through. The
+ * extra fields the relation errors carry (`type`, `ref`) travel with them harmlessly; they are
+ * exactly what a future surface would want and inventing a narrowing here would discard them.
+ */
+const invalidAll = (
+  all: readonly [PublishFieldError, ...PublishFieldError[]],
+): PublishResult => {
+  const [first, ...rest] = all;
+  return { ok: false, reason: "invalid", error: first, errors: [first, ...rest] };
+};
 
 /**
  * Thrown to abort the transaction when the page stops being publishable *after* the version
@@ -73,11 +156,130 @@ class PageNoLongerPublishable extends Error {}
 type LockedDraft = { title: string; markdown: string };
 
 /**
- * Publishes a page: spec §9 steps 1–3 and 7, all or nothing, in one transaction.
+ * Whatever can write `PageRelation`. Structural and named `tx` for the two reasons
+ * `RelationClient` and `RelationGuardClient` are: the caller passes its **transaction**
+ * client, and the sweep in `src/lib/pages/visible.test.ts` matches `db.`/`tx.` delegate calls,
+ * so a parameter named anything else would hide two writes from it.
+ */
+type RelationWriteClient = Pick<Prisma.TransactionClient, "pageRelation">;
+
+/**
+ * Makes the `PageRelation` rows leaving this page **exactly** the ones the frontmatter
+ * declares — spec §9 step 4.
+ *
+ * ## Removal is half the job, and it is the half that gets forgotten
+ *
+ * An author who deletes `supersedes:` and republishes is saying the relation was wrong.
+ * Leaving the row would make the frontmatter and the database disagree with no way to tell
+ * which is right — and the database is what Task 9's banner reads, so the page would keep
+ * claiming to retire something the document no longer mentions.
+ *
+ * Task 3 made this safe to do unconditionally on purpose: `ValidatedFrontmatter.relations`
+ * always carries all four `RelationType` keys, empty where nothing was declared, so "declared
+ * nothing" and "did not mention the key" are the same value. `undefined` never has to mean
+ * "leave the rows alone", and a doc type that cannot declare `supersedes:` at all removes zero
+ * relations, correctly, without a special case.
+ *
+ * ## Delete-then-insert, not delete-all-then-insert-all
+ *
+ * The `NOT` on the delete is what makes republishing unchanged frontmatter **idempotent
+ * without churn**: a row that is still declared is not touched, so its `createdAt` keeps
+ * saying when the relation was first asserted rather than when it was last republished. Task 9
+ * shows that date on a retired page's banner ("superseded on…"), so re-stamping it on every
+ * typo fix would be a visible lie. Deleting everything and reinserting would pass a row-count
+ * test and fail that one, which is why the test pins the timestamp.
+ *
+ * `skipDuplicates` covers the other side: `@@unique([fromId, toId, type])` makes the insert a
+ * no-op for a row that survived the delete.
+ *
+ * ## Deduplicated here, deliberately not there
+ *
+ * `resolveRelations` returns two entries for two references that resolve to the same page — a
+ * `related:` naming both a page's current path and its pre-move path is the real case — and
+ * says in as many words that collapsing them is the *upsert's* problem. So it is collapsed
+ * here, before the `NOT` list is built, rather than left to `ON CONFLICT`: a duplicate that
+ * reached the delete's `NOT` would be harmless, and one that reached `createMany` would rely on
+ * a Postgres subtlety about speculative insertion within a single statement. One `Map` is
+ * cheaper than that argument.
+ *
+ * ## No permission predicate, and the reason is not the same as the walk's
+ *
+ * Both statements are keyed on `fromId` — the page this publish has already authorised, locked
+ * and is writing a version for. They name no other page's readability: every `toId` came from
+ * `resolveRelations`, whose three queries each carried `readableSpace` and `visiblePage`, so an
+ * unreadable or soft-deleted target never reaches here. Restating that here would be the
+ * `resolveRedirect` mistake — a predicate stated twice is a predicate neither statement can be
+ * tested for.
+ *
+ * The delete deliberately does **not** filter the target either, and that direction matters:
+ * a relation pointing at a page that has since been soft-deleted must still be removable by
+ * an author who drops the key, or the frontmatter could never be brought back into agreement
+ * with the database.
+ *
+ * ## It takes no lock order, which is why Task 8's ordering rule is still Task 8's
+ *
+ * The insert takes a foreign-key `KEY SHARE` lock on each target `Page` row, which conflicts
+ * with `FOR UPDATE` and not with the `FOR NO KEY UPDATE` the page update above takes. So two
+ * publishes declaring relations to each other's pages do not deadlock on these statements —
+ * the hazard the plan flags arrives with Task 8's cascade, which *updates* the target's status
+ * and therefore has to lock by ascending page id.
+ */
+async function replaceRelations(
+  tx: RelationWriteClient,
+  args: { fromId: string; relations: readonly CheckedRelation[] },
+): Promise<void> {
+  const { fromId } = args;
+
+  const byEdge = new Map<string, { toId: string; type: RelationType }>();
+  for (const relation of args.relations) {
+    byEdge.set(`${relation.type} ${relation.page.id}`, {
+      toId: relation.page.id,
+      type: relation.type,
+    });
+  }
+  const declared = [...byEdge.values()];
+
+  // Everything this page declared last time and does not declare now. With nothing declared
+  // there is no `NOT` to write and every row leaving this page goes.
+  await tx.pageRelation.deleteMany({
+    where: declared.length === 0 ? { fromId } : { fromId, NOT: { OR: declared } },
+  });
+
+  if (declared.length === 0) return;
+  await tx.pageRelation.createMany({
+    data: declared.map((edge) => ({ fromId, toId: edge.toId, type: edge.type })),
+    skipDuplicates: true,
+  });
+}
+
+/**
+ * Publishes a page: spec §9 steps 1–4 and 7, all or nothing, in one transaction.
+ *
+ * ## Where the decisions happen, and why not where the plan draws step 4
+ *
+ * Spec §9 lists "upsert declared `PageRelation` rows" as step 4, after the version and the page
+ * update, and the rows are written there. But **resolving and checking** those relations happens
+ * before any row is written, above the version insert, and that is not a liberty — it is the
+ * only shape that can refuse them.
+ *
+ * A refusal inside `db.$transaction` is a `return`, and returning **commits**. So a relation
+ * refused after the version insert, the page update and the draft delete would have to abort by
+ * throwing, and the only way to carry a field error out through a throw is to wrap it in a
+ * sentinel and unwrap it in the catch — a second control path for the case that is *expected*,
+ * not exceptional. Deciding first keeps this module's existing invariant intact instead: every
+ * rejection returns before a single row is written, and `PageNoLongerPublishable` stays the one
+ * mid-write abort there is. `publish.test.ts` asserts the whole snapshot on every refusal path
+ * rather than the message, because a test that only checks the message passes against a
+ * transaction that half-committed.
+ *
+ * The reads still happen **inside** the transaction, on `tx`, and that matters as much: a
+ * reference resolved outside it would be resolved against a different snapshot than the one the
+ * relation row commits into, and the supersede chain would be walked against a graph that could
+ * have changed underneath.
  *
  * ## What this deliberately does not do
  *
- * Spec §9 is eight steps and this implements four of them. The rest belong to later phases
+ * Spec §9 is eight steps and this implements five of them. The rest belong to later phases
  * and are marked `TODO(phase-N)` **at the point in the sequence where they go**, so the
  * order stays discoverable from the code — the way Phase 1 marked its audit wiring point in
  * `repo.ts`. They are not stubbed. An empty function named `applyRelations` that a future
@@ -134,7 +336,12 @@ export async function publishPage(
     /**
      * The status to publish into. Omitted by every caller in Phase 2, which is why
      * `defaultPublishStatus` exists: a first publish enters the doc type's vocabulary and a
-     * republish stays where it is. Phase 3 supplies this from validated frontmatter.
+     * republish stays where it is.
+     *
+     * **Phase 3 fills it from the frontmatter's `status:` when nothing is passed**, which is
+     * what the Phase 2 note here promised, and the precedence is stated where it is applied
+     * below. No product caller passes it: the route reads no body, so this parameter is what a
+     * test, the seed and the e2e helper use to drive a publish by hand.
      */
     status?: DocStatus;
   } = {},
@@ -181,6 +388,7 @@ export async function publishPage(
         // empty version".
         return invalid({
           field: "markdown",
+          key: null,
           code: "no-draft",
           message:
             "There is nothing to publish: this page has no draft. It may have been " +
@@ -195,13 +403,42 @@ export async function publishPage(
       // module's queries are never guarded by call ordering.
       const page = await tx.page.findFirst({
         where: visiblePage({ id: pageId, space: readableSpace(viewer) }),
-        select: { id: true, path: true, docType: true, status: true },
+        // `spaceId` is read here rather than taken from the authorisation read above, for the
+        // same reason `status` is: this query is the one that ran under the lock. Relation
+        // resolution is scoped to it, and no query below trusts the pre-lock snapshot.
+        select: { id: true, path: true, spaceId: true, docType: true, status: true },
       });
       if (!page) return { ok: false, reason: "not-found" };
 
-      // TODO(phase-3): spec §9 step 1 also validates frontmatter against the doc type's
-      // template schema (zod). Phase 3 defines the templates; Phase 2 validates the title,
-      // the emptiness of the body and the status transition it knows about.
+      // Spec §9 step 1, the frontmatter half. Two modules and two different failures.
+      //
+      // The block is found and parsed by the same declaration the renderer strips with, so the
+      // keys validated here are exactly the ones that will not appear in the published body.
+      // A failure here is the document not being *readable* as frontmatter — malformed YAML, a
+      // breached cap, a cyclic anchor — and it has no key to attach to.
+      //
+      // Note which text this reads: `draft.markdown`, taken under the lock. Not
+      // `PageDraft.frontmatter`, which nothing writes — the author's frontmatter is the first
+      // few lines of the one textarea they type in, and a second copy in a column would be a
+      // second source of truth for the same characters.
+      const split = splitFrontmatter(draft.markdown);
+      if (!split.ok) {
+        return invalid({
+          field: split.error.field,
+          key: null,
+          code: split.error.code,
+          message: split.error.message,
+        });
+      }
+
+      // And the half that needs a doc type: which keys this page may declare, and what their
+      // values may be. Every error, not the first — see `PublishResult`'s `errors`.
+      const validated = validateFrontmatter({
+        docType: page.docType,
+        frontmatter: split.frontmatter,
+      });
+      if (!validated.ok) return invalidAll(validated.errors);
+      const frontmatter: ValidatedFrontmatter = validated.frontmatter;
 
       // Stripped BEFORE the emptiness test, exactly as `createPage` does it: a title of
       // nothing but control characters is an empty title, and storing it would give the page
@@ -214,6 +451,7 @@ export async function publishPage(
         // person can fix it in the box it names.
         return invalid({
           field: "title",
+          key: null,
           code: "title-empty",
           message: "Give the page a title before publishing it — it is what readers see " +
             "in the nav rail, the breadcrumbs and search results.",
@@ -232,6 +470,7 @@ export async function publishPage(
       if (draft.markdown.trim().length === 0) {
         return invalid({
           field: "markdown",
+          key: null,
           code: "draft-empty",
           message:
             "There is nothing in this draft to publish. Write something first, or delete " +
@@ -239,14 +478,53 @@ export async function publishPage(
         });
       }
 
-      const requested = options.status ?? defaultPublishStatus(page.docType, page.status);
+      // Spec §9 step 1, the status half — and the frontmatter is now one of its three sources.
+      //
+      // Precedence: an explicit request from the caller, then the `status:` the author
+      // declared, then the doc type's default. The middle term is the new one and it is not
+      // optional politeness: `validateFrontmatter` has just accepted that key, and this row's
+      // `frontmatter` column is about to record it, so ignoring it would publish a version
+      // whose stored frontmatter says `ACCEPTED` over a page whose status says `PROPOSED` —
+      // §6.3's "status is never maintained by hand in two places" broken by the one write that
+      // is supposed to enforce it. It is also what makes a cascade reachable from a document
+      // rather than only from a test's `options.status`.
+      //
+      // Membership and transition are different questions and both are asked. Task 3 checked
+      // that the key names a status this doc type can ever be published into;
+      // `validateTransition` checks whether it may be reached from the status the page is in
+      // now, which is a row and cannot be known without one.
+      const requested =
+        options.status ?? frontmatter.status ?? defaultPublishStatus(page.docType, page.status);
       const transition = validateTransition({
         docType: page.docType,
         from: page.status,
         to: requested,
       });
-      if (!transition.ok) return invalid(transition.error);
+      if (!transition.ok) return invalid({ ...transition.error, key: null });
       const status = transition.status;
+
+      // Spec §9 step 4's *decisions*. Its writes are further down, where the spec puts them;
+      // see the docstring for why the two halves are separated — a relation refused after the
+      // version insert could only abort by throwing.
+      //
+      // `tx`, not `db`: resolved against the snapshot the relation row commits into. The
+      // source is the row read under the lock, and neither call trusts it — every query in
+      // both modules states its own permission predicate against `source.spaceId`.
+      const resolution = await resolveRelations(tx, viewer, {
+        source: { id: page.id, spaceId: page.spaceId, spaceKey },
+        relations: frontmatter.relations,
+      });
+      if (!resolution.ok) return invalidAll(resolution.errors);
+
+      // `status`, not `page.status`: the guardrail's `ACCEPTED` precondition is about the
+      // status this publish is *landing on*. Asking about the current one would fire every
+      // cascade a publish late — the publish that accepts an ADR is exactly the one that must
+      // retire what it supersedes.
+      const checked = await checkRelations(tx, {
+        source: { id: page.id, docType: page.docType, publishingInto: status },
+        relations: resolution.relations,
+      });
+      if (!checked.ok) return invalidAll(checked.errors);
 
       // Everything above this line is a read or a decision, and every rejection above
       // returns before a single row is written. That ordering is the cheap half of
@@ -263,9 +541,15 @@ export async function publishPage(
           // The publisher, not the last person to autosave. It is the byline the reader
           // shows and the authorship the git mirror will commit under.
           authorId: viewer.id,
-          // TODO(phase-3): `frontmatter` is left at its `{}` default until Phase 3 parses
-          // and validates it. Writing the draft's raw frontmatter through unvalidated would
-          // put unchecked data on the row the reader trusts.
+          // What validation **accepted**, never what the author typed — the distinction Task 1
+          // Step 2 asked to be pinned, and `publish.test.ts` pins it by asserting the two are
+          // not the same value. `supersedes: decisions/adr-0031` is one scalar in the draft and
+          // a one-element array here; a key left empty in the template is `null` there and `[]`
+          // here; `relations` carries all four types whether or not the doc type can declare
+          // them. This is the row the reader, Phase 5's git mirror and Phase 6's `PageSystem`
+          // backfill all read, so it holds the normalised value rather than one each of them
+          // would have to re-derive.
+          frontmatter,
         },
         select: { id: true },
       });
@@ -315,12 +599,21 @@ export async function publishPage(
       // told had been saved.
       await tx.pageDraft.delete({ where: { pageId: page.id }, select: { pageId: true } });
 
-      // TODO(phase-3): spec §9 step 4 — upsert the `PageRelation` rows declared in
-      // frontmatter (`supersedes:`, `decides:`), with the guardrails in §6.2.
+      // Spec §9 step 4. Resolved and checked above; this is the write, and it is a *replace*
+      // rather than an upsert — see `replaceRelations` for why removal is half the job.
+      await replaceRelations(tx, { fromId: page.id, relations: checked.relations });
 
       // TODO(phase-3): spec §9 step 5 — apply the lifecycle cascades of §6.3. A published
       // ADR that supersedes another sets that ADR to `SUPERSEDED` in THIS transaction, so
       // the two sides can never disagree.
+      //
+      // The input is already here and computed: every `checked.relations` entry carries
+      // `cascade`, the status Task 8 must set on `relation.page` — non-null only when this
+      // publish is landing on `ACCEPTED` and the relation type cascades at all, so Task 8 needs
+      // one branch rather than three. It is deliberately **not** acted on here: Task 8 owns the
+      // authorization of a write to a page the publisher may not be able to edit, the
+      // `PUBLISHABLE_INTO` check on the cascade's own transition, the ascending-page-id lock
+      // order that write introduces, and the audit row for the other side.
 
       // TODO(phase-4): spec §9 step 6 — refresh the search vector for this page.
 

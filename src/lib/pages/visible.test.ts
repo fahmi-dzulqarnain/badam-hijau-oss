@@ -138,6 +138,24 @@ const MODULES: Record<string, Registration> = {
     //   "a soft delete landing mid-publish rolls the whole transaction back", which stages
     //   the interleaving with a held row lock — a filter on a write is invisible to any test
     //   that cannot arrange for the row to change underneath it.
+    //
+    //   Task 7 added a THIRD and FOURTH query, both writes on `PageRelation` and both keyed
+    //   on `fromId` — the page this publish has already authorised under `visiblePage()` and
+    //   locked. Neither carries a soft-delete filter on the *target*, in either direction, and
+    //   both absences are deliberate and pinned:
+    //     the insert cannot reach a deleted page because every `toId` came from
+    //     `resolveRelations`, whose own queries carry `visiblePage()` and `readableSpace` and
+    //     which is registered separately above. Covered here by "a relation naming a
+    //     soft-deleted page is refused, and the publish writes nothing", which fails if that
+    //     resolution ever stops filtering — a deleted target would become a stored relation
+    //     and Task 8's cascade would go on to set a status on it;
+    //     the delete deliberately does not filter the target, because a relation pointing at a
+    //     page that has since been deleted must still be removable by an author who drops the
+    //     key — otherwise the frontmatter could never be brought back into agreement with the
+    //     database. Covered by "a relation to a page that was deleted afterwards can still be
+    //     removed by republishing without it".
+    //   Restating `visiblePage()` on either write would be the `resolveRedirect` mistake: a
+    //   predicate stated twice is a predicate neither statement can be tested for.
     covered: ["publishPage"],
     exempt: [],
   },

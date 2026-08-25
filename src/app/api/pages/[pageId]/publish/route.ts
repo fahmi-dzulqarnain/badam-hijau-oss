@@ -17,8 +17,9 @@ import { pageHref } from "@/lib/pages/href";
  * hands them a whole Markdown document; publish takes its content from the draft row that is
  * already in the database. There is nothing to size, so there is nothing to guard — and
  * adding the guard anyway would suggest a body exists and can be sent, which is the opposite
- * of true: the status to publish into is derived, not accepted, until Phase 3 supplies it
- * from validated frontmatter.
+ * of true: the status to publish into is derived, never accepted. Phase 3 now takes it from the
+ * `status:` key of the draft's own frontmatter — which is still a row in the database, not a
+ * field of this request.
  */
 export async function POST(
   _request: Request,
@@ -76,13 +77,29 @@ export async function POST(
     // `field` and `code` travel with the sentence so the editor can put the message next to
     // the input it belongs to instead of in a generic banner, and so a future surface can
     // switch on the code without parsing English.
+    //
+    // **`errors` carries all of them and `key` names the frontmatter key at fault**, added by
+    // Phase 3 Task 7 because frontmatter validation returns every error rather than the first:
+    // a page with two mistyped keys should not take two publish attempts to fix. The top-level
+    // `field`/`code`/`message` are `errors[0]` and are unchanged, so the editor keeps rendering
+    // the one sentence it renders today — designing the surface that shows the rest, against
+    // the line each `key` names, is Task 11's. Mapped field by field rather than serialised
+    // whole: a relation refusal carries `type` and `ref` too, and what crosses this boundary
+    // should be stated here rather than inherited from whichever module produced the error.
     case "invalid":
       return NextResponse.json(
         {
           error: "invalid",
           field: result.error.field,
+          key: result.error.key,
           code: result.error.code,
           message: result.error.message,
+          errors: result.errors.map((error) => ({
+            field: error.field,
+            key: error.key,
+            code: error.code,
+            message: error.message,
+          })),
         },
         { status: 422 },
       );
