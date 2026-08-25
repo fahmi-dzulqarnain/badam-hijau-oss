@@ -235,21 +235,33 @@ passthrough would let `systems: {a: {b: 1}}` into the `Json` column for Phase 6 
 **`MAX_RELATION_TARGETS = 20`, because `MAX_FRONTMATTER_ENTRIES` does not bound this.** The
 entry cap cannot tell 200 list items from 200 units of work inside one transaction.
 
-**One third of that reasoning went stale the moment Task 5 shipped, and saying so is better than
+**Two thirds of that reasoning has now gone stale, and correcting it twice is still better than
 leaving a measurement a future reader would trust.** It originally read "each target costs Task 5
-a resolution query" — Task 5 batches, so resolution is **three** queries regardless of how many
-references there are. The cap is still right, and for the surviving reasons: Task 6's cycle walk
-and Task 8's row locks do **not** batch, and both run with a transaction open.
+a resolution query, Task 6 a cycle walk, and Task 8 a row lock". Task 5 batches — resolution is
+**three** queries regardless of reference count. Task 6 batches within a walk (one query per
+level, not per page) **and** shares a single 200-page budget across the whole call, so its
+transaction exposure is independent of the target count too.
+
+The cap now rests on **Task 8's row locks**, which genuinely do not batch. It is still the right
+cap; two of its three original reasons are gone.
 
 **`status` is validated by `publishableStatuses(docType)`, derived from `PUBLISHABLE_INTO`** and
 added to `transition.ts` rather than to this module, because Task 10's status filter needs the
 same list. `DRAFT` falls out for free — it appears in no row's value — so no doc type accepts
 `status: DRAFT` and nothing special-cases it.
 
-**`amends` is ADR-only, and that is the one cell with no derivation behind it.** `AMENDS` fires
-no cascade, so the vocabulary says nothing and Task 6 defines no guardrail. An RFC amending an
-RFC is plausible. Erring strict here is a decision, not an omission: **if Task 6 wants RFC
-`amends`, it needs a guardrail for it in the same change**, not a table entry on its own.
+**`amends` was ADR-only here, and Task 6 accepted the invitation below and widened it.** The
+paragraph as written said it was the one cell with no derivation behind it, and that erring
+strict was a decision rather than an omission. Task 6 pointed out the premise was itself the
+defect: with no guardrail, an ADR could declare `amends: <a runbook>` and **nothing refused it**.
+Writing the guardrail dissolved the argument for keeping the key narrow.
+
+*Which* types get it is now derived rather than chosen: `AMENDS` is for a document that must not
+be rewritten in place, which is exactly a doc type whose vocabulary has a **terminal status** —
+one it can publish into and never out of. ADR and RFC have them; DOC and RUNBOOK have none,
+because `ARCHIVED` publishes back into `CURRENT`, so those are edited and "I amended it" is what
+their version history already says. The test asserts that equivalence against `terminalStatuses`
+rather than against the row, so a vocabulary change moves the key table with it.
 
 - [x] **Step 2: Field-level errors, not exceptions**
 
@@ -370,7 +382,7 @@ the space.
 
 ---
 
-## Task 6: Relation guardrails
+## Task 6: Relation guardrails ✅
 
 **Files:** `src/lib/lifecycle/relations.ts` + tests. Pure where it can be.
 
@@ -386,6 +398,45 @@ happily write as a relation to itself. Task 5 checks the **resolved** page, for 
 types. Record it here as subsumed; do not add a guardrail.
 
 - [x] ~~A page cannot supersede itself~~ — subsumed by Task 5, see above.
+- [x] `SUPERSEDES` same doc type · `AMENDS` same doc type · `DECIDES` `ADR→RFC` ·
+      `RELATES_TO` unconstrained. Each row carries its own sentence, so `SUPERSEDES` and `AMENDS`
+      share a *kind* and no *message* — pinned by a test that they differ.
+- [x] **Cycle detection**, breadth-first over stored `PageRelation` rows from the target back to
+      the publishing page. Complete because every new edge shares one `fromId`: a cycle made
+      only of new edges would need two sources, and one publish has one.
+
+      **Walked only for `SUPERSEDES`, and that is derived rather than listed.** A type can loop
+      only if it may join one doc type — `DECIDES` cannot, so its loop is *unrepresentable*
+      rather than unchecked — and a loop only *matters* if it cascades, which is why two ADRs
+      amending each other are left alone.
+- [x] **A pathologically long acyclic chain refuses as `chain-too-long`, never as a cycle.**
+      `MAX_SUPERSEDE_WALK = 200` counts *pages reached*, so a long chain and a wide fan-out are
+      bounded by one number, and the budget is **shared across the whole call** so 20 declared
+      targets cannot buy 20 walks. Fail-closed: the message says a loop could not be *ruled
+      out*, never that one exists — asserted.
+- [x] The `ACCEPTED` precondition. **The gate is on the destination status, and it gates the
+      cascade rather than the relation.** An ADR's first publish lands at `PROPOSED`, and a
+      proposal saying what it *would* retire is exactly what a reviewer needs; refusing the
+      relation would push `supersedes:` into a second edit at acceptance time, which is §6.3's
+      "never maintained by hand in two places" objection wearing a different hat.
+
+### The chain walk carries no permission predicate — deliberate, and ruled on
+
+It is the only query in this codebase without one, so it needs to be findable. The argument,
+which I accept:
+
+- It returns **no row** to the caller — `select: { toId: true }`, and the function's result is
+  `"ok" | "cycle" | "chain-too-long"`. It names no page.
+- Its only observable is a boolean about the **caller's own** page, whose targets were already
+  resolved by Task 5 through queries that each carried `readableSpace`.
+- Relations cannot cross spaces in Phase 3, so the walk cannot leave a space the viewer has
+  already been permitted to read.
+- Adding one anyway would be defence in depth — and this project has measured what that costs:
+  a predicate stated twice makes neither copy testable.
+
+**The forward note matters more than the decision.** A phase that allows cross-space relations
+must add a **space filter on `from`**, not a viewer — the question there is whether the graph may
+leave the space, not whether this viewer may read it.
 - [ ] `SUPERSEDES` is legal only between two pages of the **same** doc type.
 - [ ] `DECIDES` is legal only from an `ADR` to an `RFC`.
 - [ ] **Cycle detection rejects a supersede chain that loops.** Walk the existing
@@ -429,6 +480,15 @@ Spec §9 step 5 and §6.3. **Re-read "Landmines this phase introduces" before st
 `supersedes: X` → X becomes `SUPERSEDED`. `decides: R` → R becomes `CLOSED`. Same transaction as
 the version write. Validate each target transition through `PUBLISHABLE_INTO`, so a cascade
 cannot set a status the vocabulary forbids.
+
+**Task 6 left this task a decision it must not inherit silently.** `checkRelations` emits
+`cascade: "SUPERSEDED"` for a target ADR sitting at `PROPOSED` — which `PUBLISHABLE_INTO`
+forbids, because an ADR reaches `SUPERSEDED` only from `ACCEPTED`. Task 6 deliberately did not
+resolve it there (stating the rule in both places would make neither testable) and flagged it in
+its docstring. So: **is that a refusal of the whole publish, or a skipped cascade?** Refusing
+tells the author their ADR cannot supersede a proposal that was never accepted; skipping
+silently leaves a declared relation with no consequence. Decide, argue it, and test whichever
+you choose.
 
 - [ ] **Step 2: Decide the authorization**
 
@@ -498,6 +558,10 @@ permission rules as everything else.
 
 - [ ] Publishing into a chosen status, from the legal destinations `PUBLISHABLE_INTO` gives for
       the page's current status — not a free list.
+- [ ] **Tell an author when their cascade is dormant.** Task 6 gates a cascade on publishing into
+      `ACCEPTED`, so an ADR published at `PROPOSED` carries a `supersedes:` that does nothing
+      yet. The flag exists; the sentence does not. Without it, "I said it supersedes ADR-31 and
+      ADR-31 is still current" reads as a bug.
 - [ ] Frontmatter validation errors shown against the offending key. Task 3 returns **all**
       errors, not the first — frontmatter is several keys written in one pass, unlike a slug.
       `PublishResult` currently carries a single `error`, so this step has to choose: take

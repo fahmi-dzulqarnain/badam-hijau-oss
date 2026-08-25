@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **659 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **687 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -25,8 +25,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 3. Per-doc-type frontmatter schemas | ✅ |
 | 4. Templates | ✅ |
 | 5. Resolving a relation reference | ✅ |
-| **6. Relation guardrails** | **next** |
-| 7–13 | not started |
+| 6. Relation guardrails | ✅ |
+| **7. Relations in the publish transaction** | **next** |
+| 8–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -47,6 +48,25 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **A decision outlives its argument only if you let it.** `amends` was ADR-only because "no
+  guardrail exists, so a wider key would be one nothing validates". Writing the guardrail
+  dissolved that premise — and the premise was itself the defect, since an ADR could already
+  declare `amends: <a runbook>` with nothing refusing it. When a task's stated reason is removed,
+  re-derive the conclusion rather than keeping it.
+- **Derive which cases a rule covers, do not list them.** `amends` belongs to doc types with a
+  **terminal status** — one they publish into and never out of. ADR and RFC have them; DOC and
+  RUNBOOK do not, because `ARCHIVED` publishes back into `CURRENT`. The test asserts that
+  equivalence against `terminalStatuses`, so a vocabulary change moves the key table with it.
+  Same shape as walking only `SUPERSEDES` for cycles: `DECIDES` cannot loop because the loop is
+  *unrepresentable*, not because someone remembered to exclude it.
+- **A visited set bounds a walk; it does not detect the loop.** Removing the set while keeping
+  detection failed exactly one test — a **4-page** graph reported as a chain of over 200 pages —
+  and every cycle test still passed. That is the mutation that tells you which mechanism is
+  doing which job.
+- **The one query in this codebase with no permission predicate** is the supersede-chain walk,
+  and it is deliberate: it returns no row, names no page, its only observable is a boolean about
+  the caller's own page, and relations cannot cross spaces in Phase 3. A phase that allows
+  cross-space relations must add a **space filter on `from`**, not a viewer.
 - **A plan can specify the same predicate in two tasks, and that is the untestable-duplicate
   failure arriving by a new route.** Phase 3's plan listed self-reference under both Task 5 and
   Task 6. Implemented twice, mutating away either copy would leave the suite green — the exact
