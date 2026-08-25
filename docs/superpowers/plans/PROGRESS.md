@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **745 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **777 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -29,8 +29,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 7. Frontmatter and relations in publish | ✅ |
 | 8. Cascades | ✅ |
 | 9. Reading relations, and the retired banner | ✅ |
-| **10. Generated indexes** | **next** |
-| 11–13 | not started |
+| 10. Generated indexes | ✅ |
+| **11. The editor's status and frontmatter surface** | **next** |
+| 12–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;

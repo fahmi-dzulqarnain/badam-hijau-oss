@@ -1,4 +1,6 @@
 import { PrismaClient, type DocStatus, type DocType } from "@prisma/client";
+import { defaultPublishStatus, publishableStatuses } from "../src/lib/pages/transition";
+import { article } from "../src/lib/lifecycle/relations";
 
 const db = new PrismaClient();
 
@@ -217,7 +219,33 @@ async function main() {
     const parentId = seed.parent ? idBySlug.get(seed.parent) : undefined;
     const parentPath = seed.parent ? pathBySlug.get(seed.parent) : undefined;
     const path = parentPath ? `${parentPath}/${seed.slug}` : seed.slug;
-    const status = seed.status ?? "CURRENT";
+    // Not `?? "CURRENT"`. That wrote `CURRENT` regardless of doc type or whether the page was
+    // published, which left the seeded ADR `adr-0043` — an unpublished one — sitting at a status
+    // `PUBLISHABLE_INTO.ADR` can reach from nowhere and move to nowhere. Phase 3's ADR index
+    // found it on its first render.
+    //
+    // An unpublished page is `DRAFT`, which is what `createPage` writes. A published one takes
+    // its doc type's first-publish status, which is `CURRENT` for DOC and RUNBOOK — so the other
+    // six seeded pages are unchanged — and `PROPOSED` for an ADR.
+    const status: DocStatus =
+      seed.status ??
+      (seed.published === false ? "DRAFT" : defaultPublishStatus(seed.docType ?? "DOC", "DRAFT"));
+
+    // The seed is a fixture every test and the smoke script build on, so an illegal status here
+    // is a defect that presents itself as a product bug somewhere else entirely. `DRAFT` is
+    // legal for any type as an origin; anything else has to be reachable in that type's own
+    // vocabulary.
+    if (
+      status !== "DRAFT" &&
+      !publishableStatuses(seed.docType ?? "DOC").includes(status)
+    ) {
+      throw new Error(
+        `Seed page ${path} is ${article(seed.docType ?? "DOC")} at ${status}, which that doc ` +
+          `type's ` +
+          `vocabulary cannot reach. Legal: DRAFT, ` +
+          `${publishableStatuses(seed.docType ?? "DOC").join(", ")}.`,
+      );
+    }
 
     const page = await db.page.upsert({
       where: { spaceId_path: { spaceId: engineering.id, path } },

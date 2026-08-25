@@ -2935,6 +2935,13 @@ Merge the `db:seed` entry into the existing `scripts` block rather than replacin
 
 - [ ] **Step 3: Create `prisma/seed.ts`**
 
+> **Superseded snapshot, and deliberately no longer synced.** `prisma/seed.ts` has been
+> changed by four commits across three phases — its own path fix, Phase 2 making it
+> idempotent, the scrub of a real email address, and Phase 3 deriving a page's status from
+> its doc type instead of writing `CURRENT` to everything. It is a fixture whose current
+> state is the only one that matters, so re-syncing this fence on every change is churn.
+> Read `prisma/seed.ts`.
+
 ```ts
 import { PrismaClient, type DocStatus, type DocType } from "@prisma/client";
 

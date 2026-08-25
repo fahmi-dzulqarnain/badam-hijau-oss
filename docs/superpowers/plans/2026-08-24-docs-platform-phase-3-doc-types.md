@@ -691,21 +691,55 @@ Guard it, and inject the hostile case rather than hoping a fixture contains it.
 
 ---
 
-## Task 10: Generated indexes
+## Task 10: Generated indexes ✅
 
 Spec §11: `/[space]/-/adrs`, `/[space]/-/rfcs`, filterable by status.
 
-- [ ] **Step 1: The routes**
+- [x] **Step 1: The routes**
 
 Under the `-/` prefix, which `validateSlug` reserves — the refusal is upstream of create and
 move, so no page can shadow these. `-/deleted` already proves the pattern.
 
-- [ ] **Step 2: Filtering**
+- [x] **Step 2: Filtering**
 
 By status, from the vocabulary rather than a hardcoded list, so a Phase 3 vocabulary change
 cannot leave the filter behind.
 
-- [ ] **Step 3: Empty and unreadable**
+**"From the vocabulary" is satisfiable by the *wrong* vocabulary function, off by exactly one
+status.** `publishableStatuses` returns the union of *destinations* in `PUBLISHABLE_INTO` — what a
+page can be published **into**. `DRAFT` is an origin for every type and a destination for none, so
+it is correctly absent there and required here. Hence
+`statusesInPlay = [UNPUBLISHED, ...publishableStatuses]`, asserted as an equivalence against every
+key *and* value of the table, with the non-vacuity companion Task 9 learned to add.
+
+Worth noting what Task 9's Step 0 did **not** move: each terminal status was already a
+destination of `ACCEPTED` or `IN_REVIEW`, so this union was unchanged. What Step 0 broke was the
+"has no row" reading of *terminality* — a different question over the same table.
+
+**Unpublished pages are listed, inert.** `listSpacePages` has no published filter, so the nav rail
+already shows a `DRAFT` ADR by title to everyone who can read the space: the audience is
+identical, so there is no permission argument for hiding it, and omitting it would make the index
+disagree with the tree beside it — Phase 1's breadcrumb defect. Linking it would 404, so it renders
+as inert text.
+
+**"Renders an explanation, not an empty list" is two branches, not one** — "no ADRs here" and "none
+at this status". Rendering the first when the second is true is a false statement about the space,
+which is why the aggregate histogram exists rather than a bare list.
+
+**Discoverability was not specified, and unspecified meant absent.** The routes are now linked from
+the nav rail, derived from rows the tree was already built from, so there is no extra query. Left
+unlinked they would have been reachable only by typing a URL — exactly the Phase 2 Task 14b defect
+this project already paid for once.
+
+**It also found a defect in the seed.** `prisma/seed.ts` wrote `status ?? "CURRENT"` regardless of
+doc type or published state, so the seeded ADR `adr-0043` — an unpublished one — sat at `CURRENT`,
+a status `PUBLISHABLE_INTO.ADR` can reach from nowhere and move to nowhere, and not the `DRAFT`
+that `createPage` writes. Fixed: an unpublished page is `DRAFT`, a published one takes its doc
+type's first-publish status. **With a guard** that throws at seed time when a page's status is
+outside its doc type's vocabulary, because the seed is the fixture every test and the smoke script
+build on, and an illegal status there presents itself as a product bug somewhere else entirely.
+
+- [x] **Step 3: Empty and unreadable**
 
 A space with no ADRs renders an explanation, not an empty list. The route is subject to the same
 permission rules as everything else.
