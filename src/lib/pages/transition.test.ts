@@ -5,6 +5,7 @@ import {
   TRANSITION_TABLE,
   UNPUBLISHED,
   defaultPublishStatus,
+  publishableStatuses,
   validateTransition,
 } from "@/lib/pages/transition";
 
@@ -117,6 +118,52 @@ test("an RFC's first publish is IN_REVIEW, not the DRAFT its vocabulary starts a
   expect(validateTransition({ docType: "RFC", from: "DRAFT", to: "ACCEPTED" }).ok).toBe(
     false,
   );
+});
+
+test("the derived vocabulary is exactly spec §6.1's, per doc type", () => {
+  // Written out here rather than derived, deliberately: this is the one place the spec's own
+  // table is transcribed, so a change to `PUBLISHABLE_INTO` has to be a change to the spec's
+  // reading too. Everything else — Phase 3's frontmatter schema, Task 10's status filter —
+  // derives from `publishableStatuses` so no third copy can drift.
+  expect(publishableStatuses("ADR")).toEqual([
+    "PROPOSED",
+    "ACCEPTED",
+    "REJECTED",
+    "SUPERSEDED",
+    "DEPRECATED",
+  ]);
+  expect(publishableStatuses("RFC")).toEqual([
+    "IN_REVIEW",
+    "ACCEPTED",
+    "WITHDRAWN",
+    "REJECTED",
+    "CLOSED",
+  ]);
+  for (const docType of ["DOC", "RUNBOOK"] as const) {
+    expect(publishableStatuses(docType)).toEqual(["CURRENT", "NEEDS_REVIEW", "ARCHIVED"]);
+  }
+});
+
+test("the derived vocabulary agrees with validateTransition, and excludes DRAFT", () => {
+  for (const docType of DOC_TYPES) {
+    const vocabulary = publishableStatuses(docType);
+    expect(vocabulary).not.toContain(UNPUBLISHED);
+    expect(vocabulary.length).toBeGreaterThan(0);
+
+    // The property that makes it safe for a caller to treat this as "the legal statuses":
+    // every member is reachable from somewhere, and nothing outside it is reachable at all.
+    for (const status of vocabulary) {
+      const origins = Object.keys(TRANSITION_TABLE[docType]) as DocStatus[];
+      expect(
+        origins.some((from) => validateTransition({ docType, from, to: status }).ok),
+      ).toBe(true);
+    }
+    for (const [from, destinations] of Object.entries(TRANSITION_TABLE[docType])) {
+      for (const to of destinations ?? []) {
+        expect(vocabulary, `${docType} ${from} → ${to}`).toContain(to);
+      }
+    }
+  }
 });
 
 test("every doc type has a vocabulary and a first-publish status", () => {

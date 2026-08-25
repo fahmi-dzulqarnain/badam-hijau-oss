@@ -103,6 +103,35 @@ export function defaultPublishStatus(docType: DocType, from: DocStatus): DocStat
   return from === UNPUBLISHED ? FIRST_PUBLISH[docType] : from;
 }
 
+/**
+ * Every status a page of this type may be **published into**: the union of every destination
+ * in its row, deduped, in the order the table first mentions them — which comes out
+ * lifecycle-ordered, because the table is written in lifecycle order.
+ *
+ * Derived from `PUBLISHABLE_INTO` rather than written out a second time, and that is the whole
+ * point of it existing. Spec §6.3 — *"status is never maintained by hand in two places"* — is
+ * about the data, but the same argument applies to the vocabulary itself: a list of statuses
+ * typed out beside the table is a second source of truth that can disagree with it silently.
+ * Two callers need this list and neither may grow its own copy:
+ *
+ * - **Phase 3 Task 3**, to decide whether a frontmatter `status:` key names something this
+ *   doc type could ever be published into.
+ * - **Phase 3 Task 10**, whose generated ADR and RFC indexes filter by status.
+ *
+ * `DRAFT` is in no row's value, so it appears in no vocabulary — which is exactly right for
+ * this question. Spec §6.1 makes `DRAFT` an origin for every type and a destination for none,
+ * so a page cannot be published *into* it and frontmatter cannot ask for it.
+ */
+export function publishableStatuses(docType: DocType): readonly DocStatus[] {
+  const statuses: DocStatus[] = [];
+  for (const destinations of Object.values(PUBLISHABLE_INTO[docType])) {
+    for (const status of destinations ?? []) {
+      if (!statuses.includes(status)) statuses.push(status);
+    }
+  }
+  return statuses;
+}
+
 export type TransitionErrorCode = "draft-is-not-a-destination" | "illegal-transition";
 
 /** Attached to a field so the caller renders it in place, never thrown. */
