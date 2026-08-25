@@ -225,6 +225,26 @@ const CASCADE_INTO: Record<RelationType, DocStatus | null> = {
 };
 
 /**
+ * The status this relation type retires its target into, or `null` for the two that retire
+ * nothing. The read-side view of `CASCADE_INTO`, exported for Task 9.
+ *
+ * The banner needs it to answer a question no list of relation types would answer correctly:
+ * **which incoming relation explains why this page is retired?** A `SUPERSEDED` page is
+ * explained by an incoming `SUPERSEDES`, a `CLOSED` RFC by an incoming `DECIDES` — and a
+ * `DEPRECATED` ADR by neither, even when a proposal declaring `supersedes:` it exists, because
+ * nothing cascades into `DEPRECATED`. `src/lib/lifecycle/retired.ts` derives that by comparing
+ * this against the page's status rather than by naming the two types, which is the same
+ * derivation `walksTheGraph` makes above and for the same reason: a fifth relation type must
+ * change one table, not find every list that forgot it.
+ *
+ * A function and not the table, so a caller cannot hold a reference to the object every guardrail
+ * in this module reads.
+ */
+export function retiresInto(type: RelationType): DocStatus | null {
+  return CASCADE_INTO[type];
+}
+
+/**
  * Spec §6.3: *"the source page must reach `ACCEPTED` for a cascade to fire, so a draft cannot
  * retire a live decision."*
  */

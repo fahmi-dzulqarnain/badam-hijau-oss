@@ -386,3 +386,106 @@
 }
 
 .rail-admin a:hover { color: var(--accent-ink); background: var(--accent-wash); }
+
+/*
+ * The retired banner and the relation list (Task 9) — spec §6.4 and §6.2.
+ *
+ * Appended here for the reason every block above it was: `doc.css` is imported by the space
+ * layout, and Phase 1 measured what a route importing its own stylesheet does — `.doc` computed
+ * `max-width: none` on a hard load and `820px` on a soft navigation to the same route.
+ *
+ * **The banner does not touch the body.** No selector below reaches into `.body`, and there is no
+ * opacity, no max-height and no colour change on it: §6.4 keeps a retired document fully readable
+ * as history, so the banner is a sibling above it and nothing else.
+ *
+ * `overflow-wrap: anywhere` on `.rel-row` and `.rel-title` is the fifth-shape guard, stated by
+ * name. Both carry `Page.title` — user-typed text, painted OUTSIDE `.body`, which is exactly how
+ * the page title itself got through the `.body` fix and overflowed the reader by 4,321px at
+ * 1280px. `min-width: 0` on the flex row keeps the track honest; the wrap is what keeps the
+ * inline content inside its box, and they are two different jobs.
+ */
+.retired {
+  margin: 0 0 26px;
+  padding: 13px 15px 12px;
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 8px;
+}
+
+.retired-lead {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.retired-none,
+.retired-still {
+  margin: 7px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.rel-list {
+  list-style: none;
+  margin: 9px 0 0;
+  padding: 0;
+}
+
+.rel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 9px;
+  min-width: 0;
+  padding: 3px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.rel-k {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* `flex: 1 1 0` and not `1 1 auto`: an `auto` basis is the content width, which for an
+   unbreakable 300-character title is wider than the row and pushes the page sideways — the
+   lesson `.del-what` above carries, in the same shape. */
+.rel-title {
+  flex: 1 1 0;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* A page with no published version, matching the nav rail's inert drafts: it is named, and it is
+   not offered as a link, because `getPublishedPage` would 404 it for everyone. */
+.rel-inert { font-weight: 400; color: var(--ink-3); }
+
+.rel-when {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.rels {
+  margin: 40px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.rels-head {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}

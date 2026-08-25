@@ -288,6 +288,23 @@ const MODULES: Record<string, Registration> = {
     covered: ["resolveRelations"],
     exempt: [],
   },
+  "src/lib/lifecycle/read.ts": {
+    load: () => import("@/lib/lifecycle/read"),
+    // Soft-delete tests: tests/integration/relations-read.test.ts. Task 9's two reads query
+    // `PageRelation` and reach `Page` only through a relation filter — `to: visiblePage(...)`
+    // and `from: visiblePage(...)` — which is the shape the sweep below cannot see at all and
+    // the fourth reason it was widened. Registered here rather than trusted to the sweep:
+    //   "a relation to a soft-deleted page is not rendered in either direction" covers both
+    //   filters, and it has to name both because they are two separate `visiblePage()` calls on
+    //   two different relation fields — dropping one leaves the other's test green;
+    //   "a relation to a page in a space the viewer cannot read is absent" covers the
+    //   permission predicate, in both directions, and it is why these queries carry NO
+    //   `spaceId` shape constraint: scoping them to the page's own space would make
+    //   `readableSpace` unfalsifiable here, since the viewer can necessarily read the space of
+    //   the page they are reading. See the module docstring.
+    covered: ["getPageRelations"],
+    exempt: [],
+  },
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.

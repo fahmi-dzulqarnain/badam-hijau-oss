@@ -1603,18 +1603,18 @@ test("republishing an ADR whose supersede already fired is not refused, and casc
 });
 
 /**
- * A consequence of the cascade worth pinning rather than discovering: the page it retires can no
- * longer be published at all. `SUPERSEDED` has no row in `PUBLISHABLE_INTO`, so every
- * destination is refused — including itself.
+ * A consequence of the cascade, and the one Task 8 reported rather than resolved: the page it
+ * retires had **no** legal publish destination at all, so §6.4's *"remains editable by editors so
+ * it can be annotated"* was a promise the vocabulary broke — the annotation could be drafted and
+ * never published.
  *
- * This is not a Task 8 rule; it is the transition table, and the cascade is what now routinely
- * puts pages into it. It is pinned here because it is what broke the supersede-cycle test above,
- * and because it sits against spec §6.4's *"remains editable by editors so it can be
- * annotated"* — the annotation can be drafted and cannot be published. Reported with this task
- * rather than resolved: whether a retired document may be republished into its own status is a
- * row in the vocabulary, and the vocabulary is §6.1's.
+ * **Task 9 Step 0 resolves it in the vocabulary, where it belongs**, and this test is the same
+ * scenario asserting the opposite outcome: a terminal status publishes into itself, so the
+ * annotation lands, and it lands *at* `SUPERSEDED` rather than anywhere else. Both directions are
+ * asserted, because a row that let a retired page publish into anything would have made
+ * "terminal" mean nothing at all.
  */
-test("a page retired by a cascade cannot be published forward", async () => {
+test("a page retired by a cascade can be annotated, and stays retired", async () => {
   const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
   const superseded = await otherPage({
     spaceId: space.id,
@@ -1627,20 +1627,40 @@ test("a page retired by a cascade cannot be published forward", async () => {
 
   await declaring(page.id, ["status: ACCEPTED", `supersedes: ${superseded.path}`].join("\n"));
   published(await publishPage(asAisyah, page.id));
+  expect(await statusOf(superseded.id)).toBe("SUPERSEDED");
 
   // Its author annotates it, which §6.4 promises they can.
+  const note = "Superseded by the MQTT contracts ADR. Kept for the argument in section 3.\n";
   const saved = await saveDraft(asAisyah, superseded.id, {
     title: superseded.title,
-    markdown: "Superseded by the MQTT contracts ADR. Kept for the argument in section 3.\n",
+    markdown: note,
     seen: null,
   });
   expect(saved.ok).toBe(true);
 
   const before = await snapshot(superseded.id);
+  const annotated = published(await publishPage(asAisyah, superseded.id));
+
+  // The annotation is a version, and the page did not climb back out of its retirement.
+  expect(annotated.status).toBe("SUPERSEDED");
+  const after = await snapshot(superseded.id);
+  expect(after.page.status).toBe("SUPERSEDED");
+  expect(after.versions).toBe(before.versions + 1);
+  expect(after.draft).toBeNull();
+  expect(after.page.publishedVersionId).not.toBe(before.page.publishedVersionId);
+  const version = await db.pageVersion.findUniqueOrThrow({
+    where: { id: after.page.publishedVersionId ?? "" },
+    select: { markdown: true, status: true },
+  });
+  expect(version).toEqual({ markdown: note, status: "SUPERSEDED" });
+
+  // And the other direction: nothing in Step 0 lets a retired decision be accepted again.
+  await redeclaring(asAisyah, superseded.id, "status: ACCEPTED");
   const error = rejection(await publishPage(asAisyah, superseded.id));
   expect(error.code).toBe("illegal-transition");
   expect(error.message).toContain("SUPERSEDED");
-  expect(await snapshot(superseded.id)).toEqual(before);
+  expect(error.message).toContain("ACCEPTED");
+  expect(await statusOf(superseded.id)).toBe("SUPERSEDED");
 });
 
 /**

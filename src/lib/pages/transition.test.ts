@@ -2,10 +2,13 @@ import { expect, test } from "vitest";
 import type { DocStatus, DocType } from "@prisma/client";
 import {
   FIRST_PUBLISH,
+  RETIRED_STATUSES,
   TRANSITION_TABLE,
   UNPUBLISHED,
   defaultPublishStatus,
+  isRetired,
   publishableStatuses,
+  terminalStatuses,
   validateTransition,
 } from "@/lib/pages/transition";
 
@@ -97,14 +100,95 @@ test("a status outside the doc type's vocabulary is refused, with both states na
   expect(error.message).toContain("ARCHIVED");
 });
 
-test("a terminal status cannot be published forward, and says so", () => {
-  // `SUPERSEDED` is a legal destination for an ADR and is not a key in its row: a superseded
-  // decision stays readable and editable (spec §6.4) but is not published onward.
+/**
+ * Task 9 Step 0. This test replaces one that asserted the *stronger* rule — that a `SUPERSEDED`
+ * ADR could not be published at all — which is what made §6.4's "remains editable so it can be
+ * annotated" a promise the vocabulary broke. Both halves are here, because the whole point is
+ * that only one of the two directions is now legal.
+ */
+test("a terminal status publishes into itself and into nothing else", () => {
+  // Legal: an editor annotating a superseded decision — a note pointing at its replacement —
+  // has somewhere to publish it. Without this row the draft could be typed and never landed.
+  expect(validateTransition({ docType: "ADR", from: "SUPERSEDED", to: "SUPERSEDED" })).toEqual({
+    ok: true,
+    status: "SUPERSEDED",
+  });
+  // Illegal, and this is what keeps "terminal" meaning something: no page climbs back out of a
+  // retirement into being in force again.
   const error = refused(
     validateTransition({ docType: "ADR", from: "SUPERSEDED", to: "ACCEPTED" }),
   );
   expect(error.code).toBe("illegal-transition");
-  expect(error.message).toMatch(/cannot be published into another status/);
+  expect(error.message).toContain("SUPERSEDED");
+  expect(error.message).toContain("ACCEPTED");
+
+  // Every terminal status of every type, so this is a property of the table rather than of the
+  // one row that was easy to write a case for.
+  for (const docType of DOC_TYPES) {
+    for (const from of terminalStatuses(docType)) {
+      expect(validateTransition({ docType, from, to: from }).ok).toBe(true);
+      for (const to of publishableStatuses(docType)) {
+        if (to === from) continue;
+        expect(
+          validateTransition({ docType, from, to }).ok,
+          `${docType}: ${from} → ${to} must stay illegal`,
+        ).toBe(false);
+      }
+    }
+  }
+});
+
+/**
+ * The mutation this pins: adding the self-transition rows *without* re-deriving
+ * `terminalStatuses`. The old derivation was "has no row of its own", and Step 0 gives every
+ * terminal status a row — so the old reading returns nothing for ADR and RFC and
+ * `frontmatterKeys` stops offering `amends` to either.
+ *
+ * Measured: that mutation makes `schema.test.ts`'s equivalence assertion pass **vacuously**,
+ * both sides empty, and is caught only by the non-vacuity line beside it. This test is the one
+ * that names the actual property, so the failure says what broke rather than which key went
+ * missing three modules away.
+ */
+test("terminal statuses survive Step 0's self-transition rows", () => {
+  expect(terminalStatuses("ADR")).toEqual(["REJECTED", "SUPERSEDED", "DEPRECATED"]);
+  expect(terminalStatuses("RFC")).toEqual(["WITHDRAWN", "REJECTED", "CLOSED"]);
+  // Unchanged, and the contrast is the point: `ARCHIVED` publishes back into `CURRENT`, so a
+  // doc and a runbook are living pages with no terminal status at all.
+  expect(terminalStatuses("DOC")).toEqual([]);
+  expect(terminalStatuses("RUNBOOK")).toEqual([]);
+});
+
+/**
+ * Spec §6.4's list, transcribed once — the same treatment `publishableStatuses` gets against
+ * §6.1, and for the same reason: this is the one place the spec's own sentence is written out.
+ */
+test("the retired statuses are exactly spec §6.4's six", () => {
+  expect([...RETIRED_STATUSES].sort()).toEqual(
+    ["ARCHIVED", "CLOSED", "DEPRECATED", "REJECTED", "SUPERSEDED", "WITHDRAWN"].sort(),
+  );
+  for (const status of RETIRED_STATUSES) expect(isRetired(status)).toBe(true);
+  // Not vacuous: the statuses a document is in force in are not retired.
+  for (const status of ["DRAFT", "PROPOSED", "ACCEPTED", "IN_REVIEW", "CURRENT", "NEEDS_REVIEW"] as DocStatus[]) {
+    expect(isRetired(status)).toBe(false);
+  }
+});
+
+/**
+ * The derivable half of the rule above, and the half that would otherwise rot: a vocabulary
+ * change that adds a way to retire a document must not leave the banner behind. `ARCHIVED` is
+ * the one member with no terminal status behind it, which is why the implication runs this way
+ * and not as an equality.
+ */
+test("every terminal status is a retired status", () => {
+  for (const docType of DOC_TYPES) {
+    for (const status of terminalStatuses(docType)) {
+      expect(isRetired(status), `${docType}'s ${status} would get no banner`).toBe(true);
+    }
+  }
+  // And `ARCHIVED` is retired without being terminal, which is what stops this test from being
+  // mistaken for the definition.
+  expect(isRetired("ARCHIVED")).toBe(true);
+  expect(terminalStatuses("DOC")).not.toContain("ARCHIVED");
 });
 
 test("an RFC's first publish is IN_REVIEW, not the DRAFT its vocabulary starts at", () => {

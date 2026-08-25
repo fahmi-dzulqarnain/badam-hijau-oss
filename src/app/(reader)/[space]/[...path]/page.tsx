@@ -7,8 +7,11 @@ import { getPublishedPage, listSpacePages, resolveRedirect } from "@/lib/pages/r
 import { pageHref } from "@/lib/pages/href";
 import { renderMarkdown } from "@/lib/markdown/render";
 import { dateFormat } from "@/lib/format";
+import { getPageRelations } from "@/lib/lifecycle/read";
+import { retirementNotice } from "@/lib/lifecycle/retired";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageInfoCard } from "@/components/PageInfoCard";
+import { RelationList, RetiredBanner } from "@/components/Relations";
 import { Toc } from "@/components/Toc";
 
 export default async function DocPage({
@@ -76,6 +79,18 @@ export default async function DocPage({
    */
   const mayEdit = can(viewer, space, "EDIT");
 
+  /**
+   * Spec §6.2 and §6.4. Both directions of the relation table, each filtered by `visiblePage`
+   * and `readableSpace` on its own query — a relation must not surface a page the viewer cannot
+   * read, and `getPageRelations` states that rather than relying on this route having already
+   * authorised the page it is rendering.
+   *
+   * The inverse read is the one keyed on `toId`, and it runs only for a page whose status some
+   * relation type could have retired it into: a `CURRENT` doc pays for one query here, not two.
+   */
+  const { outgoing, retiredBy } = await getPageRelations(viewer, page);
+  const notice = retirementNotice({ status: page.status, replacements: retiredBy });
+
   // Cache hit: the layout already called this with the same viewer object in this render.
   const rows = await listSpacePages(viewer, space.id);
   const byPath = new Map(rows.map((row) => [row.path, row]));
@@ -133,10 +148,17 @@ export default async function DocPage({
           ) : null}
         </div>
 
+        {/* Above the body and never instead of it: §6.4 keeps a retired document fully
+            readable, so this adds a banner and changes nothing about what follows. */}
+        {notice ? <RetiredBanner notice={notice} /> : null}
+
         {/* `dangerouslySetInnerHTML` is safe here only because `renderMarkdown` sanitises. If
             that pipeline is ever changed to skip `rehype-sanitize`, this becomes stored XSS —
             the test in Task 5 Step 2 is what guards it. */}
         <div className="body" dangerouslySetInnerHTML={{ __html: html }} />
+
+        {/* The stored direction — what this page supersedes, decides, amends or relates to. */}
+        <RelationList relations={outgoing} />
       </main>
 
       <aside className="rail-r" aria-label="Page information">

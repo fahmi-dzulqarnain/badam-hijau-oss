@@ -55,6 +55,38 @@ export const FIRST_PUBLISH: Record<DocType, DocStatus> = {
  * document readable and annotatable) but they are not published *forward* into anything, and
  * an absent key is refused by `validateTransition` with a sentence rather than by an
  * exception.
+ *
+ * ## The terminal statuses have a row of their own, and it lists only themselves
+ *
+ * Phase 3 Task 9 Step 0, and it is a correction rather than an addition. The paragraph above
+ * said a retired page is "still editable" — and Task 8 measured that it was not, in the only
+ * sense that matters: §6.1 gave the terminal statuses **no onward transition at all**, so an
+ * annotation on a `SUPERSEDED` ADR could be drafted and never published, and a draft that
+ * cannot become a version is not an annotation. §6.4 promised the opposite in as many words.
+ * Latent since Phase 2 and routine in Phase 3, because a cascade puts pages into those
+ * statuses without anyone choosing to.
+ *
+ * **Resolved in the spec (§6.4's correction note): a terminal status may publish into itself.**
+ * `SUPERSEDED → SUPERSEDED` is legal; `SUPERSEDED → ACCEPTED` is not. "Terminal" keeps its
+ * meaning — no page climbs back out of a retirement — while an editor can publish a correction
+ * or a pointer to the replacement.
+ *
+ * Two consequences that a self-transition row is easy to add without noticing:
+ *
+ * - **`terminalStatuses` can no longer mean "has no row".** It now means "has no destination
+ *   but itself", which is the property it always intended; see its docstring. Getting that
+ *   wrong empties it for `ADR` and `RFC` and takes the `amends` key table in
+ *   `src/lib/lifecycle/schema.ts` with it — a vocabulary widening quietly narrowing a
+ *   frontmatter schema. **Measured rather than assumed:** with the rows added and the old
+ *   derivation kept, the equivalence test in `schema.test.ts` goes *vacuously* true — both
+ *   sides of it become empty — and what fails is the non-vacuity line beside it, the one
+ *   asserting an RFC may declare `amends`. That line exists for exactly this, and it is the
+ *   reason "assert the equivalence" was not enough on its own.
+ * - **It must not reopen Task 8's no-op skip.** `planCascades` skips a target already at the
+ *   cascade status because that is a no-op and not a transition, which is what lets an ADR that
+ *   has superseded another ever be republished. Now that `SUPERSEDED → SUPERSEDED` validates,
+ *   that skip looks removable and is not: the skip is what keeps the cascade from writing a
+ *   status change and an audit row for a change that did not happen. Its test stays green.
  */
 const PUBLISHABLE_INTO: Record<
   DocType,
@@ -82,12 +114,20 @@ const PUBLISHABLE_INTO: Record<
     DRAFT: ["PROPOSED", "ACCEPTED"],
     PROPOSED: ["PROPOSED", "ACCEPTED", "REJECTED"],
     ACCEPTED: ["ACCEPTED", "SUPERSEDED", "DEPRECATED"],
+    // Terminal, and each publishes into itself and nothing else — §6.4's annotation, above.
+    REJECTED: ["REJECTED"],
+    SUPERSEDED: ["SUPERSEDED"],
+    DEPRECATED: ["DEPRECATED"],
   },
   // Spec §6.1: `DRAFT` → `IN_REVIEW` → `ACCEPTED` → `CLOSED`; or `WITHDRAWN` / `REJECTED`.
   RFC: {
     DRAFT: ["IN_REVIEW"],
     IN_REVIEW: ["IN_REVIEW", "ACCEPTED", "WITHDRAWN", "REJECTED"],
     ACCEPTED: ["ACCEPTED", "CLOSED"],
+    // Terminal, as above.
+    WITHDRAWN: ["WITHDRAWN"],
+    REJECTED: ["REJECTED"],
+    CLOSED: ["CLOSED"],
   },
 };
 
@@ -139,8 +179,16 @@ export function publishableStatuses(docType: DocType): readonly DocStatus[] {
  * Derived from `PUBLISHABLE_INTO`, like `publishableStatuses` and for the same reason: it is a
  * property of the table, and a list typed out beside it is a second source of truth that agrees
  * on the day it is written. A status is terminal when it appears as somebody's destination and
- * has no row of its own — which is exactly how `validateTransition` already treats it, refusing
- * every publish with *"cannot be published into another status"*.
+ * **leads nowhere but back to itself**.
+ *
+ * That last clause is Task 9 Step 0's, and the wording it replaced — "has no row of its own" —
+ * is why this needs saying. Until Step 0 the terminal statuses had no row at all, so the two
+ * readings agreed; Step 0 gives each of them a row listing only itself, and the old reading
+ * would have returned **nothing** for `ADR` and `RFC`. Nothing would have failed: the `amends`
+ * key table in `src/lib/lifecycle/schema.ts` derives from this function, so ADRs and RFCs would
+ * quietly have stopped being allowed to declare `amends:` — a frontmatter key removed by a
+ * vocabulary widening, with the equivalence test still passing because both sides went empty.
+ * The self-transition is not an onward transition, and this is where that has to be stated.
  *
  * It comes out empty for `DOC` and `RUNBOOK` and non-empty for `ADR` and `RFC`, and that split
  * is the answer to a question the vocabulary is otherwise silent on: **which doc types hold
@@ -157,7 +205,57 @@ export function publishableStatuses(docType: DocType): readonly DocStatus[] {
  */
 export function terminalStatuses(docType: DocType): readonly DocStatus[] {
   const row = PUBLISHABLE_INTO[docType];
-  return publishableStatuses(docType).filter((status) => row[status] === undefined);
+  return publishableStatuses(docType).filter((status) => {
+    const onward = row[status];
+    // No row at all, or a row whose only destination is the status itself. Both are "cannot be
+    // published forward"; only the second is reachable after Step 0.
+    return onward === undefined || onward.every((to) => to === status);
+  });
+}
+
+/**
+ * The statuses that make a document **history** — spec §6.4's list, and the input to Task 9's
+ * retired banner.
+ *
+ * *"A page whose status is `SUPERSEDED`, `DEPRECATED`, `CLOSED`, `WITHDRAWN`, `REJECTED` or
+ * `ARCHIVED` renders a banner above the body naming the replacement and the date it stopped
+ * being in force."*
+ *
+ * **Transcribed from the spec rather than derived from the table, and that is a decision with
+ * an argument** — because deriving is this project's default and the derivation does not exist.
+ * Five of these six are exactly `terminalStatuses`. The sixth, `ARCHIVED`, is not terminal: a
+ * `DOC` or a `RUNBOOK` publishes `ARCHIVED → CURRENT` and comes back. So no property of
+ * `PUBLISHABLE_INTO` separates the six from the rest — being **retired** is a question about
+ * whether the document is in force *now*, and being **terminal** is a question about whether it
+ * can ever be in force again. §6.4 asks the first and the table only answers the second.
+ *
+ * The derivation that nearly worked is worth recording, because it looks right: "a status whose
+ * every destination sits at or before it in `publishableStatuses`" yields precisely these six.
+ * It was rejected because it makes the *order of the rows* load-bearing — `publishableStatuses`
+ * is lifecycle-ordered by convention, as its docstring says, and a future editor reordering a
+ * row for readability would silently change which pages get a banner. A transcription that a
+ * test binds to the spec's own sentence fails loudly instead.
+ *
+ * Two tests hold it in place (`transition.test.ts`): one transcribes §6.4's six names, and one
+ * asserts that **every** terminal status of every doc type is in here — so a vocabulary change
+ * that adds a way to retire a document cannot leave the banner behind. That second test is the
+ * derivable half, and it is the half that would otherwise rot.
+ *
+ * A `Set` rather than an array: every caller asks "is this one of them", and an array invites a
+ * second membership helper beside it.
+ */
+export const RETIRED_STATUSES: ReadonlySet<DocStatus> = new Set<DocStatus>([
+  "SUPERSEDED",
+  "DEPRECATED",
+  "CLOSED",
+  "WITHDRAWN",
+  "REJECTED",
+  "ARCHIVED",
+]);
+
+/** Whether this page is history — spec §6.4. Pure, and the banner's only gate. */
+export function isRetired(status: DocStatus): boolean {
+  return RETIRED_STATUSES.has(status);
 }
 
 export type TransitionErrorCode = "draft-is-not-a-destination" | "illegal-transition";
