@@ -173,6 +173,34 @@ export function publishableStatuses(docType: DocType): readonly DocStatus[] {
 }
 
 /**
+ * The statuses a publish may move **this** page into, given the status it is in now — one row
+ * of `PUBLISHABLE_INTO`, read rather than re-derived.
+ *
+ * `publishableStatuses` answers a different question and the two must not be confused. That one
+ * is the whole vocabulary — every status the type can *ever* be published into — and it is what
+ * Task 3 validates a frontmatter `status:` key against, because membership is knowable without a
+ * row. This one is the *reachable* set, which needs the page's current status, and it is what
+ * Phase 3 Task 11's status picker offers: an editor looking at an `ACCEPTED` ADR is offered
+ * `ACCEPTED`, `SUPERSEDED` and `DEPRECATED`, and is never offered `PROPOSED` — a menu entry that
+ * exists only to be refused is worse than no menu.
+ *
+ * Derived, and that is the point of it existing at all. A picker with its own list of statuses
+ * would be exactly the second source of truth §6.3 forbids, and it would fail silently in the
+ * direction nobody notices: a vocabulary row narrowed here and not there leaves an option that
+ * looks legal and is refused, and a row widened here and not there hides a legal choice
+ * altogether.
+ *
+ * A page at a status with no row — which no vocabulary produces today — gets an empty list
+ * rather than a throw, which is the same answer `validateTransition` gives it.
+ */
+export function publishDestinations(
+  docType: DocType,
+  from: DocStatus,
+): readonly DocStatus[] {
+  return PUBLISHABLE_INTO[docType][from] ?? [];
+}
+
+/**
  * The statuses a page of this type can be published **into** and never **out of** — the
  * absorbing states of its vocabulary.
  *

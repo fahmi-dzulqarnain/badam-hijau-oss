@@ -7,6 +7,7 @@ import {
   UNPUBLISHED,
   defaultPublishStatus,
   isRetired,
+  publishDestinations,
   publishableStatuses,
   terminalStatuses,
   validateTransition,
@@ -248,6 +249,59 @@ test("the derived vocabulary agrees with validateTransition, and excludes DRAFT"
       }
     }
   }
+});
+
+/**
+ * Task 11's status picker offers `publishDestinations`, so the property that matters is that the
+ * menu and the refusal cannot disagree: **every** offered status publishes, and every status the
+ * table does not offer is refused.
+ *
+ * Asserted over the whole table rather than over the ADR row someone thought to check, and in
+ * both directions. Kills a picker fed `publishableStatuses` — the whole vocabulary — which offers
+ * an `ACCEPTED` ADR a `PROPOSED` it will be refused for; kills one that returns the enum; and
+ * kills one that drops the self-transition, which is the common case of republishing a typo fix.
+ */
+test("every status the picker offers is publishable, and every one it withholds is refused", () => {
+  for (const docType of DOC_TYPES) {
+    const everyStatus = publishableStatuses(docType);
+    for (const from of Object.keys(TRANSITION_TABLE[docType]) as DocStatus[]) {
+      const offered = publishDestinations(docType, from);
+
+      for (const to of offered) {
+        expect(validateTransition({ docType, from, to }), `${docType} ${from} → ${to}`).toEqual({
+          ok: true,
+          status: to,
+        });
+      }
+      for (const to of everyStatus) {
+        if (offered.includes(to)) continue;
+        expect(
+          validateTransition({ docType, from, to }).ok,
+          `${docType} ${from} → ${to} is offered and refused`,
+        ).toBe(false);
+      }
+
+      // Non-vacuity, the companion this project has learned to write beside every "for every
+      // member" assertion: a `publishDestinations` returning `[]` satisfies both loops above.
+      // Every publishable origin can at least republish itself.
+      if (from !== UNPUBLISHED) expect(offered).toContain(from);
+      expect(offered.length).toBeGreaterThan(0);
+    }
+  }
+});
+
+test("the picker never offers DRAFT, from any status of any doc type", () => {
+  for (const docType of DOC_TYPES) {
+    for (const from of Object.keys(TRANSITION_TABLE[docType]) as DocStatus[]) {
+      expect(publishDestinations(docType, from)).not.toContain(UNPUBLISHED);
+    }
+  }
+});
+
+test("a status with no row is an empty menu, not a throw", () => {
+  // `DOC` has no `PROPOSED` row. A cascade cannot produce that combination today, but a picker
+  // that threw here would take the whole editor down rather than offering nothing.
+  expect(publishDestinations("DOC", "PROPOSED")).toEqual([]);
 });
 
 test("every doc type has a vocabulary and a first-publish status", () => {
