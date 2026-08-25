@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **687 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **705 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -26,8 +26,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 4. Templates | ✅ |
 | 5. Resolving a relation reference | ✅ |
 | 6. Relation guardrails | ✅ |
-| **7. Relations in the publish transaction** | **next** |
-| 8–13 | not started |
+| 7. Frontmatter and relations in publish | ✅ |
+| **8. Cascades** | **next** |
+| 9–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -155,6 +156,18 @@ Findings already worth carrying:
   because a Phase 1 whole-file fence quotes it. The agent duplicated it and escalated, which
   was right. Resolved by extracting to `src/lib/text/control.ts` and annotating the Phase 1
   fence as superseded. **Escalate a rule conflict; do not pick a side quietly.**
+
+## A tooling trap that invalidates verification
+
+**`grep` in this environment is a shell function from a Claude Code shell snapshot, and it
+silently returns nothing for patterns that plainly match.** Measured: `grep -c publishPage
+src/lib/pages/publish.ts` exits 1 and prints nothing, while `rg` finds 11 hits for
+`cascade|TODO` in the same file and Python counts 7 `cascade` and 5 `TODO(phase-N)`.
+
+It fails *silently and selectively* — most greps in this project worked, which is what makes it
+dangerous. **Any conclusion drawn from grep finding nothing is worthless**, and "I grepped and
+the code is absent" has been stated in this project on that basis. Use `rg`, or read the file
+with Python, for anything load-bearing — especially a claim that something is *not* there.
 
 ## Phase 1 — foundations and reader
 

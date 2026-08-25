@@ -453,18 +453,61 @@ leave the space, not whether this viewer may read it.
 
 ---
 
-## Task 7: Relations in the publish transaction
+## Task 7: Relations in the publish transaction ✅
 
 Spec §9 step 4. `src/lib/pages/publish.ts` already carries `TODO(phase-3)` at the exact point.
 
-- [ ] **Step 1: Upsert the declared relations**
+**This task's real scope is §9 steps 1 *and* 4.** Relations come from validated frontmatter, so
+three of `publish.ts`'s four `TODO(phase-3)` markers belong here: validate the frontmatter, store
+the **validated** value on the version instead of its `{}` default, and upsert the relations.
+Only the cascade marker is Task 8's.
+
+- [x] **Step 1: Upsert the declared relations**
 
 Inside the existing transaction. Relations the frontmatter no longer declares must be
 **removed** — an author who deletes `supersedes:` and republishes is saying the relation is
 wrong, and leaving it would make the frontmatter and the database disagree with no way to tell
-which is right.
+which is right. Shipped as `deleteMany({ fromId, NOT: { OR: declared } })` then
+`createMany({ skipDuplicates })`: the `NOT` is also what leaves an unchanged row's `createdAt`
+alone.
 
-- [ ] **Step 2: Tests**
+**Resolution and the guardrails run before any row is written, not at step 4's place in the
+spec's sequence, and that is forced rather than preferred.** A refusal inside `$transaction` is a
+`return` — and **returning commits**. Deciding after the version insert could only abort by
+throwing a field error through a sentinel. The reads still happen on `tx`, so a reference
+resolves against the same snapshot the relation row commits into.
+
+**The frontmatter's `status:` is wired into the transition**, which this plan did not explicitly
+assign. Spec §9 step 1 is "validate frontmatter **and status transition**", and `publish.ts`
+already carried a comment promising Phase 3 would supply it. Without it the transaction would
+write a version whose stored frontmatter said `ACCEPTED` over a page whose status said
+`PROPOSED` — §6.3's "never maintained by hand in two places", broken by the single write that
+exists to enforce it. Precedence is `options.status ?? frontmatter.status ??
+defaultPublishStatus(...)`, pinned by a test.
+
+**The plural-error question is answered without taking Task 11's decision.** The invalid branch
+carries **both** `error` (the first, unchanged, so no consumer breaks) and `errors` (all of them,
+with `errors[0] === error` pinned). Task 11 still chooses *which* to render and where.
+
+**Three findings for later tasks, reported rather than quietly absorbed:**
+
+- **`PageDraft.frontmatter` is an unused column** — nothing writes it and nothing reads it. Task 1
+  Step 2 reads as though it should be populated; it should not be. The author's frontmatter *is*
+  the first few lines of the one textarea they type in, so a copy in a column would be a second
+  source of truth for the same characters, which autosave would have to keep in step while the
+  YAML is mid-keystroke and unparseable. **Recorded as deliberately unused**, not a gap. Phase 5
+  may want it for the git mirror; until then it stays at its `{}` default.
+- **A document that is *only* frontmatter now publishes with an empty body.** `draft-empty`
+  measures the whole markdown, so `---\nstatus:\n---` is "not empty". Before Task 2 that block
+  rendered as visible garbage; now it renders as nothing, so the reader gets a title and a blank
+  page. The fix is to test `split.body` — but that changes a Phase 2 rule with its own message and
+  test. **Assigned to Task 11**, which owns the publish surface.
+- **A removed relation leaves no audit trace.** Not lost — every publish's
+  `PageVersion.frontmatter` records what was declared at that publish, so the history is
+  reconstructible from the version chain. **Task 8 should decide deliberately**, since it is
+  already adding audit rows for the cascade side.
+
+- [x] **Step 2: Tests**
 
 Including: republishing with a relation removed deletes the row; republishing unchanged is
 idempotent and does not churn `createdAt`.
@@ -495,7 +538,17 @@ you choose.
 The publisher is changing another page's status. Does that require `EDIT` on the target's space?
 Argue it. Whatever the answer, the failure mode must not reveal that an unreadable page exists.
 
+- [ ] **Decide whether a removed relation is audited.** Task 7 leaves no trace when a relation
+      row is deleted. It is reconstructible from the version chain's stored frontmatter, so this
+      is a judgement about whether the audit log should stand alone. You are already adding audit
+      rows for the cascade side.
+
 - [ ] **Step 3: Lock in a deterministic order**
+
+Task 7 confirmed the hazard is **yours alone**: its relation insert takes only a foreign-key
+`KEY SHARE` lock on the target `Page` rows, which does not conflict with the `FOR NO KEY UPDATE`
+the page update takes — so two publishes declaring relations to each other's pages do not
+deadlock. The hazard arrives with the cascade, because it *updates* the target's status.
 
 Ascending page id, including the publishing page's own row. Two ADRs superseding each other
 concurrently is the case; a staged test that holds one lock and proves the second blocks is the
@@ -558,6 +611,11 @@ permission rules as everything else.
 
 - [ ] Publishing into a chosen status, from the legal destinations `PUBLISHABLE_INTO` gives for
       the page's current status — not a free list.
+- [ ] **Refuse, or warn about, a document that is only frontmatter.** Task 7 found that
+      `draft-empty` measures the whole markdown, so `---\nstatus:\n---` publishes and the reader
+      gets a title over a blank page. Before Task 2 it rendered as visible garbage; now it
+      renders as nothing. Testing `split.body` is the one-line fix, but it changes a Phase 2 rule
+      that has its own message and test.
 - [ ] **Tell an author when their cascade is dormant.** Task 6 gates a cascade on publishing into
       `ACCEPTED`, so an ADR published at `PROPOSED` carries a `supersedes:` that does nothing
       yet. The flag exists; the sentence does not. Without it, "I said it supersedes ADR-31 and
