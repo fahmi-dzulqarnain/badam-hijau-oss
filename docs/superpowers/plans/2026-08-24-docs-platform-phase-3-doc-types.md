@@ -800,22 +800,49 @@ permission rules as everything else.
       line, an opening code fence, `Title\n---` — all answer `null` rather than pointing at prose.
       Every uncertain case answers `null`, so a message loses its line rather than pointing at the
       wrong one.
-- [ ] Autosave must **not** start failing because frontmatter is momentarily malformed. Phase 2
-      settled this shape for the title: a draft accepts what publish refuses.
+- [x] Autosave must **not** start failing because frontmatter is momentarily malformed. Phase 2
+      settled this shape for the title: a draft accepts what publish refuses. Pinned by an
+      integration test that saves six half-typed documents — unclosed bracket, unterminated
+      quote, `supersed:`, `status: banana`, a missing target, frontmatter-only — through the real
+      `saveDraft`, and asserts each saves *and* each is refused by publish with a byte-identical
+      snapshot.
 
 ---
 
-## Task 12: End-to-end
+## Task 12: End-to-end ✅
 
-- [ ] Create an ADR from the template, publish it, read it.
-- [ ] A second ADR supersedes the first; the first shows the banner naming the second, and stays
+- [x] Create an ADR from the template, publish it, read it.
+- [x] A second ADR supersedes the first; the first shows the banner naming the second, and stays
       readable.
-- [ ] An ADR decides an RFC; the RFC closes.
-- [ ] The generated index lists them and filters by status.
-- [ ] A cycle is refused with a message.
-- [ ] **Inject hostile content** into the banner and the index — the guard that has caught five
+- [x] An ADR decides an RFC; the RFC closes. **This bullet understates the flow by one publish**:
+      `IN_REVIEW → CLOSED` is not in the vocabulary, so the RFC must reach `ACCEPTED` first or the
+      cascade's own transition check refuses. Not wrong about the outcome — but read literally it
+      describes a sequence the vocabulary does not allow, and that is the landmine holding rather
+      than a defect.
+- [x] The generated index lists them and filters by status.
+- [x] A cycle is refused with a message.
+- [x] **Inject hostile content** into the banner and the index — the guard that has caught five
       shapes only catches what it is shown.
-- [ ] Clean up: the suite asserts the dev database counts are unchanged.
+- [x] Clean up: the suite asserts the dev database counts are unchanged — and
+      `playwright.config.ts` gained `workers: 1`, because Playwright parallelises across *files*
+      while `sweep()` deletes every `e2e-` page and every audit row created since the worker
+      started. Two sweeping spec files would delete each other's fixtures mid-test, and
+      `snapshotCounts` is a whole-database count that a second worker writing anything would fail.
+
+**A test defect the mutation testing found — the suite's own, not the product's.** The first
+cycle test was refused *either way*: with the cycle guard disabled the publish still failed, on
+`cascade-illegal-transition`, because the accepting publish would have cascaded at a `PROPOSED`
+page that cannot reach `SUPERSEDED`. **A refusal that survives deleting the guard it is about is
+a test of the other guard.** Restructured so both pages are `ACCEPTED` first and the offending
+publish is `SUPERSEDED → SUPERSEDED` — legal since Task 9's Step 0, and gated out of cascading —
+leaving the walk as the only thing that can refuse.
+
+**Two frictions named rather than filed as bugs.** A freshly published RFC cannot be closed by a
+decision without first being accepted, so the flow is three publishes rather than two. And after
+a publish carrying a dormant-cascade notice the editor deliberately stays put while its draft row
+is gone, so resuming typing raises the vanished-draft banner — which the code argues is the
+accurate answer for a new revision, and which meant the test leaves and re-enters through the
+reader, exactly as a person would.
 
 ---
 

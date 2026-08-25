@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **827 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **827 vitest + 27 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -31,8 +31,8 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 9. Reading relations, and the retired banner | ✅ |
 | 10. Generated indexes | ✅ |
 | 11. The editor's status and frontmatter surface | ✅ |
-| **12. End-to-end** | **next** |
-| 13. Extend the smoke test | not started |
+| 12. End-to-end | ✅ |
+| **13. Extend the smoke test** | **next — last task in the phase** |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -53,6 +53,14 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **A refusal that survives deleting the guard it is about is a test of the other guard.** Task
+  12's first cycle test passed with cycle detection disabled, because the same publish was also
+  refused by the cascade's transition check. Mutation testing is what exposed it — the test was
+  green either way. When a test asserts a refusal, delete the guard it names and confirm the
+  refusal *changes*.
+- **Playwright parallelises across files, and a sweeping fixture cannot survive that.** `workers:
+  1`, because `sweep()` deletes every `e2e-` page and every audit row created since the worker
+  started, and `snapshotCounts` is a whole-database count.
 - **Correcting a plan is not correcting the code comment that says the same thing.**
   `MAX_RELATION_TARGETS`'s reasoning was corrected twice in the phase plan and once here as tasks
   measured it wrong — and the docstring in `schema.ts` went on stating the original for three more

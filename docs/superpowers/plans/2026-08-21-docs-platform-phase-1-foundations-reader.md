@@ -5679,6 +5679,12 @@ One addition beyond the original: `webServer.timeout`. The command builds before
 and a cold Next build here exceeds Playwright's 60s default, which fails the whole run
 before a single test starts.
 
+> **Superseded by Phase 3 Task 12**, which added `workers: 1`. Playwright parallelises across
+> *files*, and `e2e/support.ts`'s `sweep()` deletes every `e2e-` page plus every audit and
+> redirect row created since the worker started — so two sweeping spec files would delete
+> each other's fixtures mid-test, and `snapshotCounts` is a whole-database count that a
+> second worker writing anything would fail. Read `playwright.config.ts`.
+
 ```ts
 import { defineConfig } from "@playwright/test";
 
