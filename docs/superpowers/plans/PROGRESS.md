@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **705 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **719 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -27,8 +27,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 5. Resolving a relation reference | ✅ |
 | 6. Relation guardrails | ✅ |
 | 7. Frontmatter and relations in publish | ✅ |
-| **8. Cascades** | **next** |
-| 9–13 | not started |
+| 8. Cascades | ✅ |
+| **9. Reading relations, and the retired banner** | **next** |
+| 10–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -49,6 +50,12 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **The soft-delete sweep has now been too narrow six times.** The latest: it matches Prisma
+  *delegate* calls, and `$queryRaw`/`$executeRaw` name no delegate — so raw SQL was invisible.
+  Four modules were registered only *by accident*, because each happens to also make a delegate
+  call. Widened, with a companion test proving the new pattern matches something real — which
+  earned its keep immediately: the first version of that widening required a `(` and so matched
+  no tagged template at all.
 - **A decision outlives its argument only if you let it.** `amends` was ADR-only because "no
   guardrail exists, so a wider key would be one nothing validates". Writing the guardrail
   dissolved that premise — and the premise was itself the defect, since an ADR could already
@@ -168,6 +175,15 @@ It fails *silently and selectively* — most greps in this project worked, which
 dangerous. **Any conclusion drawn from grep finding nothing is worthless**, and "I grepped and
 the code is absent" has been stated in this project on that basis. Use `rg`, or read the file
 with Python, for anything load-bearing — especially a claim that something is *not* there.
+
+**And `rg` has its own version of the same failure.** `src/lib/pages/publish.ts` contained a
+literal NUL byte — a map key written as an actual `\0` rather than an escape — which made `rg`
+classify the whole module as **binary and skip it silently**. Found while editing that very file.
+Fixed to `\u0000`, and it is the same lesson the control-character tests already carry: **write
+control characters as escapes, never as literals.** A literal NUL is invisible in a diff and
+turns one file into a blind spot for the tool you switched to in order to be safe.
+
+When a search must be trustworthy, read the file with Python and count.
 
 ## Phase 1 — foundations and reader
 

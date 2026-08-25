@@ -514,15 +514,57 @@ idempotent and does not churn `createdAt`.
 
 ---
 
-## Task 8: Cascades
+## Task 8: Cascades ✅
 
 Spec §9 step 5 and §6.3. **Re-read "Landmines this phase introduces" before starting.**
 
-- [ ] **Step 1: The two cascades**
+- [x] **Step 1: The two cascades**
 
 `supersedes: X` → X becomes `SUPERSEDED`. `decides: R` → R becomes `CLOSED`. Same transaction as
 the version write. Validate each target transition through `PUBLISHABLE_INTO`, so a cascade
 cannot set a status the vocabulary forbids.
+
+**Decided: a cascade the target's vocabulary forbids refuses the whole publish**
+(`cascade-illegal-transition`). Skipping would write a `SUPERSEDES` row from an `ACCEPTED` ADR
+over a target that was never retired — the exact divergence §6.3 exists to prevent, and Task 9
+derives the relation from the row while the banner comes from the status, so a reader would see a
+page that both is and is not superseded. It would also be **lost rather than deferred**: cascades
+fire from the source's publish and nothing re-runs them.
+
+**And the derived case that would otherwise have shipped as a permanent bug: a target already at
+the cascade status is a no-op, not a transition.** Asked about `SUPERSEDED → SUPERSEDED` the table
+refuses — terminal — so **an ADR that had ever superseded another could never be republished**, a
+typo fix refused on account of a cascade that already happened. Mutating that branch out kills
+both the new test and a pre-existing Task 7 one.
+
+**Authorization: nothing beyond the `PUBLISH` already held on the source's space.** The target is
+always in the source's space — resolution refuses absolute references syntactically *and* scopes
+every query to `source.spaceId` — so a `can(viewer, targetSpace, "EDIT")` would be the same call
+on the same space as the check already made: a predicate stated twice, and untestable. Same-space
+**is** what makes it safe, and it is exactly what a later phase widens. So the cascade write
+carries `spaceId: page.spaceId` as a **shape** constraint: widening resolution without revisiting
+that line produces a zero-row update, a rollback and a loud failure rather than a silent
+cross-space write. Disclosure is closed upstream — an unreadable target is `not-found`, so no
+cascade is ever computed for a page the viewer cannot see.
+
+**Lock ordering: ascending page id, own row included, one statement**, with `COLLATE "C"` so the
+order is byte order and cannot vary with a deployment's locale. `EXPLAIN` confirms `LockRows`
+sits above `Sort`. Two staged tests with explicit ids (`0-…`, `z-…`) use a third connection with
+`lock_timeout` to ask whether the publish holds the *other* row while it waits.
+
+**A removed relation is audited**, as edges on the `page.publish` row alongside the adds.
+"Reconstructible from the version chain" is weaker than it sounds: frontmatter stores
+*references*, so recovering an edge means re-resolving a path as it would have resolved then,
+through redirects a later move may since have replaced. Removal also does **not** un-retire the
+target, so the audit row is the only account of how a `SUPERSEDED` page with no incoming relation
+got that way. The cascade gets its own `page.cascade` action because it changes a *different*
+page, and `AuditLog` is indexed by `pageId`.
+
+**One honest equivalent mutant, reported rather than given a test that pins the wrong thing:**
+dropping `spaceId` from the cascade *write* alone leaves all 52 tests passing, because
+resolution's scoping already holds. Dropping *both* layers fails — the publish succeeds and
+cascades another space's page. The write-side constraint is defence in depth whose value is the
+fail-closed behaviour, not a currently-reachable bug.
 
 **Task 6 left this task a decision it must not inherit silently.** `checkRelations` emits
 `cascade: "SUPERSEDED"` for a target ADR sitting at `PROPOSED` — which `PUBLISHABLE_INTO`
@@ -533,17 +575,17 @@ tells the author their ADR cannot supersede a proposal that was never accepted; 
 silently leaves a declared relation with no consequence. Decide, argue it, and test whichever
 you choose.
 
-- [ ] **Step 2: Decide the authorization**
+- [x] **Step 2: Decide the authorization**
 
 The publisher is changing another page's status. Does that require `EDIT` on the target's space?
 Argue it. Whatever the answer, the failure mode must not reveal that an unreadable page exists.
 
-- [ ] **Decide whether a removed relation is audited.** Task 7 leaves no trace when a relation
+- [x] **Decide whether a removed relation is audited.** Task 7 leaves no trace when a relation
       row is deleted. It is reconstructible from the version chain's stored frontmatter, so this
       is a judgement about whether the audit log should stand alone. You are already adding audit
       rows for the cascade side.
 
-- [ ] **Step 3: Lock in a deterministic order**
+- [x] **Step 3: Lock in a deterministic order**
 
 Task 7 confirmed the hazard is **yours alone**: its relation insert takes only a foreign-key
 `KEY SHARE` lock on the target `Page` rows, which does not conflict with the `FOR NO KEY UPDATE`
@@ -554,7 +596,7 @@ Ascending page id, including the publishing page's own row. Two ADRs superseding
 concurrently is the case; a staged test that holds one lock and proves the second blocks is the
 only thing that pins it. A `Promise.all` race does not.
 
-- [ ] **Step 4: Audit both sides**
+- [x] **Step 4: Audit both sides**
 
 The cascade changed a page the audit trail should show changing. `writeAudit` from
 `src/lib/audit/log.ts` — do not touch the delegate directly, a sweep enforces it.
@@ -570,6 +612,17 @@ Spec §6.2 and §6.4.
 Stored one direction; the page reader asks both "what does this supersede" and "what supersedes
 this", the second keyed on `toId`. Both filtered by `visiblePage` and `readableSpace` — a
 relation must not surface a page the viewer cannot read.
+
+- [ ] **Step 0: Make "remains editable" true.** Task 8 found that §6.1's vocabulary gives the
+      terminal statuses **no onward transition at all**, so a retired page's annotation can be
+      drafted and never published — and §6.4 promises the opposite. Latent since Phase 2, routine
+      now that a cascade puts pages into those statuses without anyone choosing to.
+
+      **Resolved in the spec: a terminal status may publish into itself.**
+      `SUPERSEDED → SUPERSEDED` is legal; `SUPERSEDED → ACCEPTED` is not. Add the rows to
+      `PUBLISHABLE_INTO` for both ADR and RFC terminal statuses, and note the interaction Task 8
+      already handles — a cascade onto a page already at that status is a no-op, not a
+      transition, so this must not reopen that.
 
 - [ ] **Step 2: The banner**
 

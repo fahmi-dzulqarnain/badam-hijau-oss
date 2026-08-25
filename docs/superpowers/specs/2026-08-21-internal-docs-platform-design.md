@@ -248,6 +248,17 @@ A page whose status is `SUPERSEDED`, `DEPRECATED`, `CLOSED`, `WITHDRAWN`, `REJEC
 being in force. The body stays fully readable as history. It remains editable by editors
 so it can be annotated, and it is demoted in search ranking (see §13) rather than hidden.
 
+> **Correction, found while implementing Phase 3's cascades.** "Remains editable so it can be
+> annotated" was not achievable: §6.1's vocabulary gives the terminal statuses **no onward
+> transition at all**, so a retired page's annotation could be drafted and never published. The
+> promise was hollow — a draft that cannot become a version is not an annotation.
+>
+> **Resolved: a terminal status may publish into itself.** `SUPERSEDED → SUPERSEDED` is legal;
+> `SUPERSEDED → ACCEPTED` is not. "Terminal" keeps its meaning — no page climbs back out of a
+> retirement — while an editor can still publish a correction or a pointer to the replacement.
+> This was latent from Phase 2 and became routine in Phase 3, because a cascade puts pages into
+> those statuses without anyone choosing to.
+
 ## 7. Systems facet
 
 Systems are global, not owned by a space, and carry no permissions of their own. Pages
