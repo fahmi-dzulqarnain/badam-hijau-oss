@@ -1,13 +1,32 @@
 # Execution status
 
-**Phase 1 is complete. Phase 2 (authoring) is complete.**
+**Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
 Branch: `phase-1-foundations-reader` · **520 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
+[phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
+
+Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
+completed phases.
+
+## Phase 3 — doc types and lifecycle
+
+Decisions taken with the user: relations name their target by **space-relative page path**,
+resolved to a page id at publish time; templates are **Markdown files in the repo**.
+
+| Task | State |
+|---|---|
+| **1. Schema: relations and frontmatter** | **next** |
+| 2–13 | not started |
+
+**It starts by fixing a bug it inherits.** The render pipeline turns frontmatter into an `<hr>`
+plus a heading with an id derived from the concatenated keys — which also puts a junk entry in
+the table of contents. Invisible today because nothing writes frontmatter; visible on every ADR
+the moment Phase 3 does. Measured, in the plan.
 
 ## Phase 2 — authoring
 
