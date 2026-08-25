@@ -80,11 +80,11 @@ Settled in Phases 1–2. Changing one is a decision, not a detail.
 
 ---
 
-## Task 1: Schema for relations and frontmatter
+## Task 1: Schema for relations and frontmatter ✅
 
 **Files:** `prisma/schema.prisma`, a migration.
 
-- [ ] **Step 1: `RelationType` and `PageRelation`**
+- [x] **Step 1: `RelationType` and `PageRelation`**
 
 Per spec §5.2, and note what it does *not* have: no reverse rows. §6.2 — *"Relations are stored
 one direction only and the inverse is derived at read time, so the two sides can never
@@ -116,16 +116,19 @@ model PageRelation {
 `@@index([toId, type])` is what makes the derived inverse cheap — the read that asks "what
 supersedes *this* page" is keyed on `toId`, and it runs on every retired page's banner.
 
-- [ ] **Step 2: Decide where validated frontmatter is stored**
+- [x] **Step 2: Decide where validated frontmatter is stored**
 
 `PageVersion.frontmatter` and `PageDraft.frontmatter` already exist as `Json @default("{}")`,
 added in Phase 2 Task 1 precisely so this phase would not have to add a `NOT NULL` column to a
 populated table. Use them. The draft holds what the author typed; the version holds what
 validation accepted — **they are not the same value**, and a test should pin that.
 
-- [ ] **Step 3: Migrate, and check the plan for `NOT NULL` on a populated table**
+- [x] **Step 3: Migrate, and check the plan for `NOT NULL` on a populated table**
 
 The `Page` and `PageVersion` tables are populated in every environment this will run against.
+Clean: the migration is a new enum, a new table and its two indexes — no `ALTER TABLE … NOT
+NULL`, because Phase 2 Task 1 added both `frontmatter` columns with a `{}` default in advance,
+precisely so this phase would not face that migration.
 
 ---
 

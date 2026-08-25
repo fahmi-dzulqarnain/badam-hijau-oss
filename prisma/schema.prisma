@@ -18,6 +18,13 @@ enum SpaceRole {
   ADMIN
 }
 
+enum RelationType {
+  SUPERSEDES
+  DECIDES
+  AMENDS
+  RELATES_TO
+}
+
 enum BugStatus {
   NEW
   TRIAGED
@@ -142,8 +149,10 @@ model Page {
   versions         PageVersion[] @relation("PageVersions")
   publishedVersion PageVersion?  @relation("PagePublishedVersion", fields: [publishedVersionId], references: [id])
 
-  draft     PageDraft?
-  redirects Redirect[] @relation("RedirectTarget")
+  draft         PageDraft?
+  redirects     Redirect[]     @relation("RedirectTarget")
+  relationsFrom PageRelation[] @relation("RelationFrom")
+  relationsTo   PageRelation[] @relation("RelationTo")
 
   @@unique([spaceId, path])
   @@index([spaceId, status])
@@ -219,4 +228,23 @@ model AuditLog {
 
   @@index([spaceId, createdAt])
   @@index([pageId, createdAt])
+}
+
+// Stored ONE DIRECTION only; the inverse is derived at read time, so the two sides can never
+// disagree (spec §6.2). There is deliberately no reverse row and no `reverseOf` column.
+//
+// The `[toId, type]` index is what makes the derived inverse cheap: "what supersedes THIS page"
+// is keyed on `toId`, and it runs on every retired page's banner.
+model PageRelation {
+  id        String       @id @default(cuid())
+  fromId    String
+  toId      String
+  type      RelationType
+  createdAt DateTime     @default(now())
+
+  from Page @relation("RelationFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   Page @relation("RelationTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, toId, type])
+  @@index([toId, type])
 }
