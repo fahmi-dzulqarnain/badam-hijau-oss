@@ -260,6 +260,41 @@ export async function seedPublishedPage(opts: {
 }
 
 /**
+ * A second publish of a fixture, through the same three steps as the first.
+ *
+ * Phase 3 needs pages further along their lifecycle than one publish can put them: an RFC enters
+ * at `IN_REVIEW` and only an `ACCEPTED` one can be closed by a decision, because the cascade's
+ * own transition is validated through `PUBLISHABLE_INTO` like any other. So the fixture that gets
+ * decided has to be *accepted* first, which is two publishes, which is a new draft — publish
+ * deletes the one it published, so `seen: null` here is the "no seen and no draft" case
+ * `decideSave` answers with `create`, and not a conflict.
+ *
+ * The status comes from the document's own `status:` line where a test has one to make, and from
+ * `options.status` where it does not; both are legal and `seedPublishedPage` argues which is
+ * which.
+ */
+export async function republishPage(
+  fixture: Fixture,
+  opts: { markdown: string; status?: DocStatus },
+): Promise<void> {
+  const viewer = await viewerFor("aisyah@example.com");
+
+  const saved = await saveDraft(viewer, fixture.id, {
+    title: fixture.title,
+    markdown: opts.markdown,
+    seen: null,
+  });
+  if (!saved.ok) throw new Error(`saveDraft: ${JSON.stringify(saved)}`);
+
+  const published = await publishPage(
+    viewer,
+    fixture.id,
+    opts.status ? { status: opts.status } : {},
+  );
+  if (!published.ok) throw new Error(`publishPage: ${JSON.stringify(published)}`);
+}
+
+/**
  * The horizontal-overflow measurement, in one place because three tests make it.
  *
  * `clientWidth` is returned alongside the overflow and asserted non-zero by every caller. A
