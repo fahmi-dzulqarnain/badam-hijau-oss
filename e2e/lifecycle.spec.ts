@@ -473,6 +473,21 @@ test("the generated index lists ADRs, filters by status, and names an unknown fi
 test("a supersede cycle is refused, with a message placed against the line that caused it", async ({
   page,
 }) => {
+  /*
+   * **The two pages are arranged so that the cycle is the ONLY thing that can refuse this
+   * publish**, and that arrangement is the test rather than a detail of it.
+   *
+   * The obvious setup — B proposed, A still accepted, A adds `supersedes: B` — is refused by the
+   * suite either way, and mutation-testing said so: with `walksTheGraph` forced to `false` the
+   * publish still failed, on `cascade-illegal-transition`, because A's publish into `ACCEPTED`
+   * would fire a cascade at a `PROPOSED` page that cannot reach `SUPERSEDED`. A test whose
+   * refusal survives the deletion of the guard it is about is a test of the other guard.
+   *
+   * So B is accepted first, which retires A, and A's own re-publish is `SUPERSEDED → SUPERSEDED`
+   * — legal since Task 9 Step 0, and gated out of firing any cascade because the cascade wants
+   * `ACCEPTED`. Nothing but the cycle walk is left to refuse it. Verified: with `walksTheGraph`
+   * forced to `false`, this publish **succeeds** and the assertions below fail on the first line.
+   */
   const older = await seedPublishedPage({
     slug: "e2e-cycle-a",
     title: "Decision A",
@@ -480,19 +495,23 @@ test("a supersede cycle is refused, with a message placed against the line that 
     status: "ACCEPTED",
     markdown: withFrontmatter(["status:"], ADR_BODY),
   });
-  // Published at PROPOSED, so the row is written and nothing is retired — which is what makes the
-  // cycle reachable at all: the graph gains the edge whether or not the cascade fires.
   const newer = await seedPublishedPage({
     slug: "e2e-cycle-b",
     title: "Decision B",
     docType: "ADR",
+    status: "ACCEPTED",
     markdown: withFrontmatter(["status:", `supersedes: ${older.path}`], ADR_BODY),
   });
   expect(
     await db.pageRelation.count({ where: { fromId: newer.id, toId: older.id } }),
   ).toBe(1);
+  expect(
+    (await db.page.findUniqueOrThrow({ where: { id: older.id }, select: { status: true } })).status,
+  ).toBe("SUPERSEDED");
 
   await signIn(page, "aisyah@example.com");
+  // A retired page is still editable — §6.4, and Task 9 Step 0 is what made that true rather than
+  // promised. The refusal below is about the relation, not about the page being history.
   await page.goto(`/edit/${older.id}`);
 
   const surface = page.locator(".cm-content");
@@ -524,7 +543,21 @@ test("a supersede cycle is refused, with a message placed against the line that 
   expect(await db.pageVersion.count({ where: { pageId: older.id } })).toBe(1);
   expect(
     (await db.page.findUniqueOrThrow({ where: { id: older.id }, select: { status: true } })).status,
-  ).toBe("ACCEPTED");
+  ).toBe("SUPERSEDED");
+
+  /*
+   * The non-vacuity companion, and it is the half that makes the refusal mean something. Take the
+   * offending line back out and publish the same page again: it goes out. So what was refused was
+   * the edge, not the document, not the author, and not the page's retirement — an annotation on a
+   * superseded ADR is exactly what §6.4 promises stays possible.
+   */
+  await surface.click();
+  await surface.fill(withFrontmatter(["status:"], `${ADR_BODY}\nSuperseded by Decision B.\n`));
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page).toHaveURL(/\/engineering\/e2e-cycle-a$/, { timeout: 15_000 });
+  await expect(page.locator(".meta")).toContainText("SUPERSEDED");
+  await expect(page.locator(".doc .body")).toContainText("Superseded by Decision B.");
+  await expect(page.locator(".retired")).toContainText("This document has been superseded.");
 });
 
 /* ------------------------------------------------------------------- hostile content ---- */
