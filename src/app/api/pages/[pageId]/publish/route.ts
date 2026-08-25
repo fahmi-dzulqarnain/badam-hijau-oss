@@ -20,6 +20,14 @@ import { pageHref } from "@/lib/pages/href";
  * of true: the status to publish into is derived, never accepted. Phase 3 now takes it from the
  * `status:` key of the draft's own frontmatter — which is still a row in the database, not a
  * field of this request.
+ *
+ * **Task 11 gave the editor a status picker and this stayed true**, which was a decision rather
+ * than an omission. The picker writes the document's own `status:` line, so the status still
+ * arrives through the draft row; sending it here instead would have made it outrank the author's
+ * frontmatter (`publishPage`'s precedence is `options.status ?? frontmatter.status ?? default`)
+ * and let a version commit whose stored frontmatter and whose page status disagree. The argument
+ * is at `setFrontmatterStatus` in `src/lib/editor/publish.ts`. `options.status` therefore still
+ * has no product caller: it is what a test, the seed and the e2e helper use.
  */
 export async function POST(
   _request: Request,
