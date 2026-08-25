@@ -603,17 +603,17 @@ The cascade changed a page the audit trail should show changing. `writeAudit` fr
 
 ---
 
-## Task 9: Reading relations, and the retired banner
+## Task 9: Reading relations, and the retired banner ✅
 
 Spec §6.2 and §6.4.
 
-- [ ] **Step 1: Derive the inverse at read time**
+- [x] **Step 1: Derive the inverse at read time**
 
 Stored one direction; the page reader asks both "what does this supersede" and "what supersedes
 this", the second keyed on `toId`. Both filtered by `visiblePage` and `readableSpace` — a
 relation must not surface a page the viewer cannot read.
 
-- [ ] **Step 0: Make "remains editable" true.** Task 8 found that §6.1's vocabulary gives the
+- [x] **Step 0: Make "remains editable" true.** Task 8 found that §6.1's vocabulary gives the
       terminal statuses **no onward transition at all**, so a retired page's annotation can be
       drafted and never published — and §6.4 promises the opposite. Latent since Phase 2, routine
       now that a cascade puts pages into those statuses without anyone choosing to.
@@ -624,14 +624,66 @@ relation must not surface a page the viewer cannot read.
       already handles — a cascade onto a page already at that status is a no-op, not a
       transition, so this must not reopen that.
 
-- [ ] **Step 2: The banner**
+- [x] **Step 2: The banner**
+
+**Step 0 nearly shipped a silent regression, and the way it was caught is the lesson.**
+`terminalStatuses` was derived as "appears as a destination and **has no row**". Step 0 gives
+every terminal status a row, so left alone it returned `[]` for ADR and RFC — and
+`RELATION_KEYS_BY_TYPE` derives the `amends` key from it, so a vocabulary **widening** would have
+quietly **removed** a frontmatter key. Re-derived as "has no destination but itself".
+
+The docstring first claimed no test would have failed. That was measured and found wrong:
+`schema.test.ts`'s equivalence assertion goes **vacuously true** — both sides empty — and it is
+the **non-vacuity line beside it** that catches it. An equivalence assertion over two derived
+sets needs a companion asserting the sets are non-empty, or it passes hardest exactly when both
+derivations break together.
+
+**The retirement date is the replacement's `publishedAt`, labelled as the replacement's publish
+date — not as a retirement date.** For a cascade they are the same instant by construction, since
+the cascade runs inside the replacement's publish transaction. The alternatives are each wrong
+somewhere reachable:
+
+- **The relation's `createdAt`** is wrong on the *documented happy path*: Task 6 gates the cascade
+  and not the relation, so the row is normally written by the `PROPOSED` publish and Task 7's
+  `NOT` clause preserves it. It would date the retirement to the day someone *proposed* it.
+- **The retired page's own `publishedAt`** is wrong for every cascade-retired page: `applyCascade`
+  writes the status and deliberately nothing else, so it still says when the page was last
+  published *while in force*.
+- **The `page.cascade` audit row** is right for a cascade and absent for an author-retired page,
+  and it would put the reader's hot path on the one table only `src/lib/audit/log.ts` may query.
+
+The **label** is what keeps it honest: after the replacement is republished, "published 4 March"
+stays a true sentence about the replacement, where "retired 4 March" would have become a false
+one about this page. A true retirement instant needs a column written by the statement that
+writes the status — spec §6.4 asks for a date the schema does not record.
+
+**A page retired with no incoming relation** shows the status, no date, and a sentence saying so.
+Reachable three ways — author-retired directly, an `ARCHIVED` doc that can never have one, and a
+replacement that dropped `supersedes:` without un-retiring its target — so it is a branch, not a
+fallback.
+
+**Which incoming relation counts as the replacement is derived**, not listed:
+`retiresInto(type) === page.status`. An incoming `AMENDS` is therefore never a replacement, and a
+`DEPRECATED` ADR whose only incoming `SUPERSEDES` comes from an unaccepted proposal names none —
+a reachable state the derivation declines on its own.
+
+**Deliberately no `spaceId` shape constraint on either read — the opposite of `resolveRedirect`,
+and for a reason worth keeping.** Scoping to the page's own space would make `readableSpace`
+**unfalsifiable** here: a viewer reading a page can always read its space, so the only rows the
+predicate can hide are cross-space ones — exactly the rows a shape constraint would hide first.
+That is a predicate stated twice with one copy invisible.
+
+**`RETIRED_STATUSES` is transcribed from §6.4, not derived** — the one list in this change.
+`ARCHIVED` is retired *and* reversible (`ARCHIVED → CURRENT`), so no property of
+`PUBLISHABLE_INTO` separates the six. Held by two tests instead: the spec transcription, and
+"every terminal status is a retired status", which is the half that would otherwise rot.
 
 A page whose status is `SUPERSEDED`, `DEPRECATED`, `CLOSED`, `WITHDRAWN`, `REJECTED` or
 `ARCHIVED` renders a banner above the body naming the replacement and the date it stopped being
 in force. **The body stays fully readable** — this is history, not an error state, and it stays
 editable so it can be annotated.
 
-- [ ] **Step 3: Overflow**
+- [x] **Step 3: Overflow**
 
 The banner carries a page title, which is user-typed text that can be one unbreakable
 300-character token. That class has bitten five times, most recently on the page title itself.

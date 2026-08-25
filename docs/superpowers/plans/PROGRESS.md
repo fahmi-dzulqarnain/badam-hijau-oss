@@ -2,7 +2,7 @@
 
 **Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
 
-Branch: `main` · **719 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **745 vitest + 21 Playwright tests passing**, 37-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -28,8 +28,9 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 6. Relation guardrails | ✅ |
 | 7. Frontmatter and relations in publish | ✅ |
 | 8. Cascades | ✅ |
-| **9. Reading relations, and the retired banner** | **next** |
-| 10–13 | not started |
+| 9. Reading relations, and the retired banner | ✅ |
+| **10. Generated indexes** | **next** |
+| 11–13 | not started |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -50,6 +51,18 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **An equivalence assertion over two derived sets needs a non-vacuity companion.** Task 9
+  changed a vocabulary table and re-derived `terminalStatuses`; had it not, `amends` would have
+  silently vanished from the frontmatter keys — and `schema.test.ts`'s equivalence assertion would
+  have gone **vacuously true**, both sides empty. The line beside it asserting the sets are
+  non-empty is what caught it. An equivalence test passes hardest exactly when both derivations
+  break together.
+- **Sometimes the right move is to state a predicate in *fewer* places, and the reason is
+  falsifiability.** Task 9's relation reads deliberately carry no `spaceId` shape constraint —
+  the opposite of `resolveRedirect` — because a viewer reading a page can always read its space,
+  so the only rows `readableSpace` can hide there are cross-space ones, which is exactly what a
+  shape constraint would hide first. That would be a predicate stated twice with one copy
+  invisible.
 - **The soft-delete sweep has now been too narrow six times.** The latest: it matches Prisma
   *delegate* calls, and `$queryRaw`/`$executeRaw` name no delegate — so raw SQL was invisible.
   Four modules were registered only *by accident*, because each happens to also make a delegate
