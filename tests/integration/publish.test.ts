@@ -419,6 +419,53 @@ test("an empty draft is refused as a field error, and nothing is written", async
 });
 
 /**
+ * **A draft accepts what publish refuses**, over frontmatter, and it is Task 11's constraint
+ * rather than a nicety: autosave fires every two seconds, and an author typing a `supersedes:`
+ * line produces malformed YAML on the way to a valid one constantly. If validation leaked into
+ * the save path, the editor would stop storing work in the middle of writing metadata — the
+ * exact failure the conflict contract exists to prevent, arriving from the other direction.
+ *
+ * Phase 2 settled this shape for the title, and Task 2 returned a typed failure from the parser
+ * rather than throwing so it would stay true. This is the test that says so: every one of these
+ * documents saves, and every one is refused by publish, through the real `saveDraft`.
+ *
+ * Kills any future `saveDraft` that parses, validates or even splits frontmatter.
+ */
+test("every frontmatter publish refuses, autosave still accepts", async () => {
+  const { page, asAisyah } = await fixture({ docType: "ADR" });
+
+  const halfTyped = [
+    // Mid-keystroke YAML: an unclosed bracket, an unterminated quote, a bare tab.
+    "---\nsupersedes: [decisions/adr-00\n---\n\n# Topics\n",
+    '---\nstatus: "ACCEP\n---\n\n# Topics\n',
+    // A key that is not a key yet, because the author is still typing it.
+    "---\nsupersed: decisions/adr-0030\n---\n\n# Topics\n",
+    // A status that is not one.
+    "---\nstatus: banana\n---\n\n# Topics\n",
+    // A relation naming a page that does not exist.
+    "---\nstatus: PROPOSED\nsupersedes: decisions/nothing-here\n---\n\n# Topics\n",
+    // And the frontmatter-only document this task now refuses.
+    "---\nstatus: PROPOSED\n---\n",
+  ];
+
+  for (const markdown of halfTyped) {
+    const saved = await saveDraft(asAisyah, page.id, {
+      title: "MQTT contracts",
+      markdown,
+      // The row survives every publish attempt below, because none of them commits.
+      seen: (await db.pageDraft.findUniqueOrThrow({ where: { pageId: page.id } })).updatedAt,
+    });
+    expect(saved.ok, markdown).toBe(true);
+
+    const before = await snapshot(page.id);
+    const refused = await publishPage(asAisyah, page.id);
+    expect(refused.ok, markdown).toBe(false);
+    // Nothing written, so the draft the author is still typing in is untouched.
+    expect(await snapshot(page.id)).toEqual(before);
+  }
+});
+
+/**
  * Task 11's answer to the hole Task 7 found and handed on: `draft-empty` measures the whole
  * markdown, so a document that is nothing but frontmatter is "not empty" and publishes with an
  * empty body — a title over a blank page, which before Task 2 at least rendered as visible
