@@ -207,6 +207,55 @@ async function relationsOf(pageId: string) {
   return rows.map((row) => `${row.type} ${row.to.path}`);
 }
 
+/** Every `page.cascade` row about this page, oldest first. */
+async function cascadeAudits(pageId: string) {
+  return db.auditLog.findMany({
+    where: { pageId, action: "page.cascade" },
+    orderBy: { createdAt: "asc" },
+    select: { actorId: true, action: true, spaceId: true, pageId: true, detail: true },
+  });
+}
+
+/** The one `page.publish` row this page's latest publish wrote. */
+async function lastPublishAudit(pageId: string) {
+  const rows = await db.auditLog.findMany({
+    where: { pageId, action: "page.publish" },
+    orderBy: { createdAt: "desc" },
+    take: 1,
+  });
+  const row = rows[0];
+  if (row === undefined) throw new Error(`no page.publish audit row for ${pageId}`);
+  return row;
+}
+
+const statusOf = async (pageId: string) =>
+  (await db.page.findUniqueOrThrow({ where: { id: pageId }, select: { status: true } })).status;
+
+/**
+ * Whether some other transaction is holding an exclusive lock on this page row **right now**.
+ *
+ * The only way to observe a lock a running publish is holding, and the whole mechanism behind
+ * the two lock-ordering tests below. A short `lock_timeout` turns "somebody else has it" into a
+ * failed statement instead of a hang, and the error is matched rather than swallowed — a bare
+ * `catch` would report a typo in the SQL as a held lock and pass for the wrong reason.
+ */
+async function lockedByAnother(pageId: string): Promise<boolean> {
+  try {
+    await db.$transaction(
+      async (tx) => {
+        await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '400ms'");
+        await tx.$queryRaw`SELECT "id" FROM "Page" WHERE "id" = ${pageId} FOR UPDATE`;
+      },
+      { timeout: 20_000, maxWait: 20_000 },
+    );
+    return false;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/lock timeout/i.test(message)) throw error;
+    return true;
+  }
+}
+
 test("publishing makes the page readable end to end, and takes the draft with it", async () => {
   const { space, page, aisyah, asAisyah, draft } = await fixture();
 
@@ -1259,6 +1308,17 @@ test("an illegal relation is refused by the guardrail, and nothing is written", 
  *
  * Kills a guardrail call the publish forgot to make, and kills walking the frontmatter instead
  * of the stored rows.
+ *
+ * **The first publish lands at `PROPOSED`, and Task 8 is why.** It was `ACCEPTED` until the
+ * cascade existed, and then this test began failing as `illegal-transition` — correctly: the
+ * accepted publish retires `other`, and a `SUPERSEDED` ADR cannot be published forward at all,
+ * so the second publish was refused for its own transition before the cycle walk was reached.
+ * That is the honest new shape of the product, and it is pinned by its own test below rather
+ * than left as this one's surprise. Published at `PROPOSED` the relation row is still written
+ * and no cascade fires (Task 6's `ACCEPTED` precondition), which is exactly the state Task 6's
+ * docstring names as the reason the walk runs whether or not the cascade does: *"a cycle
+ * admitted by a `PROPOSED` publish would already be stored by the time the accepting publish
+ * refused it."*
  */
 test("an ADR cannot supersede the ADR that already supersedes it, and nothing is written", async () => {
   const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
@@ -1272,8 +1332,10 @@ test("an ADR cannot supersede the ADR that already supersedes it, and nothing is
   });
 
   // This page supersedes the other, published for real so the row is the product's own.
-  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${other.path}`].join("\n"));
+  await declaring(page.id, ["status: PROPOSED", `supersedes: ${other.path}`].join("\n"));
   published(await publishPage(asAisyah, page.id));
+  // No cascade at PROPOSED, so `other` is still publishable and the loop is reachable.
+  expect((await db.page.findUniqueOrThrow({ where: { id: other.id } })).status).toBe("ACCEPTED");
 
   // Now the other one tries to supersede this one, which would close the loop.
   await db.pageDraft.create({
@@ -1291,6 +1353,588 @@ test("an ADR cannot supersede the ADR that already supersedes it, and nothing is
   expect(await snapshot(other.id)).toEqual(before);
   // And the edge that was already there is untouched.
   expect(await relationsOf(page.id)).toEqual(["SUPERSEDES adr-0030-topic-layout"]);
+});
+
+/**
+ * ## The cascades — spec §9 step 5 and §6.3
+ *
+ * `checkRelations` decided *whether* each cascade is eligible and handed over a `cascade` status;
+ * everything below is about what happens to the **other page**. Four things are tested and they
+ * are four different mechanisms: the write, the `PUBLISHABLE_INTO` check on it, the audit row on
+ * the far side, and the order the two rows are locked in.
+ */
+
+/**
+ * The cascade, both sides of it, and both audit rows.
+ *
+ * Kills leaving the §9 step 5 TODO in place — which every other assertion in this file passes
+ * against — and kills a cascade that writes the status without auditing the page it changed.
+ */
+test("publishing an accepted ADR retires the ADR it supersedes, and audits both sides", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const superseded = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${superseded.path}`].join("\n"));
+  const result = published(await publishPage(asAisyah, page.id));
+
+  // One action, both sides (§6.3): the row and the status, in the same transaction.
+  expect(await relationsOf(page.id)).toEqual(["SUPERSEDES adr-0030-topic-layout"]);
+  expect(await statusOf(superseded.id)).toBe("SUPERSEDED");
+  // The publishing page landed where it asked to, and its own status is not the cascade's.
+  expect(await statusOf(page.id)).toBe("ACCEPTED");
+
+  // The far side's own audit row, keyed on the page that CHANGED — the whole reason it is a
+  // separate action rather than a key in the publish row's detail.
+  const cascades = await cascadeAudits(superseded.id);
+  expect(cascades).toHaveLength(1);
+  expect(cascades[0]).toMatchObject({
+    action: "page.cascade",
+    // The publisher: they did not edit this page, and they did cause this.
+    actorId: aisyah.id,
+    spaceId: space.id,
+    pageId: superseded.id,
+  });
+  expect(cascades[0]!.detail).toEqual({
+    path: "adr-0030-topic-layout",
+    fromStatus: "ACCEPTED",
+    toStatus: "SUPERSEDED",
+    relation: "SUPERSEDES",
+    byPageId: page.id,
+    byPagePath: "architecture/mqtt-contracts",
+    byVersionId: result.versionId,
+  });
+
+  // And the near side records what it did to other pages, so the join reads both ways.
+  const publish = await lastPublishAudit(page.id);
+  expect(publish.detail).toMatchObject({
+    cascaded: [
+      {
+        pageId: superseded.id,
+        path: "adr-0030-topic-layout",
+        fromStatus: "ACCEPTED",
+        toStatus: "SUPERSEDED",
+        relation: "SUPERSEDES",
+      },
+    ],
+    relations: { added: [{ type: "SUPERSEDES", toId: superseded.id }], removed: [] },
+  });
+
+  // The retired page keeps its published version: no version was authored for it, and inventing
+  // one would put a revision in its history that nobody wrote.
+  const retired = await db.page.findUniqueOrThrow({ where: { id: superseded.id } });
+  expect(retired.publishedVersionId).toBeNull();
+  expect(await db.pageVersion.count({ where: { pageId: superseded.id } })).toBe(0);
+});
+
+/**
+ * The second cascade, which is a different status on a different vocabulary — so a cascade
+ * hardcoded to `SUPERSEDED`, or one that reads the source's doc type instead of the target's,
+ * fails here and nowhere else.
+ */
+test("an accepted ADR closes the RFC it decides", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const rfc = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "rfc-0004-topic-naming",
+    title: "RFC-0004 Topic naming",
+    docType: "RFC",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `decides: ${rfc.path}`].join("\n"));
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await statusOf(rfc.id)).toBe("CLOSED");
+  const cascades = await cascadeAudits(rfc.id);
+  expect(cascades).toHaveLength(1);
+  expect(cascades[0]!.detail).toMatchObject({
+    fromStatus: "ACCEPTED",
+    toStatus: "CLOSED",
+    relation: "DECIDES",
+  });
+});
+
+/**
+ * Task 6's `ACCEPTED` precondition, seen from the far side: the relation is written at
+ * `PROPOSED` and nothing is retired. A proposal that says what it *would* replace is exactly
+ * what a reviewer needs, and the consequence waits for the publish that accepts it.
+ *
+ * Kills a cascade that fires off the relation type alone and ignores `CheckedRelation.cascade`.
+ */
+test("a proposed ADR writes the relation and retires nothing", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const target = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: PROPOSED", `supersedes: ${target.path}`].join("\n"));
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await relationsOf(page.id)).toEqual(["SUPERSEDES adr-0030-topic-layout"]);
+  expect(await statusOf(target.id)).toBe("ACCEPTED");
+  expect(await db.auditLog.count({ where: { action: "page.cascade" } })).toBe(0);
+  expect((await lastPublishAudit(page.id)).detail).toMatchObject({ cascaded: [] });
+
+  // And then the accepting publish is the one that retires it.
+  await redeclaring(asAisyah, page.id, ["status: ACCEPTED", `supersedes: ${target.path}`].join("\n"));
+  published(await publishPage(asAisyah, page.id));
+  expect(await statusOf(target.id)).toBe("SUPERSEDED");
+  expect(await cascadeAudits(target.id)).toHaveLength(1);
+});
+
+/**
+ * **Task 8's first decision, and the case Task 6 deliberately did not answer.** An ADR at
+ * `PROPOSED` cannot reach `SUPERSEDED` — `PUBLISHABLE_INTO` says so — and this is the choice
+ * between refusing the publish and skipping the cascade. It refuses, and the argument is at
+ * `planCascades`: a skipped cascade would leave a `SUPERSEDES` row from an `ACCEPTED` ADR over a
+ * target that is not retired, which is the divergence §6.3 exists to prevent, and it would be
+ * lost rather than deferred because nothing re-runs a cascade later.
+ *
+ * The snapshot is the assertion that matters, on **both** pages: a refusal decided after the
+ * version insert could only abort by throwing, and this proves it is decided before.
+ *
+ * Kills dropping the `PUBLISHABLE_INTO` check on the cascade — the publish would succeed and set
+ * `SUPERSEDED` on a page whose vocabulary cannot hold it — and kills validating it after any
+ * write.
+ */
+test("a cascade the target's vocabulary forbids refuses the publish, and writes nothing", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const proposal = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "PROPOSED",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${proposal.path}`].join("\n"));
+
+  const before = await snapshot(page.id);
+  const beforeTarget = await snapshot(proposal.id);
+
+  const error = rejection(await publishPage(asAisyah, page.id));
+  expect(error.code).toBe("cascade-illegal-transition");
+  // The frontmatter line, not the status control: the fault is in `supersedes:`, and the status
+  // box belongs to the page being published.
+  expect(error.field).toBe("markdown");
+  expect(error.key).toBe("supersedes");
+  expect(error.message).toContain("PROPOSED");
+  expect(error.message).toContain("SUPERSEDED");
+  expect(error.message).toContain("related:");
+  // "an ADR", not "a ADR". Shared with the guardrail's `article` rather than written again —
+  // the first draft of this sentence got it wrong, which is what a third copy of a rule does.
+  expect(error.message).toContain("an ADR");
+
+  expect(await snapshot(page.id)).toEqual(before);
+  expect(await snapshot(proposal.id)).toEqual(beforeTarget);
+  expect(await statusOf(proposal.id)).toBe("PROPOSED");
+  expect(await db.pageRelation.count()).toBe(0);
+});
+
+/** The same refusal for a target that was never published at all. `DRAFT` reaches nothing. */
+test("an ADR that was never published cannot be superseded either", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const unpublished = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "DRAFT",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${unpublished.path}`].join("\n"));
+  const before = await snapshot(page.id);
+  expect(rejection(await publishPage(asAisyah, page.id)).code).toBe("cascade-illegal-transition");
+  expect(await snapshot(page.id)).toEqual(before);
+  expect(await statusOf(unpublished.id)).toBe("DRAFT");
+});
+
+/**
+ * **The mirror of the test above, and the one that makes the refusal survivable.** A target
+ * already at the cascade status is a no-op, not a transition — and asking
+ * `PUBLISHABLE_INTO` about `SUPERSEDED → SUPERSEDED` would refuse it, because `SUPERSEDED` is
+ * terminal. Without that branch, an ADR that ever superseded another could never be republished
+ * again: fixing a typo in it would be refused for a cascade that had already happened.
+ *
+ * Kills validating the cascade unconditionally instead of skipping the no-op, and kills writing
+ * a second audit row for a status that did not change.
+ */
+test("republishing an ADR whose supersede already fired is not refused, and cascades once", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const superseded = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  const yaml = ["status: ACCEPTED", `supersedes: ${superseded.path}`].join("\n");
+  await declaring(page.id, yaml);
+  published(await publishPage(asAisyah, page.id));
+  expect(await statusOf(superseded.id)).toBe("SUPERSEDED");
+
+  // The typo fix. Same frontmatter, same relation, and the target is already retired.
+  await redeclaring(asAisyah, page.id, yaml);
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await statusOf(superseded.id)).toBe("SUPERSEDED");
+  // Still one cascade row: the second publish changed nothing on the far side and says nothing.
+  expect(await cascadeAudits(superseded.id)).toHaveLength(1);
+  expect((await lastPublishAudit(page.id)).detail).toMatchObject({ cascaded: [] });
+  // The relation row survived both publishes, so `createdAt` still says when it was asserted.
+  expect(await db.pageRelation.count({ where: { fromId: page.id } })).toBe(1);
+});
+
+/**
+ * A consequence of the cascade worth pinning rather than discovering: the page it retires can no
+ * longer be published at all. `SUPERSEDED` has no row in `PUBLISHABLE_INTO`, so every
+ * destination is refused — including itself.
+ *
+ * This is not a Task 8 rule; it is the transition table, and the cascade is what now routinely
+ * puts pages into it. It is pinned here because it is what broke the supersede-cycle test above,
+ * and because it sits against spec §6.4's *"remains editable by editors so it can be
+ * annotated"* — the annotation can be drafted and cannot be published. Reported with this task
+ * rather than resolved: whether a retired document may be republished into its own status is a
+ * row in the vocabulary, and the vocabulary is §6.1's.
+ */
+test("a page retired by a cascade cannot be published forward", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const superseded = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${superseded.path}`].join("\n"));
+  published(await publishPage(asAisyah, page.id));
+
+  // Its author annotates it, which §6.4 promises they can.
+  const saved = await saveDraft(asAisyah, superseded.id, {
+    title: superseded.title,
+    markdown: "Superseded by the MQTT contracts ADR. Kept for the argument in section 3.\n",
+    seen: null,
+  });
+  expect(saved.ok).toBe(true);
+
+  const before = await snapshot(superseded.id);
+  const error = rejection(await publishPage(asAisyah, superseded.id));
+  expect(error.code).toBe("illegal-transition");
+  expect(error.message).toContain("SUPERSEDED");
+  expect(await snapshot(superseded.id)).toEqual(before);
+});
+
+/**
+ * **Task 8's second decision, from the side that could leak.** The cascade requires no
+ * permission check of its own, and the reason it is safe is that a relation cannot cross a
+ * space: resolution refuses an absolute reference syntactically and scopes every one of its
+ * queries to the source's `spaceId`. So the same-path page in another space is not found, is
+ * refused with the shared `not-found` sentence, and is not touched.
+ *
+ * The other space is `ALL_STAFF` **on purpose**, so the viewer really can read it — otherwise
+ * the permission predicate would hide the bug this test exists to catch, and the test would pass
+ * against a resolution with no space scoping at all. Inject the hostile case; do not hope the
+ * fixture contains it.
+ *
+ * Kills dropping `spaceId` from `findLive`: the reference would resolve to the other space's ADR
+ * and the cascade would retire a page in a space this publish has no authority over.
+ */
+test("a relation naming a page in another space is refused, and that page is not cascaded", async () => {
+  const { page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const handbook = await db.space.create({
+    data: { key: "handbook", name: "Handbook", initials: "HB", visibility: "ALL_STAFF" },
+  });
+  const elsewhere = await otherPage({
+    spaceId: handbook.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout, in another space",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${elsewhere.path}`].join("\n"));
+
+  const before = await snapshot(page.id);
+  const error = rejection(await publishPage(asAisyah, page.id));
+  // The same answer a path naming nothing gets. A cascade must never be a way to learn that a
+  // page exists, and the refusal says nothing about the other space.
+  expect(error.code).toBe("not-found");
+  expect(error.message).not.toContain("handbook");
+
+  expect(await snapshot(page.id)).toEqual(before);
+  expect(await statusOf(elsewhere.id)).toBe("ACCEPTED");
+  expect(await db.auditLog.count({ where: { pageId: elsewhere.id } })).toBe(0);
+});
+
+/**
+ * **Task 8's second decision, from the side that must keep working.** The publisher holds
+ * `PUBLISH` on the space and nothing more: they did not write the ADR they are retiring, they do
+ * not own it, and the cascade fires anyway. That is the decision — no `EDIT` on the target, no
+ * ownership, no approval — and it is what a shared decision log means.
+ *
+ * Kills adding an owner or author gate on the cascade, which is the plausible wrong answer to
+ * "the publisher is changing another page's status".
+ */
+test("an editor retires a decision written and owned by somebody else", async () => {
+  const { space, page, aisyah, budi, asAisyah } = await fixture({ docType: "ADR" });
+  const theirs = await otherPage({
+    spaceId: space.id,
+    createdById: budi.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+  await db.page.update({ where: { id: theirs.id }, data: { ownerId: budi.id } });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${theirs.path}`].join("\n"));
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await statusOf(theirs.id)).toBe("SUPERSEDED");
+  // Audited to the person who caused it, not to the page's owner.
+  expect((await cascadeAudits(theirs.id))[0]).toMatchObject({ actorId: aisyah.id });
+  expect(space.id).toBe((await db.page.findUniqueOrThrow({ where: { id: theirs.id } })).spaceId);
+});
+
+/**
+ * **Task 8's fourth decision.** Dropping `supersedes:` deletes the row, and the audit trail says
+ * so — with the edge, not with the reference that produced it. It also does **not** un-retire the
+ * target, which is the reason the row is worth writing: without it, nothing anywhere would say
+ * how a `SUPERSEDED` page with no incoming relation got that way.
+ *
+ * Kills leaving Task 7's removal unaudited, and kills recording only removals: the first
+ * publish's row carries the addition.
+ */
+test("a removed relation is recorded on the publish that removed it", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const superseded = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${superseded.path}`].join("\n"));
+  published(await publishPage(asAisyah, page.id));
+  expect((await lastPublishAudit(page.id)).detail).toMatchObject({
+    relations: { added: [{ type: "SUPERSEDES", toId: superseded.id }], removed: [] },
+  });
+
+  // The author decides the supersede was wrong and takes the key out.
+  await redeclaring(asAisyah, page.id, "status: ACCEPTED");
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await relationsOf(page.id)).toEqual([]);
+  expect((await lastPublishAudit(page.id)).detail).toMatchObject({
+    relations: { added: [], removed: [{ type: "SUPERSEDES", toId: superseded.id }] },
+  });
+  // Removing the relation does NOT un-retire the target — no phase has taken that decision, and
+  // this row is now the only account of why it is retired.
+  expect(await statusOf(superseded.id)).toBe("SUPERSEDED");
+});
+
+/**
+ * ## The lock order — Task 8's third decision
+ *
+ * Ascending page id, **including the publishing page's own row**, because two ADRs superseding
+ * each other concurrently want the same two rows and in opposite orders that is a deadlock.
+ *
+ * A `Promise.all` race does not test this, and on this project it has been measured passing
+ * three runs out of three with an atomicity guarantee deleted. So both tests below stage the
+ * interleaving: an adversary holds one row, the publish is started, and a third connection with
+ * a short `lock_timeout` asks whether the publish is holding the **other** row while it waits.
+ * That is the only observable that distinguishes "locked in ascending order" from "locked in
+ * whatever order the code happens to write".
+ *
+ * The two tests are the two arrangements, and one alone proves nothing: with the target's id
+ * lower the ascending rule means the target first, and with it higher the rule means this page's
+ * own row first. Ids are set explicitly — `0-…` sorts below every cuid and `z-…` above every
+ * cuid, under the `COLLATE "C"` byte order the statement asks for — because a test that relied
+ * on cuid generation order would be a test of cuid generation order.
+ */
+
+/** The target's id sorts BELOW the publishing page's, so ascending order takes it first. */
+test("the cascade locks a lower-id target before this page's own row", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const target = await db.page.create({
+    data: {
+      id: "0-adr-0030-topic-layout",
+      spaceId: space.id,
+      slug: "adr-0030-topic-layout",
+      path: "adr-0030-topic-layout",
+      title: "ADR-0030 Topic layout",
+      docType: "ADR",
+      status: "ACCEPTED",
+      createdById: aisyah.id,
+    },
+  });
+  expect(target.id < page.id).toBe(true);
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${target.path}`].join("\n"));
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // The adversary holds this page's OWN row — the higher of the two.
+  const other = db.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Page" WHERE "id" = ${page.id} FOR UPDATE`;
+      await held;
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
+
+  await settle();
+  const racing = publishPage(asAisyah, page.id);
+  // Two settles: the publish takes the draft lock, reads the page, resolves and checks the
+  // relations before it reaches the locking statement at all.
+  await settle();
+  await settle();
+
+  // Locked the target and then blocked on this page's row. Reversed or absent, the publish would
+  // be waiting on `page.id` without holding the target at all.
+  //
+  // Released in a `finally`, which PROGRESS records as a rule and this task re-measured while
+  // mutation-testing the lock order: a failed assertion here otherwise leaks an uncommitted
+  // transaction, the next `TRUNCATE` blocks on it, and the run reports hook timeouts that bury
+  // the one real failure underneath them.
+  try {
+    expect(await lockedByAnother(target.id)).toBe(true);
+  } finally {
+    release();
+    await other;
+  }
+  published(await racing);
+  expect(await statusOf(target.id)).toBe("SUPERSEDED");
+});
+
+/** The target's id sorts ABOVE it, so ascending order takes this page's own row first. */
+test("the cascade locks this page's own row before a higher-id target", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const target = await db.page.create({
+    data: {
+      id: "z-adr-0030-topic-layout",
+      spaceId: space.id,
+      slug: "adr-0030-topic-layout",
+      path: "adr-0030-topic-layout",
+      title: "ADR-0030 Topic layout",
+      docType: "ADR",
+      status: "ACCEPTED",
+      createdById: aisyah.id,
+    },
+  });
+  expect(target.id > page.id).toBe(true);
+
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${target.path}`].join("\n"));
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // This time the adversary holds the TARGET — again the higher of the two.
+  const other = db.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Page" WHERE "id" = ${target.id} FOR UPDATE`;
+      await held;
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
+
+  await settle();
+  const racing = publishPage(asAisyah, page.id);
+  await settle();
+  await settle();
+
+  // This is the assertion that pins "including the publishing page's own row": with the own row
+  // left out of the lock list, the publish's first lock attempt is the target, it blocks
+  // immediately, and it holds nothing at all. Released in a `finally` for the reason the test
+  // above gives.
+  try {
+    expect(await lockedByAnother(page.id)).toBe(true);
+  } finally {
+    release();
+    await other;
+  }
+  published(await racing);
+  expect(await statusOf(target.id)).toBe("SUPERSEDED");
+});
+
+/**
+ * Atomicity across the cascade, staged: the target is soft-deleted while the publish waits for
+ * its row lock. The locking read deliberately does not filter `deletedAt`, so it hands back the
+ * row; the cascade's **write** carries `visiblePage()`, matches nothing, and the whole publish
+ * rolls back — version, page pointer, draft, relation rows and both audit rows.
+ *
+ * This is the only test that proves the transaction is all-or-nothing *through* the cascade, and
+ * it is the one that kills dropping `visiblePage()` from `applyCascade`: without it the publish
+ * would succeed and set a status on a page Task 12 promises is invisible.
+ */
+test("a soft delete of the cascade target landing mid-publish rolls the whole publish back", async () => {
+  const { space, page, aisyah, asAisyah } = await fixture({ docType: "ADR" });
+  const target = await otherPage({
+    spaceId: space.id,
+    createdById: aisyah.id,
+    slug: "adr-0030-topic-layout",
+    title: "ADR-0030 Topic layout",
+    docType: "ADR",
+    status: "ACCEPTED",
+  });
+  await declaring(page.id, ["status: ACCEPTED", `supersedes: ${target.path}`].join("\n"));
+
+  const before = await snapshot(page.id);
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const other = db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`UPDATE "Page" SET "deletedAt" = now() WHERE "id" = ${target.id}`;
+      await held;
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
+
+  await settle(); // the UPDATE holds the target's row lock
+  // The publish resolves the relation against a target that still looks live under MVCC, then
+  // blocks on the locking statement.
+  const racing = publishPage(asAisyah, page.id);
+  await settle();
+  await settle();
+
+  release();
+  await other;
+
+  expect(await racing).toEqual({ ok: false, reason: "not-found" });
+
+  // Nothing survived: this is the assertion a half-committing cascade fails.
+  expect(await snapshot(page.id)).toEqual(before);
+  expect(await db.pageRelation.count()).toBe(0);
+  expect(await db.auditLog.count()).toBe(0);
+  expect(await statusOf(target.id)).toBe("ACCEPTED");
 });
 
 /**

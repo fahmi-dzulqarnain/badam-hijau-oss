@@ -268,8 +268,15 @@ const guard = (
 /**
  * How a doc type reads in a sentence written for an author. `ADR` and `RFC` are read out as
  * letters, so they take "an"; `DOC` and `RUNBOOK` are read as words and take "a".
+ *
+ * **Exported for `publish.ts`'s cascade refusal**, which names the target's doc type in the same
+ * kind of sentence. Copying four characters would have been the smaller diff and the wrong one:
+ * this project has twice recorded that a rule honoured in two places gets quietly dropped by the
+ * third site to be written, and the first draft of that refusal already read "a ADR". The other
+ * site that gets it wrong is `validateTransition`'s own message, which is §6.1's text and not
+ * this task's to rewrite — reported rather than changed.
  */
-const article = (docType: DocType): string =>
+export const article = (docType: DocType): string =>
   docType === "ADR" || docType === "RFC" ? `an ${docType}` : `a ${docType}`;
 
 /**

@@ -1,4 +1,4 @@
-import type { DocStatus, Prisma, RelationType } from "@prisma/client";
+import type { DocStatus, DocType, Prisma, RelationType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { readableSpace } from "@/lib/authz/where";
@@ -8,12 +8,14 @@ import { defaultPublishStatus, validateTransition } from "@/lib/pages/transition
 import { stripControl } from "@/lib/text/control";
 import { splitFrontmatter, type FrontmatterErrorCode } from "@/lib/markdown/frontmatter";
 import {
+  KEY_FOR_RELATION,
   validateFrontmatter,
   type FrontmatterSchemaErrorCode,
   type ValidatedFrontmatter,
 } from "@/lib/lifecycle/schema";
 import { resolveRelations, type RelationRefusalCode } from "@/lib/lifecycle/resolve";
 import {
+  article,
   checkRelations,
   type CheckedRelation,
   type RelationGuardCode,
@@ -39,6 +41,17 @@ export type PublishErrorCode =
   | "no-draft"
   | "draft-is-not-a-destination"
   | "illegal-transition"
+  /**
+   * This module's own, and the only code Task 8 adds: a declared relation would cascade a
+   * status onto its target that the target's vocabulary cannot reach from where it is.
+   *
+   * Native here rather than imported, because the rule is this module's. `checkRelations`
+   * decides *whether a cascade is eligible to fire* and says in as many words that whether it
+   * may **land** is not its question; `validateTransition` answers that against
+   * `PUBLISHABLE_INTO`. Only the transaction that holds the target's row lock can ask it about
+   * the status the target is actually in, so the code belongs where the lock is.
+   */
+  | "cascade-illegal-transition"
   /** `src/lib/markdown/frontmatter.ts` — the block did not parse, or breached a cap. */
   | FrontmatterErrorCode
   /** `src/lib/lifecycle/schema.ts` — it parsed and the doc type does not accept it. */
@@ -164,6 +177,66 @@ type LockedDraft = { title: string; markdown: string };
 type RelationWriteClient = Pick<Prisma.TransactionClient, "pageRelation">;
 
 /**
+ * One relation edge leaving the page being published, as the audit trail records it.
+ *
+ * `toId`, not the reference the author wrote and not the target's path. The reference is a path
+ * that resolves differently over time — through a redirect, or not at all once a later move
+ * replaces it — and the path itself moves; the id is what the row held and the only thing that
+ * still names the same page a year later. It is also the only field an added and a removed entry
+ * can share: a removed row has no reference, because the frontmatter that declared it is gone.
+ */
+type RelationEdge = { type: RelationType; toId: string };
+
+/**
+ * What one publish did to this page's relation rows — Task 8's fourth decision.
+ *
+ * ## A removed relation IS audited, and so is an added one
+ *
+ * Task 7 recorded that a deleted `PageRelation` row leaves no trace, called it reconstructible
+ * from the version chain's stored frontmatter, and handed the judgement here. Two things
+ * decided it:
+ *
+ * - **"Reconstructible" is weaker than it sounds.** `PageVersion.frontmatter` stores the
+ *   *references* validation accepted — `decisions/adr-0031` — not the edges that were written.
+ *   Recovering an edge from them means re-resolving that path *as it would have resolved then*,
+ *   through `Redirect` rows a later move may have replaced and a later delete may have removed.
+ *   So the version chain reconstructs the author's **intent**, and the audit question is about a
+ *   **write**. They are not the same object, and only one of them is what Task 9's banner reads.
+ * - **Removal has a consequence nothing else records.** Dropping `supersedes:` deletes the row
+ *   and deliberately does *not* un-retire the target — reversing a cascade is a decision no
+ *   phase has taken, and inventing one here would be a second place a status is maintained. So
+ *   after a removal the target is `SUPERSEDED` with nothing left saying what superseded it, and
+ *   this row is the only account of how it got there.
+ *
+ * **Both directions, not only removal**, because a trail that records deletions and not
+ * insertions reads as though relations only ever disappear, and the diff costs one query either
+ * way. **Always present, even when both are empty**, for the reason `accessDetail` gives for its
+ * own fields: a key that appears on some rows and not others cannot be told from a key somebody
+ * forgot to plumb.
+ *
+ * ## Not its own audit action
+ *
+ * One row per mutation is this project's audit envelope, and a relation change is not a mutation
+ * of its own — it is part of the publish, by the same actor, in the same transaction, and it is
+ * meaningless without the version it accompanied. So it travels in `page.publish`'s `detail`.
+ * The **cascade** is the opposite case and gets its own row: it changes a *different page*, and
+ * `AuditLog` is indexed by `pageId` precisely so "what happened to this page" can be answered
+ * without reading every other page's rows.
+ */
+type RelationDiff = { added: RelationEdge[]; removed: RelationEdge[] };
+
+/**
+ * `type` and `toId` as one string, so a `Set` or a `Map` can key on an edge.
+ *
+ * NUL as the separator, written as an **escape** rather than as the literal byte it was until
+ * Task 8: a literal control character is invisible in a diff, and — measured on this file — it
+ * also made `rg` classify the whole module as binary and skip it silently, which is the exact
+ * failure mode PROGRESS's tooling-trap section is about. It cannot occur in a `RelationType` or
+ * a cuid, so no pair can collide by concatenation.
+ */
+const edgeKey = (edge: RelationEdge): string => `${edge.type}\u0000${edge.toId}`;
+
+/**
  * Makes the `PageRelation` rows leaving this page **exactly** the ones the frontmatter
  * declares — spec §9 step 4.
  *
@@ -227,17 +300,43 @@ type RelationWriteClient = Pick<Prisma.TransactionClient, "pageRelation">;
 async function replaceRelations(
   tx: RelationWriteClient,
   args: { fromId: string; relations: readonly CheckedRelation[] },
-): Promise<void> {
+): Promise<RelationDiff> {
   const { fromId } = args;
 
-  const byEdge = new Map<string, { toId: string; type: RelationType }>();
+  const byEdge = new Map<string, RelationEdge>();
   for (const relation of args.relations) {
-    byEdge.set(`${relation.type} ${relation.page.id}`, {
+    byEdge.set(edgeKey({ type: relation.type, toId: relation.page.id }), {
       toId: relation.page.id,
       type: relation.type,
     });
   }
   const declared = [...byEdge.values()];
+
+  // Read for the **record**, not for the write — Task 8's audit decision, see `RelationDiff`.
+  //
+  // The two statements below are unchanged and still key on `NOT` and `skipDuplicates`, because
+  // that is what leaves an unchanged row's `createdAt` alone. Rewriting them to delete the
+  // `removed` list and insert the `added` one would make this diff load-bearing for
+  // correctness, and "republishing unchanged relations touches neither the row nor its
+  // createdAt" would then be testing the diff rather than the statements.
+  //
+  // No permission predicate and no soft-delete filter, for the same reasons the two writes
+  // below carry none: it is keyed on `fromId`, the page this publish has already authorised and
+  // locked. It must be able to see a row pointing at a soft-deleted page, or removing one would
+  // go unrecorded — which is the case "a relation to a page deleted afterwards can still be
+  // removed by republishing without it".
+  const before = await tx.pageRelation.findMany({
+    where: { fromId },
+    // Explicit select, never `include`.
+    select: { toId: true, type: true },
+  });
+
+  const declaredKeys = new Set(declared.map(edgeKey));
+  const beforeKeys = new Set(before.map(edgeKey));
+  const diff: RelationDiff = {
+    added: declared.filter((edge) => !beforeKeys.has(edgeKey(edge))),
+    removed: before.filter((edge) => !declaredKeys.has(edgeKey(edge))),
+  };
 
   // Everything this page declared last time and does not declare now. With nothing declared
   // there is no `NOT` to write and every row leaving this page goes.
@@ -245,15 +344,344 @@ async function replaceRelations(
     where: declared.length === 0 ? { fromId } : { fromId, NOT: { OR: declared } },
   });
 
-  if (declared.length === 0) return;
-  await tx.pageRelation.createMany({
-    data: declared.map((edge) => ({ fromId, toId: edge.toId, type: edge.type })),
-    skipDuplicates: true,
+  if (declared.length > 0) {
+    await tx.pageRelation.createMany({
+      data: declared.map((edge) => ({ fromId, toId: edge.toId, type: edge.type })),
+      skipDuplicates: true,
+    });
+  }
+
+  return diff;
+}
+
+/** A `Page` row read under `FOR UPDATE`, for the cascade. */
+type LockedPage = { id: string; path: string; docType: DocType; status: DocStatus };
+
+/**
+ * A checked relation that **does** cascade, narrowed by the compiler rather than re-tested.
+ *
+ * `CheckedRelation.cascade` is nullable and the predicate that reads it is stated exactly once,
+ * at the `filter` in `publishPage`, as a type guard. So `planCascades` has no null branch to
+ * carry — which matters because a branch no test can reach is a branch nobody can trust, and
+ * "the relation does not cascade" is unreachable inside a function only reached for ones that do.
+ */
+type CascadingRelation = CheckedRelation & { cascade: DocStatus };
+
+/** A cascade that has been decided and may now be written. */
+type PendingCascade = {
+  target: LockedPage;
+  /** Where the target lands. Validated through `PUBLISHABLE_INTO`, never assumed. */
+  to: DocStatus;
+  /** Which declaration caused it — for the audit row, and for a refusal's message. */
+  type: RelationType;
+  ref: string;
+};
+
+/**
+ * Whatever can lock and update `Page` rows. Structural, and named `tx` for the reason every
+ * other client type here is: the soft-delete sweep in `src/lib/pages/visible.test.ts` matches
+ * `db.`/`tx.` calls, and Task 8 widened it to raw statements as well — the locking read below is
+ * a `tx.$queryRaw`, which no delegate pattern can see. That was the fifth time a guard in this
+ * project could not see a whole category, and the first time the category was found before it
+ * hid anything.
+ *
+ * `auditLog` is here only so `writeAudit` can be handed the same client — this module never
+ * touches that delegate itself, which `tests/integration/audit.test.ts` sweeps for.
+ */
+type CascadeClient = Pick<Prisma.TransactionClient, "page" | "$queryRaw" | "auditLog">;
+
+/**
+ * Locks every `Page` row this transaction will write, in ascending id order, and returns them.
+ *
+ * ## The order *is* the function
+ *
+ * Publish wrote exactly one `Page` row until now — its own — so no ordering question could
+ * arise, which is what Task 7 measured and recorded. A cascade writes a second one, and two
+ * ADRs superseding each other concurrently is the case: publish A wants rows A and B, publish B
+ * wants rows B and A, and in opposite orders that is a deadlock — Postgres kills one of them
+ * with a 40P01 that no branch here has an honest answer for. **Ascending page id**, and
+ * **including the publishing page's own row**, because A's own row is B's target and B's own row
+ * is A's target; ordering only the targets among themselves would leave exactly that cycle open.
+ *
+ * One statement rather than one per row, so there is no window between two locks for a competing
+ * transaction to slot into. `ORDER BY … FOR UPDATE` locks in sorted order rather than in
+ * whatever order the plan reads the heap in, because `LockRows` sits **above** `Sort` in the
+ * plan — checked with `EXPLAIN` on this statement, not assumed.
+ *
+ * `COLLATE "C"` makes that order byte order. Without it the sort follows the database's
+ * collation, so two deployments with different locales could lock in different orders — a
+ * property that is invisible in every test and arrives in production as a deadlock. Ids are
+ * cuids, so byte order is also what a JavaScript `.sort()` gives, which is what lets a test say
+ * which row is taken first.
+ *
+ * ## What it does not filter, and what it does not read
+ *
+ * **No `deletedAt` filter.** A target soft-deleted between resolution and this lock is caught by
+ * the *write* predicate instead — `visiblePage()` on the cascade's `updateMany`, which matches
+ * nothing and aborts the transaction — exactly as the page update catches a soft delete of the
+ * publishing page. Stating it here as well would be one rule in two places, and the copy that
+ * is a write predicate is the one that cannot be raced.
+ *
+ * **No permission predicate.** The argument is the cascade write's, and it is made there rather
+ * than twice.
+ *
+ * The publishing page's own row is locked and its columns are deliberately **unused**: the
+ * status this publish lands on was decided from the row read under the draft lock. It is in the
+ * list for the ordering and for nothing else, which is why the caller looks up targets by id
+ * rather than iterating what comes back.
+ */
+async function lockPagesForCascade(
+  tx: CascadeClient,
+  ids: readonly string[],
+): Promise<Map<string, LockedPage>> {
+  const rows = await tx.$queryRaw<LockedPage[]>`
+    SELECT "id", "path", "docType", "status"
+      FROM "Page"
+     WHERE "id" = ANY(${[...ids]})
+     ORDER BY "id" COLLATE "C"
+       FOR UPDATE`;
+  return new Map(rows.map((row) => [row.id, row]));
+}
+
+/**
+ * Decides every cascade this publish will apply — spec §9 step 5, the *decision* half.
+ *
+ * Called with the rows already locked, and **before anything is written**, for the reason this
+ * whole module is ordered the way it is: a refusal inside `$transaction` is a `return`, and
+ * returning commits. A cascade found illegal after the version insert could only abort by
+ * throwing a field error through a sentinel, and this task's refusal is an *expected* outcome,
+ * not an exceptional one.
+ *
+ * ## Three outcomes, and the middle one is the landmine
+ *
+ * `checkRelations` says whether a cascade is **eligible** — the type cascades and this publish
+ * reaches `ACCEPTED` — and says in as many words that whether it may **land** is not its
+ * question. It lands, or does not, according to `PUBLISHABLE_INTO`:
+ *
+ * - **Nothing to do.** The target is *already* at the cascade status. Not a transition and not a
+ *   refusal: no write, and no audit row, because nothing changed. This case is not an oddity —
+ *   it is what **every republish of an accepted ADR** looks like, and treating it as a
+ *   transition would ask `PUBLISHABLE_INTO` for `SUPERSEDED → SUPERSEDED`, which is terminal and
+ *   therefore forbidden. An ADR that superseded another could then never be republished again:
+ *   a typo fix would be refused for a cascade that had already happened.
+ * - **A legal transition.** Validated through `validateTransition`, so the cascade cannot set a
+ *   status the vocabulary forbids. §6.3's *"status is never maintained by hand in two places"*
+ *   is precisely about this: the cascade is the second place, and it asks the same table.
+ * - **A transition the vocabulary forbids** — the case Task 6 refused to decide and left here.
+ *   An ADR at `PROPOSED` cannot reach `SUPERSEDED`; nor can one at `DRAFT`, or at a terminal
+ *   status of its own.
+ *
+ * ## That last case refuses the whole publish, and does not skip the cascade
+ *
+ * Both options were open and this is the argument for refusing:
+ *
+ * - **Skipping is the divergence §6.3 exists to prevent.** It would write a `SUPERSEDES` row
+ *   from an `ACCEPTED` ADR and leave the target at `PROPOSED`. Task 9 derives "superseded by X"
+ *   from the row and the retired banner from the *status*, so the reader would be shown a page
+ *   that both is and is not superseded. One action, both sides — or neither.
+ * - **A skipped cascade is lost, not deferred.** Cascades fire from the *source's* publish.
+ *   Nothing re-runs them when the target's status later changes, so a cascade skipped once is
+ *   skipped for good unless a human happens to republish the source. Silence about a write that
+ *   will never happen is the worst of the available outcomes.
+ * - **The refusal is about something the author can fix, and it says which.** "This ADR
+ *   supersedes a proposal that was never accepted" is a real objection to the *document*: you
+ *   cannot retire a decision that was never in force. `related:`, or rejecting the proposal, or
+ *   accepting it first, are all one edit away — and publishing at `PROPOSED` is not blocked at
+ *   all, because no cascade is eligible there.
+ * - **It keeps one authority for the vocabulary.** If refusing turns out to be too strict — an
+ *   ADR that decides an `IN_REVIEW` RFC is the case most likely to bite — the fix is a row in
+ *   `PUBLISHABLE_INTO`, which is where §6.1 says the vocabulary lives. Skipping would instead
+ *   make the cascade a place where the vocabulary is quietly not enforced, and no table change
+ *   would ever be requested.
+ *
+ * ## At most one cascade per target, derived rather than asserted
+ *
+ * The map is keyed by target id and cannot lose an entry: only `SUPERSEDES` and `DECIDES`
+ * cascade, `SUPERSEDES` requires the target to share the source's doc type, and `DECIDES`
+ * requires the target to be an `RFC` and the source an `ADR`. So one page cannot be the target
+ * of both from one publish — an ADR's `SUPERSEDES` target is an ADR and its `DECIDES` target is
+ * an RFC. Same shape as walking only `SUPERSEDES` for cycles: the collision is
+ * *unrepresentable*, not merely unlikely.
+ */
+function planCascades(
+  locked: Map<string, LockedPage>,
+  relations: readonly CascadingRelation[],
+): { pending: PendingCascade[]; errors: PublishFieldError[] } {
+  const pending: PendingCascade[] = [];
+  const errors: PublishFieldError[] = [];
+
+  for (const relation of relations) {
+    const target = locked.get(relation.page.id);
+    if (target === undefined) {
+      // The row was in the lock list and did not come back, so it was **hard**-deleted between
+      // resolution and the lock. Unreachable through the product — nothing hard-deletes a
+      // `Page`, Task 12 is a soft delete — and kept as a throw rather than a `!` because the
+      // alternative is a `TypeError` with a worse message on a state that should be loud. It is
+      // the same event the page update's zero row count reports, so it gets the same answer
+      // rather than a second one.
+      throw new PageNoLongerPublishable(
+        `Cascade target ${relation.page.id} vanished mid-transaction`,
+      );
+    }
+
+    // Already there: not a transition, so not validated as one. See the docstring — this is
+    // every republish of an accepted ADR, and `SUPERSEDED → SUPERSEDED` is forbidden.
+    if (target.status === relation.cascade) continue;
+
+    // Through the same table `publishPage` used for its own transition. The status is the one
+    // read **under the lock**, not the one `resolveRelations` saw, so a publish that accepted
+    // the target while this transaction waited is taken into account; `docType` is read under
+    // the lock too, so the whole question is asked of one snapshot.
+    const transition = validateTransition({
+      docType: target.docType,
+      from: target.status,
+      to: relation.cascade,
+    });
+
+    if (!transition.ok) {
+      // `field: "markdown"` and the relation's own key, NOT the transition error's
+      // `field: "status"`: the status control belongs to the page being published and this
+      // fault is in a frontmatter line. The transition module's sentence is not reused either —
+      // it says "cannot be published into", and the target is not being published.
+      errors.push({
+        field: "markdown",
+        key: KEY_FOR_RELATION[relation.type],
+        code: "cascade-illegal-transition",
+        message:
+          `\`${relation.ref}\` is at ${target.status}, and publishing this page would move it ` +
+          `to ${relation.cascade}, which ${article(target.docType)} at ${target.status} cannot ` +
+          "reach. A document can only be retired from a status it was actually in force in — " +
+          `so accept \`${relation.ref}\` first, or retire it on its own page, or use ` +
+          "`related:` to point at it without retiring it.",
+      });
+      continue;
+    }
+
+    pending.push({
+      target,
+      to: transition.status,
+      type: relation.type,
+      ref: relation.ref,
+    });
+  }
+
+  return { pending, errors };
+}
+
+/**
+ * Writes one cascade and audits it — spec §9 step 5's write half, plus step 7 for the far side.
+ *
+ * ## Authorization: nothing beyond what publishing this page already required, and why
+ *
+ * This is Task 8's second decision, and the honest answer is that **no additional permission
+ * check belongs here — a second one could not be tested, because no viewer can reach this line
+ * for whom it would answer differently.** The chain:
+ *
+ * - `publishPage` has already required `PUBLISH` on the **source page's space**.
+ * - Every cascade target came from `resolveRelations`, whose queries each carry `readableSpace`
+ *   and `visiblePage` and are each scoped to `source.spaceId`; and a reference naming another
+ *   space is refused syntactically as `cross-space`. So in Phase 3 the target is **always in the
+ *   source's space** — two independent mechanisms say so.
+ * - The target's space therefore *is* the source's space, so `can(viewer, targetSpace, "EDIT")`
+ *   is the same call on the same space as the check already made. Stating it again is the
+ *   `resolveRedirect` mistake this project has recorded twice: a predicate written in two places
+ *   is a predicate neither copy can be tested for.
+ *
+ * **Same-space is what makes that safe, and it is exactly what a later phase will widen.** If
+ * cross-space relations are ever allowed, this argument collapses and the question becomes real:
+ * may publishing in space A retire a page in space B, and on whose authority? So this write
+ * carries `spaceId: page.spaceId` as a **shape** constraint — not a permission predicate, the
+ * split PROGRESS insists on — and it fails *closed*: a phase that widens resolution without
+ * revisiting this line gets a cascade that matches no row, a `PageNoLongerPublishable`, and a
+ * rolled-back publish. Loud, rather than a silent write across a space boundary.
+ *
+ * ## A cascade is never a way to discover that a page exists
+ *
+ * The plan's hard constraint, and it is delivered upstream rather than here: an unreadable or
+ * missing target is refused by `resolveRelations` with one shared `not-found` sentence, so no
+ * cascade is ever *computed* for a page the viewer cannot read. There is nothing left here to
+ * disclose — every id this function sees names a page the viewer resolved through a readable
+ * query, in a space they hold `PUBLISH` on.
+ *
+ * ## `visiblePage()` on the write, for the reason the page update carries it
+ *
+ * Not a restatement of resolution's filter: that one was evaluated before the lock and answers
+ * "was this a live page then". This is a **write predicate**, and it answers "is it still one" —
+ * so a soft delete committing while this transaction waited on the lock matches nothing, the
+ * count is zero, and the whole publish rolls back rather than setting a status on a page Task 12
+ * promises is invisible.
+ *
+ * ## The audit row is the target's, not the source's
+ *
+ * `pageId` is the **target**. `AuditLog` is indexed by `pageId` precisely so "what happened to
+ * this page" is answerable, and a page whose status changed with no row of its own would be a
+ * page whose history says nothing happened. `actorId` is the publisher, who did cause it, and
+ * `detail.byPageId`/`byVersionId` are what join this row back to the publish that fired it.
+ *
+ * `fromStatus`/`toStatus` rather than bare `from`/`to`, because `page.move` records a **path**
+ * transition under those names and one key must not mean two things — the same reason
+ * `page.publish` names them that way. `path` is stored for the reason every page audit stores
+ * it: the target can be moved afterwards, and then nothing on the row says where it was.
+ */
+async function applyCascade(
+  tx: CascadeClient,
+  args: {
+    cascade: PendingCascade;
+    viewer: Viewer;
+    /**
+     * The page being published, as it was read **under the draft lock**.
+     *
+     * One space id, taken from here rather than from the pre-lock authorisation read. They
+     * cannot differ — nothing moves a page between spaces — and two parameters holding one
+     * value is how they start to.
+     */
+    source: { id: string; path: string; spaceId: string };
+    versionId: string;
+  },
+): Promise<void> {
+  const { cascade, source } = args;
+
+  const cascaded = await tx.page.updateMany({
+    // `visiblePage` owns the top level; `spaceId` is a shape constraint and not a permission
+    // predicate. Neither helper is spread.
+    where: visiblePage({ id: cascade.target.id, spaceId: source.spaceId }),
+    // The status and nothing else. The target's `publishedVersionId` and `publishedAt` are
+    // untouched on purpose: no new version of the target was authored, and inventing one would
+    // put a version in its history that nobody wrote. Its last published `PageVersion.status`
+    // therefore keeps saying what the target was when it was last published, and `Page.status`
+    // says what it is now — which is the direction §6.3 asks for, since the page's status is
+    // what the reader and Task 9's banner read.
+    data: { status: cascade.to },
+  });
+
+  if (cascaded.count !== 1) {
+    throw new PageNoLongerPublishable(
+      `Cascade target ${cascade.target.id} stopped being writable mid-transaction`,
+    );
+  }
+
+  await writeAudit(tx, {
+    actorId: args.viewer.id,
+    action: "page.cascade",
+    // The target is in the source's space — that is what Phase 3 guarantees, and what makes
+    // this cascade need no permission check of its own.
+    spaceId: source.spaceId,
+    pageId: cascade.target.id,
+    detail: {
+      path: cascade.target.path,
+      fromStatus: cascade.target.status,
+      toStatus: cascade.to,
+      // Which relation retired it, so `SUPERSEDED` and `CLOSED` are distinguishable by cause.
+      relation: cascade.type,
+      byPageId: source.id,
+      byPagePath: source.path,
+      byVersionId: args.versionId,
+    },
   });
 }
 
 /**
- * Publishes a page: spec §9 steps 1–4 and 7, all or nothing, in one transaction.
+ * Publishes a page: spec §9 steps 1–5 and 7, all or nothing, in one transaction.
  *
  * ## Where the decisions happen, and why not where the plan draws step 4
  *
@@ -279,7 +707,7 @@ async function replaceRelations(
  *
  * ## What this deliberately does not do
  *
- * Spec §9 is eight steps and this implements five of them. The rest belong to later phases
+ * Spec §9 is eight steps and this implements six of them. The rest belong to later phases
  * and are marked `TODO(phase-N)` **at the point in the sequence where they go**, so the
  * order stays discoverable from the code — the way Phase 1 marked its audit wiring point in
  * `repo.ts`. They are not stubbed. An empty function named `applyRelations` that a future
@@ -319,6 +747,15 @@ async function replaceRelations(
  *
  * A soft delete arriving mid-transaction is handled by a write predicate rather than by a
  * second lock — see the page update.
+ *
+ * **Task 8's cascade adds the one thing this page-scoped reasoning did not cover: a second
+ * `Page` row.** A publish that retires another page writes to a row another publish may be
+ * writing to at the same time, and two ADRs superseding each other concurrently want the same
+ * two rows in opposite orders. That is the only ordering hazard in this module and it is closed
+ * by one statement — see `lockPagesForCascade`, which takes every row this transaction will
+ * write, this page's own included, in ascending id order before anything is written. The draft
+ * lock above is per-page and cannot join that cycle: two publishes of different pages hold
+ * different draft rows, and nothing else in the codebase locks a `PageDraft` row at all.
  *
  * ## `vanished` is real from here on
  *
@@ -526,6 +963,34 @@ export async function publishPage(
       });
       if (!checked.ok) return invalidAll(checked.errors);
 
+      // Spec §9 step 5's *decisions*, and the last thing that can refuse. Its writes are at the
+      // point in the sequence the spec puts them, below the relation upsert.
+      //
+      // The locks come first and the decision is taken against the rows they hold: a target's
+      // status can change while this transaction waits, and validating the cascade against the
+      // status `resolveRelations` saw would decide from a snapshot the write no longer matches.
+      //
+      // Nothing is locked when nothing cascades, which is deliberate rather than an
+      // optimisation: publish then writes exactly one `Page` row, as it did before Task 8, and
+      // there is no ordering question to answer. The lock list includes this page's **own** id
+      // whenever there is one to answer — see `lockPagesForCascade`.
+      const cascading = checked.relations.filter(
+        (relation): relation is CascadingRelation => relation.cascade !== null,
+      );
+      const pendingCascades: PendingCascade[] = [];
+      if (cascading.length > 0) {
+        const locked = await lockPagesForCascade(tx, [
+          page.id,
+          ...new Set(cascading.map((relation) => relation.page.id)),
+        ]);
+        const planned = planCascades(locked, cascading);
+        const [firstCascadeError, ...restCascadeErrors] = planned.errors;
+        if (firstCascadeError !== undefined) {
+          return invalidAll([firstCascadeError, ...restCascadeErrors]);
+        }
+        pendingCascades.push(...planned.pending);
+      }
+
       // Everything above this line is a read or a decision, and every rejection above
       // returns before a single row is written. That ordering is the cheap half of
       // atomicity; the transaction is the other half, and the page update below is the one
@@ -600,20 +1065,25 @@ export async function publishPage(
       await tx.pageDraft.delete({ where: { pageId: page.id }, select: { pageId: true } });
 
       // Spec §9 step 4. Resolved and checked above; this is the write, and it is a *replace*
-      // rather than an upsert — see `replaceRelations` for why removal is half the job.
-      await replaceRelations(tx, { fromId: page.id, relations: checked.relations });
+      // rather than an upsert — see `replaceRelations` for why removal is half the job. The diff
+      // it returns is for the audit row below and for nothing else.
+      const relationDiff = await replaceRelations(tx, {
+        fromId: page.id,
+        relations: checked.relations,
+      });
 
-      // TODO(phase-3): spec §9 step 5 — apply the lifecycle cascades of §6.3. A published
-      // ADR that supersedes another sets that ADR to `SUPERSEDED` in THIS transaction, so
-      // the two sides can never disagree.
-      //
-      // The input is already here and computed: every `checked.relations` entry carries
-      // `cascade`, the status Task 8 must set on `relation.page` — non-null only when this
-      // publish is landing on `ACCEPTED` and the relation type cascades at all, so Task 8 needs
-      // one branch rather than three. It is deliberately **not** acted on here: Task 8 owns the
-      // authorization of a write to a page the publisher may not be able to edit, the
-      // `PUBLISHABLE_INTO` check on the cascade's own transition, the ascending-page-id lock
-      // order that write introduces, and the audit row for the other side.
+      // Spec §9 step 5 — the lifecycle cascades of §6.3, in THIS transaction, so the two sides
+      // can never disagree. Decided above under the locks; this is only the write and its audit
+      // row. Each one is a `PageNoLongerPublishable` away from rolling the whole publish back,
+      // which is what "one action, both sides" has to mean when the second side can be raced.
+      for (const cascade of pendingCascades) {
+        await applyCascade(tx, {
+          cascade,
+          viewer,
+          source: { id: page.id, path: page.path, spaceId: page.spaceId },
+          versionId: version.id,
+        });
+      }
 
       // TODO(phase-4): spec §9 step 6 — refresh the search vector for this page.
 
@@ -634,6 +1104,19 @@ export async function publishPage(
           // would not be queryable across actions.
           fromStatus: page.status,
           toStatus: status,
+          // Task 8's audit decision, argued at `RelationDiff`: both directions, always present
+          // even when both are empty, and edges rather than the references that produced them.
+          relations: relationDiff,
+          // What this publish did to *other* pages, so the source's own history says a cascade
+          // happened without having to be joined to the target's rows. The rows those cascades
+          // wrote are the far side of the same event and carry the reverse pointer.
+          cascaded: pendingCascades.map((cascade) => ({
+            pageId: cascade.target.id,
+            path: cascade.target.path,
+            fromStatus: cascade.target.status,
+            toStatus: cascade.to,
+            relation: cascade.type,
+          })),
         },
       });
 

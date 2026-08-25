@@ -38,13 +38,27 @@ const SRC = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const ROOT = join(SRC, "..");
 
 /**
- * Any Prisma delegate call, on any model, through either the client or a transaction client.
+ * Any Prisma delegate call, on any model, through either the client or a transaction client —
+ * **or a raw statement**.
  *
  * Deliberately not `page`-specific: a query on `Redirect`, `PageVersion` or `PageDraft` can
  * reach `Page` rows through a relation filter without ever naming the `page` delegate, and
  * one already did.
+ *
+ * The raw alternative is the **fifth** widening, found by Task 8 rather than by a bug: a
+ * `$queryRaw`/`$executeRaw` reads and writes `Page` rows while naming no delegate at all, so a
+ * module whose only database access is raw SQL was invisible here. Every such module today
+ * (`create`, `move`, `delete`, `publish`) also makes a delegate call and so was registered by
+ * accident, which is the shape this guard has been caught in four times before. Task 8's
+ * `lockPagesForCascade` is a raw `SELECT … FOR UPDATE` on `Page`, so this time the category
+ * was closed before it hid anything.
+ *
+ * The two alternatives end differently, which is not an oversight: a delegate call is always
+ * `(`-terminated, while `$queryRaw` is a **tagged template** and is followed by a backtick or a
+ * type argument. Requiring `(` after both — the first version of this pattern — matched no raw
+ * statement in the codebase, and the test below is why that lasted one run instead of a phase.
  */
-const PRISMA_QUERY = /\b(?:db|tx)\.[a-z]\w*\.[a-z]\w*\(/;
+const PRISMA_QUERY = /\b(?:db|tx)\.(?:[a-z]\w*\.[a-z]\w*\(|\$(?:query|execute)Raw(?:Unsafe)?\b)/;
 
 function sweepForPrismaQueries(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -156,6 +170,21 @@ const MODULES: Record<string, Registration> = {
     //     removed by republishing without it".
     //   Restating `visiblePage()` on either write would be the `resolveRedirect` mistake: a
     //   predicate stated twice is a predicate neither statement can be tested for.
+    //
+    //   Task 8 added a FIFTH and SIXTH, both about the cascade, and one of them is the reason
+    //   the sweep pattern above grew a raw alternative:
+    //     `lockPagesForCascade` is a raw `SELECT … FOR UPDATE` on `Page` and deliberately does
+    //     NOT filter `deletedAt`. It takes locks and reads statuses; a target soft-deleted
+    //     while this transaction waited is caught by the write below rather than by a second
+    //     copy of the filter here. Pinned by "a soft delete of the cascade target landing
+    //     mid-publish rolls the whole transaction back", which fails if the *write* stops
+    //     filtering — the locking read alone would happily hand back the deleted row;
+    //     `applyCascade`'s `updateMany` carries `visiblePage()` as a write predicate, plus
+    //     `spaceId` as a shape constraint rather than a permission predicate — the cascade's
+    //     authorization is the `PUBLISH` check already made on the source's space, argued in
+    //     full at `applyCascade`, and restating it here is what could not be tested. The same
+    //     staged test covers the filter; "a relation naming a page in another space is refused,
+    //     and that page is not cascaded" covers the space bound from the resolution side.
     covered: ["publishPage"],
     exempt: [],
   },
@@ -339,6 +368,22 @@ test.each(PAGE_MODULES)(
     expect(stale, "these are listed but no longer exported — rename or drop them").toEqual([]);
   },
 );
+
+/**
+ * The companion every sweep in this project is now required to have: **a pattern that matches
+ * nothing looks exactly like a clean codebase.** The test above passes trivially if the regex is
+ * wrong, and the raw alternative is the half no registered module would prove on its own — every
+ * file that makes a raw call also makes a delegate call, so the first alternative would match it
+ * either way. Both halves are exercised here against literal source lines.
+ */
+test("the sweep pattern can see both a delegate call and a raw statement", () => {
+  expect(PRISMA_QUERY.test('await tx.page.updateMany({ where: visiblePage() })')).toBe(true);
+  expect(PRISMA_QUERY.test("const rows = await tx.$queryRaw<Row[]>`SELECT 1`")).toBe(true);
+  expect(PRISMA_QUERY.test("await db.$executeRaw`UPDATE \"Page\" SET x = 1`")).toBe(true);
+  // Not a database call: the guard must not start demanding registration for every method on
+  // anything named `db` or `tx`.
+  expect(PRISMA_QUERY.test("await tx.$disconnect()")).toBe(false);
+});
 
 test("visiblePage excludes soft-deleted rows and nests its extra conditions", () => {
   expect(visiblePage()).toEqual({ AND: [{ deletedAt: null }] });

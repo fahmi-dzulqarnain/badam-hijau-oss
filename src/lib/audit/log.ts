@@ -21,6 +21,17 @@ export type AuditAction =
   | "page.publish"
   | "page.delete"
   | "page.restore"
+  /**
+   * A page's status changed because **another** page was published — spec §6.3's cascade,
+   * added by Phase 3 Task 8.
+   *
+   * The only action so far whose actor did not act on the page the row names, which is exactly
+   * why it is its own action rather than a key inside `page.publish`'s detail: `AuditLog` is
+   * indexed by `pageId`, and a page that was retired without a row of its own would be a page
+   * whose history says nothing happened to it. The publish that caused it carries the mirror
+   * summary, so the join reads in both directions.
+   */
+  | "page.cascade"
   /** The Phase 1 debt: a super admin read a `MEMBERS` space they do not belong to (spec §8). */
   | "space.access";
 
