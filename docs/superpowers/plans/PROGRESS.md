@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **827 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **860 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -32,8 +32,9 @@ Two landmines carried in, both measured rather than guessed:
 
 | Task | State |
 |---|---|
-| **1. Plain text from Markdown** | **next** |
-| 2–7 | not started |
+| 1. Plain text from Markdown | ✅ |
+| **2. The index, and the trigger that maintains it** | **next** |
+| 3–7 | not started |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -82,6 +83,11 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **A test for "X is excluded" is vacuous if X could not have been included anyway.** Task 1's
+  test that a *second* `---` block is not treated as frontmatter first put prose between the two
+  blocks — which pushes the second off offset 0, where `remark-frontmatter` cannot match it
+  either way. The mutant that re-enabled the plugin passed 33 of 33. Butting the blocks together
+  separates the implementations. Same family as the non-vacuity companion.
 - **Any assertion about a list, on a route that renders the reader shell, must bind to that
   list's own markup.** The nav rail names every page in the space on the same HTML, so a
   title-shaped needle passes for free — Task 13's smoke pass had a banner check that stayed green
@@ -250,6 +256,16 @@ control characters as escapes, never as literals.** A literal NUL is invisible i
 turns one file into a blind spot for the tool you switched to in order to be safe.
 
 When a search must be trustworthy, read the file with Python and count.
+
+**A pipeline hides the exit code of its first command**, and this project has now been bitten by
+that three times in three different places: `npm run smoke | tail` reporting tail's status (Phase
+2 Task 15, which is why the smoke script's docstring warns about it), a background runner
+reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
+read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
+run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**Two `npm test` runs cannot overlap.** They share the one `_test` database, and the loser reports
+scores of spurious failures that look like real breakage.
 
 ## Phase 1 — foundations and reader
 

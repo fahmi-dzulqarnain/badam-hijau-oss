@@ -86,25 +86,51 @@ Settled in Phases 1–3. Changing one is a decision, not a detail.
 
 ---
 
-## Task 1: Plain text from Markdown
+## Task 1: Plain text from Markdown ✅
 
 Pure, no database. Everything else in the search half depends on this being faithful.
 
 **Files:** `src/lib/search/text.ts` + tests.
 
-- [ ] **Step 1: `searchTextOf(markdown)`**
+- [x] **Step 1: `searchTextOf(markdown)`**
 
 Strip to what a person would read aloud. Reuse the existing pipeline's parser rather than a
 second grammar — `splitFrontmatter` first, then a remark pass. Frontmatter is **not** indexed:
 it is metadata, and `supersedes: decisions/adr-0031` matching a search for "decisions" is noise.
 
-- [ ] **Step 2: Decide, and document, what each construct contributes**
+- [x] **Step 2: Decide, and document, what each construct contributes**
 
 Code fences, inline code, link text versus link URL, image alt text, table cells, HTML comments.
 Each is a judgement: link *text* is prose a person searches for, link *URLs* are not. State the
 table in the docstring, and let the tests read as that table.
 
-- [ ] **Step 3: The shapes that break naive strippers**
+**Three constructs this list omitted, decided anyway:** footnote *definitions* are in (visible
+prose at the foot of the article), footnote *reference markers* are out (they render as `[1]`),
+and link reference definitions — `[ref]: https://…` — are out (they render as nothing at all).
+
+**The two least obvious rows, and why they point opposite ways.** *Inline code is in, fenced code
+is out*, and that is the snippet-versus-index trade resolved in the snippet's favour twice.
+Inline code is a token inside a sentence, so dropping it indexes a hole and yields the snippet
+`Call  before rendering.` — and identifiers and error codes are the highest-value thing to search
+for in an engineering corpus. A fence is the reverse on both counts: removing it leaves the prose
+around it whole, while keeping it fills the index with `const`/`await`/`});` and hands
+`ts_headline` somebody's TypeScript as the page description.
+
+**A ```mermaid fence contributes nothing and needs no special case** — it is a `code` node. Its
+label prose is a real, accepted loss: recovering it means parsing Mermaid, which is the second
+grammar this task exists to refuse.
+
+**Headings stay in the body text**, even though Task 2 indexes them separately at weight B. That
+is deliberate overlap rather than the re-derivation Task 2 warns against: `collectHeadings` takes
+h2 and h3 only, so dropping headings here would leave an h1 or h4 indexed by **nothing**, and a
+match in a section title with no text for `ts_headline` to draw from.
+
+**"HTML contributes nothing" is a rule about a node, not about angle brackets.**
+`After <span>inline</span>.` parses as html/text/html, so `After inline.` survives — asserted
+against what `renderMarkdown` actually emits, because the plausible intuition ("strip the tags and
+what they wrap") is wrong.
+
+- [x] **Step 3: The shapes that break naive strippers**
 
 Task 2 measured three that go the opposite way from a line scanner's guess. Here the equivalents
 are a fence containing something that looks like a heading, a table whose cells contain pipes,
@@ -129,6 +155,17 @@ before building on it; if it cannot round-trip, say so and adjust rather than fi
 
 `setweight(title,'A') || setweight(headings,'B') || setweight(searchText,'C')`, on the row's own
 `INSERT OR UPDATE`. Weights come from §13.
+
+**This formula double-counts heading words**, at B and again at C, because Task 1 deliberately
+keeps headings in `searchText` — see its section for why removing them re-opens an h1/h4 hole and
+breaks snippets for title matches. The effect is a small extra rank push on a heading lexeme.
+Know it rather than discover it in Task 3, and if it must go, **the fix belongs in the trigger,
+not in the strip**.
+
+**`searchText` can legitimately be the empty string** — a page whose entire content is one Mermaid
+diagram. Publish refuses an empty *body*, but a body that is only a diagram is not empty. This
+step's `NOT NULL`/backfill and Task 3's `ts_headline` must both expect `""` rather than treat it
+as a failed strip.
 
 **Headings are already extracted server-side** by `collectHeadings` — do not re-derive them.
 
