@@ -13,9 +13,10 @@ on another — but within each half, order matters.
 ## 1. Register the application
 
 In the Entra admin center (or Azure portal → Microsoft Entra ID → App registrations),
-create a new registration for Badam. Single tenant — this is an internal tool, and a
-multi-tenant registration would accept sign-ins from outside the company with no domain
-check catching it until `ALLOWED_EMAIL_DOMAINS` (step 4).
+create a new registration for Badam. Single tenant, as defence in depth: the
+tenant-specific issuer in step 4 is what actually pins the tenant — Auth.js validates
+`iss`, and this app never talks to `/common` — so single-tenant is not the guarantee, it
+is what keeps the setup window before `ALLOWED_EMAIL_DOMAINS` is set from being wide open.
 
 Record the **Application (client) ID**, the **Directory (tenant) ID**, and generate a
 client secret (or use a certificate, if the deployment prefers one). These three values
