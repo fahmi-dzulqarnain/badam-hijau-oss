@@ -145,6 +145,23 @@ Settled in Phases 1–3. Changing one is a decision, not a detail.
 - `npm run plan:check` must report **0 drifted** before a task is closed.
 - Implementers create a new commit, never `--amend`, and stage explicit paths.
 
+**Editing a file an earlier plan quotes whole-file will trip `plan:check`, and the fix is not
+to re-sync that fence.** Found during Task 3: `src/lib/authz/where.ts` and
+`tests/integration/authz-where.test.ts` are quoted whole-file by the Phase 1 plan, so appending
+to them reported drift. Syncing the Phase 1 fence forward would be wrong — it would turn a
+"create" step into a rewrite that silently deletes the later addition, which is the exact
+failure `check-plan-fences.mjs`'s own docstring says it exists to prevent. Add a
+**supersession note** above the stale fence instead, naming the task that superseded it and
+pointing at the live file; the checker recognises those and reports them separately.
+
+Three later tasks in this phase will hit it, so expect it rather than rediscovering it:
+
+| Task | File | Quoted whole-file by |
+|---|---|---|
+| 14 | `src/lib/markdown/render.ts` | phase-1 plan |
+| 18 | `playwright.config.ts` | phase-1 plan |
+| 19 | `scripts/smoke.sh` | phase-1 plan (extended by phases 2 and 3) |
+
 ## File structure
 
 | File | Responsibility |
