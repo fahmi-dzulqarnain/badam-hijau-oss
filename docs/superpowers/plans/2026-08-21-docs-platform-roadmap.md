@@ -49,9 +49,26 @@ Phase 4 hydrates these by reading `textContent`, which **decodes the escaping** 
 receives the literal `</div><script>alert(1)</script>` as diagram source. Whether that
 executes is then entirely Mermaid's decision, not ours.
 
-So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`, which sanitises
-labels and blocks click handlers — not the default `"loose"`), and must not use
-`innerHTML` to move the source around. Treat the escaping in the document as protecting
+So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`) and must not use
+`innerHTML` to move the source around.
+
+> **Correction, measured in Phase 4 Task 5 against `mermaid@11.17.2`.** Two claims in the
+> sentence above were wrong, and the second one would have produced a **vacuous security test**.
+>
+> **`"strict"` is already Mermaid's default** — it is in `defaultConfig`, not `"loose"`. Pinning
+> it explicitly is still exactly right, because a default is a dependency's decision and this one
+> is load-bearing; but it is a *pin*, not a correction of an unsafe default.
+>
+> **And `securityLevel` does not decide whether a label is sanitised.** `sanitizeText` runs
+> DOMPurify at every level, so a `<script>` in a diagram label is stripped under `"loose"` too —
+> verified: the obvious hostile-label test **stays green** with the setting mutated to `"loose"`.
+> What the levels actually disagree about is URL handling:
+> `if (getConfig().securityLevel !== "loose") return sanitizeUrl(url)`. So the assertion that
+> earns its keep is `click A href "javascript:…"`, not a script tag in a label.
+>
+> Nor is the click *handler* half of it: a listener is attached only by the `bindFunctions` that
+> `mermaid.render` returns, and the hydration deliberately never calls it — an independent
+> barrier, which therefore cannot die with this constant either. Treat the escaping in the document as protecting
 the *document*, not as having sanitised the *diagram source*.
 
 ## Phase 2 landmine, measured during Phase 1

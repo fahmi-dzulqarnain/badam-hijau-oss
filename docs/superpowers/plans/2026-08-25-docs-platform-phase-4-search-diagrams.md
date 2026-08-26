@@ -47,9 +47,18 @@ A["&#x3C;/div>&#x3C;script>alert(1)&#x3C;/script>"]</div>
 
 Reading `textContent` **decodes that**, so Mermaid receives the literal
 `</div><script>alert(1)</script>` as diagram source. Whether it executes is then Mermaid's
-decision, not ours. Therefore: set `securityLevel: "strict"` explicitly — not the default
-`"loose"` — and never move the source with `innerHTML`. **The escaping in the document protects
-the document; it has not sanitised the diagram source.**
+decision, not ours. Therefore: set `securityLevel: "strict"` explicitly, and never move the source
+with `innerHTML`. **The escaping in the document protects the document; it has not sanitised the
+diagram source.**
+
+**Two things this landmine got wrong, both measured in Task 5, and the second is the important
+one.** `"strict"` is already Mermaid's default, so pinning it is a pin rather than a correction —
+still right, because a default is a dependency's decision to change. And **`securityLevel` does
+not decide whether a label is sanitised**: DOMPurify runs at every level, so the obvious
+hostile-label test **stays green with the setting mutated to `"loose"`**. The levels disagree
+about URL handling instead, so `click A href "javascript:…"` is the assertion that earns its
+keep. A security test that cannot fail when the setting it is about is weakened is worse than no
+test, because it reads as coverage.
 
 **Mermaid is 84 MB unpacked.** It must be a dynamic import, loaded only on a page that actually
 contains a diagram, and it must not enter the bundle of any route that does not.
@@ -403,36 +412,72 @@ dismissing on a first-line mismatch, so annotating a fence is meaningful rather 
 still reports (`49 in sync · 1 drifted`, naming the file).
 ---
 
-## Task 5: Mermaid hydration
+## Task 5: Mermaid hydration ✅
 
 **Files:** `src/components/Mermaid.tsx`, `package.json`, tests.
 
-- [ ] **Step 1: `securityLevel: "strict"`, stated explicitly and pinned by a test**
+- [x] **Step 1: `securityLevel: "strict"`, stated explicitly and pinned by a test**
 
 Not the default. A test asserting the configured value is the only thing standing between a
 dependency upgrade and a changed default.
 
-- [ ] **Step 2: Dynamic import, only where a diagram exists**
+- [x] **Step 2: Dynamic import, only where a diagram exists**
 
 84 MB unpacked. Assert it is absent from the bundle of a route with no diagram — `next build`'s
 output, not a claim.
 
-- [ ] **Step 3: Never `innerHTML` for the source**
+- [x] **Step 3: Never `innerHTML` for the source**
 
 Read `textContent`, hand the string to Mermaid, insert the returned SVG through the API Mermaid
 gives you. The roadmap's measurement is the test case: a label containing
 `</div><script>alert(1)</script>` must produce no script element and no executed alert.
 
-- [ ] **Step 4: A malformed diagram is an error in place, not a broken page**
+- [x] **Step 4: A malformed diagram is an error in place, not a broken page**
 
 §14: *"Renders as a code block with an inline error, rest of page unaffected."* One bad diagram
 must not take the article with it.
 
-- [ ] **Step 5: C4**
+- [x] **Step 5: C4**
 
 `C4Context` and `C4Container` are Mermaid diagram types, so they arrive with it — but they are
 what §12 names, so test one rather than assuming.
 
+
+**Theme: `theme: "base"` with `themeVariables` read from `getComputedStyle(:root)` at render
+time**, and a `prefers-color-scheme` change re-renders every diagram from the retained sources.
+Shiki's dual-palette trick does not transfer — Mermaid does colour arithmetic on `themeVariables`
+and bakes the results into a `<style>` block, so a CSS variable is not a value it can mix.
+`darkMode` is derived from the resolved `--ground`'s luma rather than from `matchMedia`, because
+`globals.css` has three ways to be dark and only one of them is a media query. `data-theme` is
+deliberately unwatched: nothing sets it, so watching it would be a control with no operator.
+
+One measured exception, left alone with reasons: a C4 diagram's shape fills come from
+`config.c4.person_bg_color` and forty siblings, with `!important`, not from `themeVariables`.
+Those colours *are* the notation — person, system, container and external each have one — they are
+mid-to-dark blues with white captions and legible on both palettes, and the diagram's background,
+edge labels and title still follow the tokens.
+
+**The bundle claim is checked against `next build`'s output and wired into `npm run build`**, with
+**two non-vacuity gates before the verdict**: a CodeMirror control that must be found eager on the
+editor route, and an assertion that mermaid is *present* in the build rather than merely absent
+from every route. The artifact is each route's `*_client-reference-manifest.js`, because under
+Turbopack `build-manifest.json` carries only the root shell (`pages: {}` for every app route) and
+`app-build-manifest.json` does not exist at all. Making the import static fails the build:
+`eager chunks 7 → 17` and four routes named.
+
+**Two more non-vacuity catches worth carrying.** "No `href` contains `javascript:`" was passing
+over an **empty list** — under `strict` the hostile URL yields an `<a>` with no `href` at all, so a
+safe `https://` link on the same diagram is the companion that makes the assertion mean something.
+And `.clickable` is not a guard: `setClickEvent` calls `setClickFun`, which returns early, and
+then applies the class unconditionally — an assertion about its absence fails against correct
+behaviour.
+
+**A real regression, found and fixed:** `authoring.spec.ts`'s preview-parity test became a race
+once both the reader and the preview pane hydrate. Settled both sides and normalised the
+`mermaid-svg-N` ids.
+
+**This task necessarily landed three of Task 6's diagram bullets**, because the mutation
+verification required the browser tests to exist here rather than a task later.
 ---
 
 ## Task 6: End-to-end
@@ -441,9 +486,9 @@ what §12 names, so test one rather than assuming.
 - [ ] A non-member searching the same word gets nothing.
 - [ ] A retired page appears below a live one for the same query.
 - [ ] Filters narrow, and a filtered search is a shareable URL.
-- [ ] A ```mermaid fence renders as an SVG; a hostile label executes nothing.
-- [ ] A malformed diagram shows its error and the rest of the page still reads.
-- [ ] Hostile content does not widen any new route.
+- [x] A ```mermaid fence renders as an SVG; a hostile label executes nothing. *(landed in Task 5 — see above)*
+- [x] A malformed diagram shows its error and the rest of the page still reads. *(landed in Task 5 — see above)*
+- [x] Hostile content does not widen any new route. *(landed in Task 5 — see above)*
 - [ ] Cleanup asserted — the suite compares dev-database counts before and after.
 
 ---

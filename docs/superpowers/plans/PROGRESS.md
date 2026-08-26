@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **931 vitest + 33 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **951 vitest + 40 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -36,8 +36,9 @@ Two landmines carried in, both measured rather than guessed:
 | 2. The index, and the trigger that maintains it | ✅ |
 | 3. The query | ✅ |
 | 4. The search route | ✅ |
-| **5. Mermaid hydration** | **next** |
-| 6–7 | not started |
+| 5. Mermaid hydration | ✅ |
+| **6. End-to-end** | **next** |
+| 7. Extend the smoke test | not started |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -266,6 +267,20 @@ that three times in three different places: `npm run smoke | tail` reporting tai
 reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
 read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
 run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**A security test that cannot fail when the setting it is about is weakened is worse than no
+test.** The roadmap said Mermaid's `securityLevel: "strict"` "sanitises labels", so the obvious
+assertion is a `<script>` in a diagram label. Measured in Phase 4 Task 5: DOMPurify runs at
+*every* level, so that test **stays green with the setting mutated to `"loose"`**. The levels
+disagree about URL handling — `if (securityLevel !== "loose") return sanitizeUrl(url)` — so
+`click A href "javascript:…"` is the assertion that earns its keep. (`"strict"` also turned out to
+be mermaid's *default*, so pinning it is a pin, not a correction of an unsafe default.)
+
+**A bundle-absence claim needs a presence gate beside it.** "Mermaid is in no route's eager
+bundle" passes identically when mermaid is not in the build at all, or when the manifest being
+read is the wrong one — under Turbopack, `build-manifest.json` carries only the root shell and
+`app-build-manifest.json` does not exist. The check asserts mermaid is *present*, and finds
+CodeMirror eager on the editor route as a control, before reporting a verdict.
 
 **Shipping a feature with nothing linking to it has now happened twice.** Phase 2's `movePage`
 went out as a library function with no caller and cost a whole extra task (14b) to reach; Phase 4's
