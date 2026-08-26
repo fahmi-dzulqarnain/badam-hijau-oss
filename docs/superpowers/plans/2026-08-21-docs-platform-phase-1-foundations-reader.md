@@ -5933,9 +5933,18 @@ cleaned up, which the Teardown step below does.
 > Phase 3's Task 13 then added a doc-lifecycle pass — publish an ADR, supersede it, confirm the
 > first is `SUPERSEDED` and still readable, confirm the generated index lists and filters both —
 > taking it to **62 checks**, extending `sweep()` to `PageRelation` and adding a `counts()`
-> contract read before and after.
-> Read `scripts/smoke.sh` for the current version. The sentence below claiming the fence is
-> byte-identical to the shipped file was true when written and is not now.
+> contract read before and after. Phase 4's Task 7 then added a search pass — publish a page,
+> find it by a word unique to it, retire it with a second publish and assert it now ranks below a
+> live match — taking it to **82 checks**. `counts()` was unchanged: Phase 4 adds columns and no
+> table.
+> Read `scripts/smoke.sh` for the current version: **this fence is superseded** and no longer
+> matches that file. The sentence below claiming it is byte-identical to the shipped script was
+> true when written and is not now.
+>
+> **Keep those two words inside the last twelve lines above the fence.** Until Phase 4's Task 7
+> extended this note, `isSuperseded`'s window reached the word `SUPERSEDED` in the Phase 3
+> sentence above by luck; four more lines of note pushed it out of reach and the fence dropped
+> straight into `1 drifted`, with `superseded` falling 23 to 22.
 
 **Two defects were baked into the fence below when it was first written**, both now fixed in
 it: three lines carried `'"'"'`-style shell-escaping artifacts left over from the heredoc that
