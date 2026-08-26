@@ -818,3 +818,80 @@
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+
+/*
+ * Rendered diagrams (Phase 4, Task 5) — spec §12 and §14.
+ *
+ * Appended here for the reason every block above it is: `doc.css` is imported by a layout and
+ * never by a page, because Phase 1 measured what a route importing its own stylesheet does —
+ * `.doc` computed `max-width: none` on a hard load and `820px` on a soft navigation to the same
+ * route. The editor's preview pane shares this file too, so a diagram looks the same in both.
+ *
+ * **`.mermaid-source` above stays exactly as it was, and that is the point.** It is now the
+ * *unhydrated* state: the dashed box showing the fence's text, which is what a reader with
+ * JavaScript disabled keeps, and what everyone sees for the moment before the 83 MB import lands.
+ * `DocBody` adds a second class rather than replacing it, so these rules win on specificity
+ * (`.body .mermaid-source.mermaid-ready` is 0,3,0 against 0,2,0) and the placeholder is a fallback
+ * rather than a flash of the wrong thing.
+ *
+ * **The horizontal-overflow class, seventh shape.** A diagram is the widest thing this application
+ * can put in the document, and the guard is two rules that do different jobs: `overflow-x: auto` on
+ * the box — inherited from `.mermaid-source` above — establishes a block formatting context whose
+ * width is its containing block's, so nothing inside it can widen the page; `max-width: 100%` on
+ * the SVG keeps it inside that box in the first place. Mermaid's own `useMaxWidth` default writes
+ * an inline `max-width: NNNpx` on the SVG, which **outranks any selector**, so the CSS here cannot
+ * be the only defence and the Playwright assertion measures `scrollWidth === clientWidth` on a
+ * deliberately wide diagram rather than trusting either rule.
+ */
+.body .mermaid-source.mermaid-ready {
+  padding: 6px 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  white-space: normal;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.body .mermaid-ready svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/*
+ * A diagram that did not parse. Amber and not red, matching `.retired` and `.del-error`: the
+ * document is intact and the sentence below says what is wrong, which is a thing to look at rather
+ * than an alarm. The source is kept visible because the person most likely to be reading it is the
+ * author who typed it.
+ */
+.body .mermaid-source.mermaid-failed {
+  padding: 11px 13px;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  white-space: normal;
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+}
+
+.body .mermaid-error {
+  margin: 0 0 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  /* The message carries Mermaid's parser output, which contains the author's own tokens — so it
+     is a user-typed string painted where the `.body` prose guard does not reach it. Same shape as
+     `.idx-note` echoing a query-string value. */
+  overflow-wrap: anywhere;
+}
+
+/* `.body pre` already scrolls and already carries the border this box now supplies; inside a failed
+   diagram it would be a box in a box. */
+.body .mermaid-failed pre {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+}
