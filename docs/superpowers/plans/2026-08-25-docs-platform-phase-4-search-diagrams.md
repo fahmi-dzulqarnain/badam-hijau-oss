@@ -56,8 +56,19 @@ contains a diagram, and it must not enter the bundle of any route that does not.
 
 **A stale index is invisible.** Every failure mode of search reads as "that page does not exist".
 The trigger exists so the vector cannot lag its row — but a test that only publishes and searches
-proves nothing about the writes that are *not* publishes. Prove the vector moves when a cascade
-retires a page and when a move rewrites a path.
+proves nothing about the writes that are *not* publishes.
+
+**This landmine originally named the wrong writes, and Task 2 measured it.** It said to prove the
+vector *moves* when a cascade retires a page or a move rewrites a path. Neither is an input:
+§13's formula has three terms — title, headings, body — and `status` and `path` are filters and
+addresses. Measured on the dev database, both leave the vector **byte-identical**, which is
+correct behaviour, so the right assertion for those two is that it comes out *unchanged* (each
+with a non-vacuity companion — the cascade test has to prove the target really reached
+`SUPERSEDED` first).
+
+What genuinely goes stale is a write to **`title` or `publishedVersionId`** that does not go
+through `publishPage` — a bare `UPDATE`, or a rollback repointing at an older version. Measured:
+a title change makes the vector follow. That is the pair worth pinning.
 
 **`ts_headline` runs on the stored text, and the stored text is not the document.** A snippet is
 what a person reads to decide whether to click; if the strip is lossy in a way that makes
@@ -148,8 +159,14 @@ The text on the version (it is a property of that published text); the vector on
 what a query scans, and `Page` is what carries `status`, `docType`, `spaceId` and `deletedAt`).
 
 `tsvector` is not a Prisma scalar — it needs `Unsupported("tsvector")` and the index must be
-`GIN`. **Measured on a throwaway database before anything was written, and triggers and indexes
-turn out to behave oppositely:**
+`GIN`.
+
+**This step originally said the GIN index must be "created in raw SQL". That instruction was
+wrong, and it named precisely the case Prisma drops.** The index is declared in `schema.prisma`
+and Prisma emits its own `CreateIndex`; only the trigger is hand-written inside the migration.
+
+**Measured on a throwaway database before anything was written, and triggers and indexes turn out
+to behave oppositely:**
 
 | Object | What `prisma migrate dev` does |
 |---|---|
@@ -162,7 +179,37 @@ trigger is hand-written **inside the migration**. The dangerous half is the one 
 a by-hand trigger works perfectly on the machine that created it.
 
 **Two triggers, with the weighting expressed once** so they cannot disagree — one on `Page` and
-one on `PageVersion`, because two of the three inputs live on the version.
+one on `PageVersion`, because two of the three inputs live on the version. The shared function is
+`IMMUTABLE`, and that is load-bearing: the two-argument `to_tsvector(regconfig, text)` is
+immutable, while the one-argument form is only `STABLE` because it reads
+`default_text_search_config` from the session.
+
+**Headings needed a new server-side entry point.** `collectHeadings` is a *hast* plugin that needs
+`rehypeSlug`'s ids, so it cannot be re-derived from mdast, and nothing stored it. The render
+pipeline's prefix was extracted so `headingsOf()` and `renderMarkdown()` share one processor —
+the indexed headings and the table of contents are therefore the same list **by construction**,
+not by an equivalence test that could go vacuous. It stops before `rehypeShiki`: **0.6 ms versus
+4.8 ms**, measured, which is what the publish transaction would otherwise pay while holding a row
+lock.
+
+**The backfill runs through the trigger rather than around it.** The migration ends with
+`UPDATE "Page" SET "searchVector" = NULL`, and the `BEFORE` trigger refills every row — so the
+backfill exercises the same code path every later write uses, and fails loudly if the trigger is
+broken. The text columns need remark, so a reindex script recomputes them and the version trigger
+carries the change onto `Page`; the seed calls it, so `db:seed`, smoke and E2E all close the gap
+without anyone remembering.
+
+**A real bug, found only because a test was added past the obvious case.** The reindex cursor read
+`versions[…]?.id`, and an `undefined` `after` drops the `id > …` filter — so the walk looped
+forever. The walk had only ever been exercised at one row; a 101-row test caught it as
+`{ scanned: 100, rewritten: 99 }`.
+
+**Four things named as untested rather than assumed:** concurrency between the reindex and a
+publish (there is an argument that no lock cycle exists, but this project's rule is that an
+argument is not a staged interleaving); `search_path = ''` under some poolers, since the trigger
+calls its function unqualified as every Prisma-generated object here does; whether the heading
+double-count at B and C measurably distorts ranking, which is a Task 3 question with real
+queries; and `ts_headline` over `searchText = ''`.
 
 **What is deliberately not in the vector**, each with a reason rather than an omission:
 

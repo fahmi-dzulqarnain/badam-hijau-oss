@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **882 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **883 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -264,6 +264,13 @@ that three times in three different places: `npm run smoke | tail` reporting tai
 reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
 read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
 run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**Know which columns actually feed a derived value before writing a test about staleness.** The
+Phase 4 plan told Task 2 to prove the search vector *moves* when a cascade changes `status` or a
+move rewrites `path`. Neither is an input — the vector has three terms and those are a filter and
+an address — and both leave it **byte-identical**, measured. The write that really goes stale is a
+`title` or `publishedVersionId` change outside `publishPage`. A staleness test aimed at the wrong
+column passes for the wrong reason.
 
 **Prisma treats triggers and indexes oppositely, and the dangerous half looks safe.** Measured in
 Phase 4 Task 2: a trigger created **in a migration** survives every later `migrate dev`, because
