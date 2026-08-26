@@ -10,7 +10,9 @@
 # Every later phase EXTENDS this script rather than replacing it: it is the one check that
 # answers "does this work from nothing", which is the question asked before a deploy and after
 # every dependency bump. Phase 2 added the authoring pass — create, save, publish, read, move,
-# follow, delete, 404 — over plain HTTP. Deliberately no browser: Playwright owns those.
+# follow, delete, 404 — over plain HTTP. Phase 3 added the lifecycle pass: publish an ADR,
+# supersede it, and confirm the first is retired, still readable, and listed beside its
+# replacement in the generated index. Deliberately no browser: Playwright owns those.
 #
 # The EXIT CODE is the contract. `npm run smoke | tail` reports tail's status, not this
 # script's; check `${PIPESTATUS[0]}` or do not pipe.
@@ -39,6 +41,20 @@ MOVED_SLUG="smoke-page-moved"
 # What the published body must contain when it is read back. Distinct from the title, so a
 # reader that renders the title and drops the document still fails.
 MARKER="Written by the cold-start smoke test."
+
+# The two ADRs the lifecycle pass publishes: one that ends up retired, one that retires it. Named
+# for what becomes of them rather than "one" and "two", because every assertion below is about
+# which of the two it is talking about, and `smoke-adr-two` in a failure message says nothing.
+# Both carry the `smoke-` slug prefix `sweep` keys on.
+ADR_RETIRED="smoke-adr-retired"
+ADR_LIVE="smoke-adr-replacement"
+ADR_RETIRED_TITLE="Smoke ADR that gets superseded"
+ADR_LIVE_TITLE="Smoke ADR that supersedes it"
+# Body text, distinct per page and distinct from the titles. The retired one's marker is what
+# proves §6.4's promise that a superseded document still reads: the banner can be right and the
+# body gone, and a check on the banner alone would not know.
+ADR_RETIRED_MARKER="This decision was in force until the cold-start smoke test replaced it."
+ADR_LIVE_MARKER="This decision replaced one, in a cold-start smoke test."
 
 cleanup() {
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null || true
@@ -118,6 +134,76 @@ body_has() { # needle label
 # leave the pipeline reporting the writer's SIGPIPE rather than the match.
 action_field() { # field-name
   sed -n "s/.*name=\"$1\" value=\"\([^\"]*\)\".*/\1/p" "$FORM" | sed 's/&quot;/"/g'
+}
+
+# The first space id the create form offers, read out of the form's own `<select>` in "$FORM".
+#
+# A cuid, so it cannot be hardcoded from the seed's key. Extracted rather than written out at
+# each call site: the authoring pass and the lifecycle pass both create pages, and a parse this
+# fiddly copied into the second one is the shape this project has three times watched two sites
+# agree on the day they were written and then drift.
+space_option() {
+  tr '<' '\n' < "$FORM" | awk '
+    /^select / && /name="spaceId"/ { in_select = 1; next }
+    in_select && /^\/select/ { exit }
+    in_select && /^option value="/ { sub(/^option value="/, ""); sub(/".*/, ""); print; exit }'
+}
+
+# Creates a page through `/new`, saves `markdown` into its draft, and leaves the new page's id in
+# `PAGE_ID` — empty if any step failed, so the caller branches on one variable.
+#
+# **A global rather than a value on stdout**, which is not a style choice: this function prints
+# named checks, and a `$(...)` around it would capture those `ok` lines into the variable and run
+# every `fail` in a subshell, where `FAILURES` is incremented and thrown away. The exit code is
+# the contract, and a check that cannot reach the counter is not a check.
+#
+# The form is fetched afresh on each call. `$ACTION_KEY` and the action id are build-time hashes
+# scraped from it, and reusing a `$FORM` left over from an earlier step would make this depend on
+# a file the caller cannot see it reading.
+author_page() { # slug title docType markdown-as-a-json-string
+  PAGE_ID=""
+  local location id space_id seen
+  curl -s -b "$JAR" -o "$FORM" "$BASE/new" || :
+  space_id="$(space_option)"
+  if [ -z "$space_id" ]; then
+    fail "$1: no space in the create form — /new rendered no spaceId options"
+    return 0
+  fi
+
+  # The 303 to `/edit/{id}` is `createPage`'s own redirect, and its Location header is where the
+  # new page's id comes from — the same way a browser learns it.
+  location="$(curl -s -b "$JAR" -c "$JAR" -o /dev/null -D - -X POST "$BASE/new" \
+    --form-string "\$ACTION_REF_1=" \
+    --form-string "\$ACTION_1:0=$(action_field '$ACTION_1:0')" \
+    --form-string "\$ACTION_1:1=$(action_field '$ACTION_1:1')" \
+    --form-string "\$ACTION_KEY=$(action_field '$ACTION_KEY')" \
+    --form-string "spaceId=$space_id" \
+    --form-string "parentId=" \
+    --form-string "title=$2" \
+    --form-string "slug=$1" \
+    --form-string "docType=$3" \
+    | sed -n 's/^[Ll]ocation: *//p' | tr -d '\r')"
+  id="${location#/edit/}"
+  if [ -z "$id" ] || [ "$id" = "$location" ]; then
+    fail "$1: create did not redirect to the editor (Location: ${location:-none})"
+    return 0
+  fi
+  ok "$1: created as $3 (303 -> $location)"
+
+  # The `updatedAt` the editor was served, which is what the autosave client sends back as
+  # `seen`. Sending `null` instead is a positive claim that no draft exists — `createPage` leaves
+  # one — and `decideSave` correctly answers 409 to that.
+  seen="$(curl -s -b "$JAR" "$BASE/edit/$id" \
+    | sed -n 's/.*updatedAt\\":\\"\([0-9T:.Z-]*\)\\.*/\1/p')"
+  if [ -z "$seen" ]; then
+    fail "$1: no draft timestamp in /edit/$id"
+    return 0
+  fi
+  ok "$1: the editor serves its draft"
+
+  api PUT "/api/drafts/$id" "{\"title\":\"$2\",\"markdown\":\"$4\",\"seen\":\"$seen\"}" \
+    200 "$1: document saved"
+  PAGE_ID="$id"
 }
 
 # Every row count in the development database, on one line.
@@ -256,51 +342,19 @@ ok "dev database before the passes: $BEFORE"
 
 sign_in "aisyah@example.com"
 
-# The space to create in. Its id is a cuid, so it cannot be hardcoded from the seed's key —
-# it is read out of the form's own `<select>`, which also proves the form offers a space at
-# all: `listEditableSpaces` drops a space this editor can read but not write, and an empty
-# select means the form renders a "nowhere to create a page" message instead of inputs.
+# That the form offers a space at all is its own check: `listEditableSpaces` drops a space this
+# editor can read but not write, and an empty select means the form renders a "nowhere to create
+# a page" message instead of inputs. `author_page` re-fetches the form and re-reads the same
+# `<select>` for the id it creates in; this asserts the property, that one uses the value.
 # `|| :` so a transport failure surfaces as the named check below rather than as `set -e`
 # abandoning the run before Teardown can sweep.
 curl -s -b "$JAR" -o "$FORM" "$BASE/new" || :
-SPACE_ID=$(tr '<' '\n' < "$FORM" | awk '
-  /^select / && /name="spaceId"/ { in_select = 1; next }
-  in_select && /^\/select/ { exit }
-  in_select && /^option value="/ { sub(/^option value="/, ""); sub(/".*/, ""); print; exit }')
-[ -n "$SPACE_ID" ] && ok "the create form offers a space to create in" \
+[ -n "$(space_option)" ] && ok "the create form offers a space to create in" \
   || fail "no space in the create form — /new rendered no spaceId options"
 
-# Create. The 303 to `/edit/{id}` is `createPage`'s own redirect, and its Location header is
-# where the new page's id comes from — the same way a browser learns it.
-CREATED=$(curl -s -b "$JAR" -c "$JAR" -o /dev/null -D - -X POST "$BASE/new" \
-  --form-string "\$ACTION_REF_1=" \
-  --form-string "\$ACTION_1:0=$(action_field '$ACTION_1:0')" \
-  --form-string "\$ACTION_1:1=$(action_field '$ACTION_1:1')" \
-  --form-string "\$ACTION_KEY=$(action_field '$ACTION_KEY')" \
-  --form-string "spaceId=$SPACE_ID" \
-  --form-string "parentId=" \
-  --form-string "title=Smoke page" \
-  --form-string "slug=$SLUG" \
-  --form-string "docType=DOC" \
-  | sed -n 's/^[Ll]ocation: *//p' | tr -d '\r')
-PAGE_ID="${CREATED#/edit/}"
-[ -n "$PAGE_ID" ] && [ "$PAGE_ID" != "$CREATED" ] \
-  && ok "created a page (303 -> $CREATED)" \
-  || fail "create did not redirect to the editor (Location: ${CREATED:-none})"
+author_page "$SLUG" "Smoke page" "DOC" "$MARKER\\n"
 
-if [ -n "$PAGE_ID" ] && [ "$PAGE_ID" != "$CREATED" ]; then
-  # The `updatedAt` the editor was served, which is what the autosave client sends back as
-  # `seen`. Sending `null` instead is a positive claim that no draft exists — `createPage`
-  # leaves one — and `decideSave` correctly answers 409 to that.
-  SEEN=$(curl -s -b "$JAR" "$BASE/edit/$PAGE_ID" \
-    | sed -n 's/.*updatedAt\\":\\"\([0-9T:.Z-]*\)\\.*/\1/p')
-  [ -n "$SEEN" ] && ok "the editor serves the new page's draft" \
-    || fail "no draft timestamp in /edit/$PAGE_ID"
-
-  api PUT "/api/drafts/$PAGE_ID" \
-    "{\"title\":\"Smoke page\",\"markdown\":\"$MARKER\\n\",\"seen\":\"$SEEN\"}" \
-    200 "draft saved"
-
+if [ -n "$PAGE_ID" ]; then
   # No body, and no `seen`: publish takes its content from the draft row. A save AFTER this
   # would be a `vanished` 409 rather than a create, because publishing deletes the draft.
   api POST "/api/pages/$PAGE_ID/publish" "" 200 "published"
@@ -337,6 +391,77 @@ if [ -n "$PAGE_ID" ] && [ "$PAGE_ID" != "$CREATED" ]; then
   expect_status "/engineering/$MOVED_SLUG" 404 "the deleted page 404s"
 else
   fail "authoring pass skipped: no page id to work with"
+fi
+
+step "Doc lifecycle"
+# Phase 3, Task 13. An ADR is published, a second ADR supersedes it, and the first is asked — in
+# a production build, from a cold start, over plain HTTP — to be `SUPERSEDED`, to still read, and
+# to be listed alongside its replacement in the generated index.
+#
+# **Both ADRs are fixtures this script created, and that is a cleanup decision.** A cascade is
+# the one write here that lands on a page the request never names, and a status written onto a
+# *seeded* page is the one thing `sweep` could not take back: there is no record of what that
+# page's status was before. So the page this pass retires is one it made, and the sweep removes
+# it whole.
+#
+# **`status:` is in the document, not in the request**, and that is the mechanism rather than a
+# shortcut. The publish route reads no body at all — the editor's status picker writes the
+# document's own `status:` line and lets the next publish read it — so a saved document carrying
+# `status: ACCEPTED` is exactly what that picker produces, reached without a browser.
+#
+# **`ACCEPTED` on the first publish of each, which is where the publish count comes from.** A
+# cascade fires only on a publish into `ACCEPTED` (an ADR published at `PROPOSED` records the
+# relation and leaves its target alone — correct, and not what this pass is checking), and it
+# must land a transition `PUBLISHABLE_INTO` allows, which for `SUPERSEDED` means the target is
+# `ACCEPTED` too. `ADR: DRAFT -> [PROPOSED, ACCEPTED]` lets each page get there in one publish.
+sign_in "aisyah@example.com"
+
+author_page "$ADR_RETIRED" "$ADR_RETIRED_TITLE" "ADR" \
+  "---\\nstatus: ACCEPTED\\n---\\n\\n$ADR_RETIRED_MARKER\\n"
+RETIRED_ID="$PAGE_ID"
+
+if [ -n "$RETIRED_ID" ]; then
+  api POST "/api/pages/$RETIRED_ID/publish" "" 200 "the first ADR published"
+  body_has '"status":"ACCEPTED"' "and landed at ACCEPTED, asked for by its own status: line"
+  expect_body "/engineering/$ADR_RETIRED" "$ADR_RETIRED_MARKER" "the first ADR reads"
+
+  author_page "$ADR_LIVE" "$ADR_LIVE_TITLE" "ADR" \
+    "---\\nstatus: ACCEPTED\\nsupersedes: $ADR_RETIRED\\n---\\n\\n$ADR_LIVE_MARKER\\n"
+  LIVE_ID="$PAGE_ID"
+fi
+
+if [ -n "$RETIRED_ID" ] && [ -n "${LIVE_ID:-}" ]; then
+  api POST "/api/pages/$LIVE_ID/publish" "" 200 "the superseding ADR published"
+  body_has '"status":"ACCEPTED"' "and it too landed at ACCEPTED"
+  # An EMPTY `dormant` is the cascade reporting that it fired. The same publish at `PROPOSED`
+  # answers 200 with the relation listed here and the other page untouched, so without this the
+  # pass could quietly decay into checking that a publish returns 200.
+  body_has '"dormant":\[\]' "the cascade fired rather than being reported dormant"
+
+  # §6.4, and the half of it that is easy to lose: retiring a document must not remove it.
+  expect_status "/engineering/$ADR_RETIRED" 200 "the superseded ADR still answers 200"
+  expect_body "/engineering/$ADR_RETIRED" "SUPERSEDED" "and carries the retired status"
+  expect_body "/engineering/$ADR_RETIRED" "This document has been superseded." \
+    "the banner says what happened"
+  expect_body "/engineering/$ADR_RETIRED" "Superseded by" "and names the replacement"
+  expect_body "/engineering/$ADR_RETIRED" "$ADR_LIVE_TITLE" "by title"
+  expect_body "/engineering/$ADR_RETIRED" "$ADR_RETIRED_MARKER" \
+    "with the body it was published with still whole"
+
+  # The stored direction of the same row, read from the other end.
+  expect_body "/engineering/$ADR_LIVE" "Supersedes" "the replacement lists the relation"
+  expect_body "/engineering/$ADR_LIVE" "$ADR_RETIRED_TITLE" "naming the page it retired"
+
+  # The generated index — spec §11. Both are listed, because a retired ADR is history and not a
+  # deletion, and the status filter separates them.
+  expect_body "/engineering/-/adrs" "$ADR_RETIRED_TITLE" "the ADR index lists the retired one"
+  expect_body "/engineering/-/adrs" "$ADR_LIVE_TITLE" "and the one that replaced it"
+  expect_body "/engineering/-/adrs?status=SUPERSEDED" "$ADR_RETIRED_TITLE" \
+    "filtering to SUPERSEDED keeps the retired one"
+  expect_absent "/engineering/-/adrs?status=SUPERSEDED" "$ADR_LIVE_TITLE" \
+    "and drops the one still in force"
+else
+  fail "doc lifecycle pass skipped: both ADRs are needed and one was not created"
 fi
 
 step "Bug reporting"
