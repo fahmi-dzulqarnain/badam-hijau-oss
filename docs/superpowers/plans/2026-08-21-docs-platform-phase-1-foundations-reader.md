@@ -985,6 +985,11 @@ export function needsAccessAudit(viewer: Viewer, space: SpaceRef): boolean {
 
 Separate file so `can.ts` stays free of database types and unit-testable in isolation.
 
+> **Superseded snapshot.** Phase 4's Task 3 appends `editableSpaceWhere` and `editableSpace`
+> to this file. Read `src/lib/authz/where.ts` for the current version. Syncing this fence
+> forward would turn this task's "create" step into a rewrite that deletes that later
+> addition.
+
 ```ts
 import type { Prisma } from "@prisma/client";
 import type { Viewer } from "./types";
@@ -1053,6 +1058,11 @@ the bypass described above — the only test that would have caught it. The seco
 predicate that disagrees with `can(..., "EDIT")` without a failure.
 
 `tests/integration/authz-where.test.ts`:
+
+> **Superseded snapshot.** Phase 4's Task 3 appends the `editableSpace` tests and their
+> `editSpace`/`memberViewer`/`isEditable` helpers to this file. Read
+> `tests/integration/authz-where.test.ts` for the current version. Syncing this fence forward
+> would turn this task's "create" step into a rewrite that deletes that later addition.
 
 ```ts
 import { beforeEach, expect, test } from "vitest";

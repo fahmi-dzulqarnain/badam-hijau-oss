@@ -40,3 +40,40 @@ export function readableSpace(
 ): Prisma.SpaceWhereInput {
   return { AND: [readableSpaceWhere(viewer), ...and] };
 }
+
+/**
+ * The edit predicate alone. Deliberately NOT exported, for the same reason as
+ * `readableSpaceWhere`: composing it by spread is an authorization bug tsc cannot see.
+ *
+ * The `isSuperAdmin` short-circuit is load-bearing and is the whole reason this cannot be
+ * written as `readableSpace(viewer, { memberships: { some: … } })`. That composition returns
+ * `{ AND: [{}, { memberships: … }] }` for a super admin — the membership filter standing
+ * alone — so a super admin with no row reads nothing, while `can()` says they may edit
+ * everything. `can.ts` already warns that these two mechanisms must change together.
+ *
+ * Note what is NOT here: `visibility: "ALL_STAFF"`. An ALL_STAFF space is readable by any
+ * signed-in user and editable by nobody who is not a member, which is the one place the two
+ * predicates must diverge.
+ */
+function editableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
+  if (viewer.isSuperAdmin) return {};
+  return {
+    memberships: { some: { userId: viewer.id, role: { in: ["EDITOR", "ADMIN"] } } },
+  };
+}
+
+/**
+ * The only sanctioned way to filter spaces by "this viewer may edit here". Returns the
+ * COMPLETE `where`, exactly like `readableSpace` — and like it, **must never be spread**, at
+ * any nesting depth. Pass it directly: `where: editableSpace(v, { id })`, or nested as
+ * `{ space: editableSpace(v) }`.
+ *
+ * Where both predicates are needed on one query they go in SEPARATE varargs of the composing
+ * helper, never in one object literal — two `space:` keys in one object silently lose one.
+ */
+export function editableSpace(
+  viewer: Viewer,
+  ...and: Prisma.SpaceWhereInput[]
+): Prisma.SpaceWhereInput {
+  return { AND: [editableSpaceWhere(viewer), ...and] };
+}
