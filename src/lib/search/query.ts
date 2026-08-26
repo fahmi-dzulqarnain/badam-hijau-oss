@@ -64,11 +64,14 @@ import type { Viewer } from "@/lib/authz/types";
  * All of the query's rules being readable in one `WHERE` clause is the smaller benefit; the
  * decisive one is that each rule can be shown to be doing its job.
  *
- * The same argument decides the join. `PageVersion` is joined for one reason — `ts_headline` needs
- * the stored strip — and an `INNER JOIN` would exclude unpublished pages *as a side effect of
- * wanting a snippet*, re-creating the exact unfalsifiability the trigger decision avoided. `LEFT`
- * makes the `WHERE` clause the only thing excluding a draft. The FK guarantees the row exists for
- * every page that passes that clause, so nothing downstream has to cope with a missing version.
+ * The same argument decides the join, and it is measured rather than argued. `PageVersion` is
+ * joined for one reason — `ts_headline` needs the stored strip — and an `INNER JOIN` would exclude
+ * unpublished pages *as a side effect of wanting a snippet*, re-creating the exact
+ * unfalsifiability the trigger decision avoided. **Measured: with the join made `INNER`, deleting
+ * the `WHERE` clause below leaves all 24 tests in `search-query.test.ts` green.** `LEFT` makes the
+ * `WHERE` clause the only thing excluding a draft, and deleting it then fails. The FK guarantees
+ * the version row exists for every page that passes the clause, so nothing downstream has to cope
+ * with a missing version — see `HitRow.headline` for the one line that acknowledges the type.
  *
  * ## Retired pages are demoted, not filtered — §6.4
  *
@@ -230,17 +233,40 @@ export type SearchResult =
       reason: "empty-query" | "no-terms";
     };
 
-/** The raw row, before space identity and the snippet are attached. */
+/**
+ * The raw row, and every field of a hit except the snippet is already on it.
+ *
+ * The space's key, name and visibility come out of the **same statement** as the page, through a
+ * join, rather than being looked up in a `Map` built from the readable-space read. That is not a
+ * style choice and it was not the first design: looking them up meant a `byId.get(row.spaceId)`
+ * whose miss had to do *something*, and the something — skip the row — was a second copy of the
+ * space filter, in TypeScript, applied after fetching. **Measured: with that lookup in place,
+ * deleting `spaceId = ANY(...)` from the SQL left all 24 tests green.** Exactly the
+ * `resolveRedirect` failure, arriving by the back door of a defensive line.
+ *
+ * So there is no lookup and nothing to skip. `Space` is joined for its columns only — the join
+ * carries no predicate and cannot drop a row, because `Page.spaceId` is `NOT NULL` with an FK —
+ * and `spaceId = ANY(...)` is the one and only thing bounding which spaces a hit can come from.
+ */
 type HitRow = {
   pageId: string;
   spaceId: string;
+  spaceKey: string;
+  spaceName: string;
+  spaceVisibility: "MEMBERS" | "ALL_STAFF";
   path: string;
   title: string;
   docType: DocType;
   status: DocStatus;
   publishedAt: Date | null;
   rank: number;
-  headline: string;
+  /**
+   * `null` only if the LEFT JOIN missed, which the published-version filter makes unreachable.
+   * Typed honestly anyway, and coalesced at the one use: without it, deleting that filter fails
+   * as a `TypeError` inside `segmentsOf` — measured — instead of as the assertion that names what
+   * actually went wrong, which is a draft appearing in results.
+   */
+  headline: string | null;
 };
 
 /**
@@ -302,30 +328,38 @@ export async function search(viewer: Viewer, query: SearchQuery): Promise<Search
   // The permission predicate, stated once, in Prisma, through the only sanctioned helper. Passed
   // whole and never spread, at any nesting depth. `spaceKey` rides along as an extra condition
   // so an unreadable key and an unknown key are the same answer.
+  //
+  // `id` and nothing else, deliberately. This read exists to produce the id list the SQL filter
+  // binds — and only that. Selecting the key and the name here too invites the row to be looked
+  // up from the result set later, and that lookup is a second copy of the space filter: see
+  // `HitRow`, where deleting the SQL clause with such a lookup in place was measured to leave
+  // every test green.
   const spaces = await db.space.findMany({
     where:
       spaceKey === undefined
         ? readableSpace(viewer)
         : readableSpace(viewer, { key: spaceKey }),
-    // Explicit select, never `include`. `visibility` is here for the access audit below.
-    select: { id: true, key: true, name: true, visibility: true },
+    // Explicit select, never `include`.
+    select: { id: true },
   });
-  const byId = new Map(spaces.map((space) => [space.id, space]));
 
   // Bound as an array parameter rather than interpolated. An empty array is not a special case:
   // `= ANY('{}')` matches no row, so a viewer who can read nothing finds nothing by the same
   // mechanism as everyone else, and there is no early return whose deletion would be invisible.
-  const spaceIds = [...byId.keys()];
+  const spaceIds = spaces.map((space) => space.id);
   const retired = [...RETIRED_STATUSES];
 
   const rows = await db.$queryRaw<HitRow[]>`
-    SELECT p."id"            AS "pageId",
-           p."spaceId"       AS "spaceId",
-           p."path"          AS "path",
-           p."title"         AS "title",
-           p."docType"::text AS "docType",
-           p."status"::text  AS "status",
-           p."publishedAt"   AS "publishedAt",
+    SELECT p."id"              AS "pageId",
+           p."spaceId"         AS "spaceId",
+           s."key"             AS "spaceKey",
+           s."name"            AS "spaceName",
+           s."visibility"::text AS "spaceVisibility",
+           p."path"            AS "path",
+           p."title"           AS "title",
+           p."docType"::text   AS "docType",
+           p."status"::text    AS "status",
+           p."publishedAt"     AS "publishedAt",
            ts_rank(p."searchVector", ${tsquery}::tsquery)
              * CASE WHEN p."status"::text = ANY(${retired}) THEN ${RETIRED_RANK_FACTOR}::float4
                     ELSE 1::float4 END AS "rank",
@@ -336,6 +370,9 @@ export async function search(viewer: Viewer, query: SearchQuery): Promise<Search
              ${HEADLINE_OPTIONS}
            ) AS "headline"
       FROM "Page" p
+      -- For its columns only. Page.spaceId is NOT NULL with an FK, so this join carries no
+      -- predicate and can drop no row — the space bound is the ANY(...) clause below, alone.
+      JOIN "Space" s ON s."id" = p."spaceId"
       -- LEFT, not INNER: see the module docstring. An inner join would exclude unpublished pages
       -- as a side effect of wanting a snippet, and the WHERE clause below would then be
       -- unfalsifiable.
@@ -353,30 +390,23 @@ export async function search(viewer: Viewer, query: SearchQuery): Promise<Search
      LIMIT ${MAX_SEARCH_RESULTS + 1}`;
 
   const truncated = rows.length > MAX_SEARCH_RESULTS;
-  const hits: SearchHit[] = [];
-  /** The spaces this search actually read something out of — the audit's subject, below. */
-  const read = new Set<string>();
-  for (const row of rows.slice(0, MAX_SEARCH_RESULTS)) {
-    // Every row's space came out of the readable set above, so this cannot miss. Skipping rather
-    // than asserting keeps a hypothetical miss a missing row instead of a 500 — but it is not a
-    // silent filter either: nothing else can put a row here.
-    const space = byId.get(row.spaceId);
-    if (space === undefined) continue;
-    read.add(row.spaceId);
-    hits.push({
-      pageId: row.pageId,
-      spaceKey: space.key,
-      spaceName: space.name,
-      path: row.path,
-      title: row.title,
-      docType: row.docType,
-      status: row.status,
-      isRetired: isRetired(row.status),
-      publishedAt: row.publishedAt,
-      rank: row.rank,
-      snippet: segmentsOf(row.headline),
-    });
-  }
+  const kept = rows.slice(0, MAX_SEARCH_RESULTS);
+
+  // A straight map: every field but the snippet is already on the row, and nothing here can
+  // decide a row does not belong. That is the property the `HitRow` docstring is about.
+  const hits: SearchHit[] = kept.map((row) => ({
+    pageId: row.pageId,
+    spaceKey: row.spaceKey,
+    spaceName: row.spaceName,
+    path: row.path,
+    title: row.title,
+    docType: row.docType,
+    status: row.status,
+    isRetired: isRetired(row.status),
+    publishedAt: row.publishedAt,
+    rank: row.rank,
+    snippet: segmentsOf(row.headline ?? ""),
+  }));
 
   // Spec §8's super-admin trace, on the one read surface that reaches into every space at once.
   //
@@ -389,10 +419,13 @@ export async function search(viewer: Viewer, query: SearchQuery): Promise<Search
   // Only spaces that actually **produced a hit**. Auditing the enumeration instead would write a
   // row for every `MEMBERS` space on every search, whether or not the search read anything out of
   // it — which is noise, and noise is how an audit table stops being read.
-  for (const spaceId of read) {
-    const space = byId.get(spaceId);
-    if (space !== undefined) await auditSpaceAccess(viewer, space);
-  }
+  const readFrom = new Map(
+    kept.map((row) => [
+      row.spaceId,
+      { id: row.spaceId, key: row.spaceKey, visibility: row.spaceVisibility },
+    ]),
+  );
+  for (const space of readFrom.values()) await auditSpaceAccess(viewer, space);
 
   return { ok: true, hits, truncated };
 }
