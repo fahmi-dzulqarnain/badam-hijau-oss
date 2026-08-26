@@ -169,6 +169,12 @@ test("nothing typed, nothing searchable, and nothing found say three different t
   await page.goto(`/search?q=${NEEDLE.body}`);
   const noHits = await page.locator(".q-empty").innerText();
 
+  // **This line is weaker than it looks, and mutation testing is what said so.** Collapsing
+  // `no-terms` into the no-hits branch leaves the two sentences *distinct* — one quotes `...` and
+  // the other quotes the needle — so the set is still size 3 and this assertion passes. It kills
+  // only the collapse that produces byte-identical text. The substring assertions below are what
+  // actually killed the mutant: the `no-terms` page read "No page matches “...”.", which is the
+  // exact lie the plan names.
   expect(new Set([nothingTyped, noTerms, noHits]).size, "three outcomes collapsed").toBe(3);
   expect(nothingTyped).toContain("Nothing typed yet");
   expect(noTerms).toContain("There is nothing to search for in “...”");
