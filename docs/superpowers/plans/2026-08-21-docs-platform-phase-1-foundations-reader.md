@@ -369,6 +369,13 @@ is idempotent so it is safe to re-run.
 This replaces the `docker-compose.yml` the plan originally called for. It is committed so
 the next developer can reproduce the database without guessing.
 
+> **Superseded snapshot.** The script has since gained a drift check: when `.env.test`
+> already exists it reports keys that `.env.example` has and it lacks. That absence hid a real
+> bug — a truthy `AUTH_URL` in a freshly generated `.env.test` broke three tests in
+> `src/lib/auth/providers.test.ts`, while every existing checkout stayed green because its file
+> predated the key. Read `scripts/setup-db.sh` for the current version; syncing this fence
+> forward would turn this task's "create" step into a rewrite that deletes that check.
+
 ```bash
 #!/usr/bin/env bash
 # Creates the badam role and its two databases on a local Postgres.
