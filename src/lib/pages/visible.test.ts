@@ -326,6 +326,26 @@ const MODULES: Record<string, Registration> = {
     covered: ["listDocTypePages"],
     exempt: [],
   },
+  "src/lib/search/reindex.ts": {
+    load: () => import("@/lib/search/reindex"),
+    // Soft-delete tests: tests/integration/search-vector.test.ts. Phase 4 Task 2's backfill. It
+    // reads `PageVersion` and reaches `Page` only through the `page_search_vector_from_version`
+    // trigger — no `Page` row is named anywhere in the module, which is the shape this sweep was
+    // widened for and a shape it still cannot see on its own.
+    //
+    // It carries **no** `visiblePage()` and the absence is pinned rather than merely allowed:
+    //   "the reindex covers a soft-deleted page's version too" fails outright if a filter is
+    //   added — a page soft-deleted before the backfill would come back from Task 12's restore
+    //   searchable by title and nothing else, with nothing saying so. That is the same direction
+    //   `move.ts`'s subtree read and `delete.ts`'s subtree read both go, and for the same
+    //   reason: a soft-deleted row is a row that is coming back.
+    //
+    // It also carries no permission predicate. There is no viewer: it is a whole-corpus
+    // maintenance pass, it returns two integers and names no page, and the readability question
+    // is asked once, at query time, in Task 3.
+    covered: ["reindexSearchText"],
+    exempt: [],
+  },
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.

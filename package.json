@@ -12,7 +12,8 @@
     "test:e2e": "playwright test",
     "smoke": "./scripts/smoke.sh",
     "plan:check": "node scripts/check-plan-fences.mjs",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reindex": "tsx prisma/reindex.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

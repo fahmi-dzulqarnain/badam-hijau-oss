@@ -1,6 +1,7 @@
 import { PrismaClient, type DocStatus, type DocType } from "@prisma/client";
 import { defaultPublishStatus, publishableStatuses } from "../src/lib/pages/transition";
 import { article } from "../src/lib/lifecycle/relations";
+import { reindexSearchText } from "../src/lib/search/reindex";
 
 const db = new PrismaClient();
 
@@ -338,6 +339,25 @@ async function main() {
     authorId: fahmi.id,
     publishedAt: publishedAtFor(ENGINEERING_PAGES.length),
   });
+
+  // The search index's text half, for every version this run wrote and every version an
+  // earlier run wrote before the columns existed.
+  //
+  // Here rather than inside `publishSeedVersion` for the same reason the status repair above
+  // exists: `npm run smoke` and the E2E suite re-seed `badam` without dropping it, so a fix
+  // applied only on `create` helps a fresh database and leaves a stale one stale forever. The
+  // six versions this seed wrote before Phase 4 carry the `''` default, and `''` on a published
+  // version is a page searchable by title with a body nobody can find.
+  //
+  // Idempotent by comparison, not by flag: it re-strips every version and writes only the ones
+  // that disagree, so a second seed rewrites nothing and fires no trigger — which is what keeps
+  // re-seeding free of churn, the property this file already had to be taught once.
+  const reindexed = await reindexSearchText(db);
+  if (reindexed.rewritten > 0) {
+    console.log(
+      `[seed] reindexed ${reindexed.rewritten} of ${reindexed.scanned} versions' search text.`,
+    );
+  }
 
   console.log(
     `Seeded 2 spaces and ${ENGINEERING_PAGES.length + 1} pages.`,
