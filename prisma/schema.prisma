@@ -137,6 +137,10 @@ model Attachment {
   drivePath    String
   filename     String
   mimeType     String
+  // Int, not BigInt, which caps usable size just under 2GB. MAX_UPLOAD_BYTES defaults to
+  // 512MB so there is headroom, but raising it past 2^31-1 is a column-type migration rather
+  // than a config change — and BigInt maps to a JS `bigint`, which `JSON.stringify` throws
+  // on, so every response carrying this field would then need a cast at the boundary.
   sizeBytes    Int
   eTag         String?
   // PENDING from the moment the upload session is minted. The browser uploads directly to
@@ -147,15 +151,23 @@ model Attachment {
   createdAt    DateTime        @default(now())
   deletedAt    DateTime?
 
-  // Cascade, matching Page's own relation to Space: without it, hard-deleting a space is
-  // blocked by Prisma's Restrict default on a required relation. Deliberately the opposite
-  // of BugReport, which carries no foreign keys because its value is highest once the page
-  // is gone — an attachment is worthless without its page.
+  // Cascade: without it, hard-deleting a page is blocked by its own attachments, via Prisma's
+  // Restrict default on a required relation — the same reasoning that makes Page cascade from
+  // Space. Deliberately the opposite of BugReport, which carries no foreign keys at all
+  // because its value is highest once the page is gone. An attachment is worthless without
+  // its page. `uploadedBy` takes the Restrict default instead, matching BugReport.reporter,
+  // PageVersion.author and Page.createdBy — a person is not deleted out from under their work.
   page       Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
   uploadedBy User @relation("AttachmentUploader", fields: [uploadedById], references: [id])
 
   @@index([pageId])
+  // The sweep's abandoned-upload pass: `state = 'PENDING' AND createdAt < now() - 24h`.
+  // Equality then range, which is the column order a composite index wants.
   @@index([state, createdAt])
+  // The sweep's purge pass — `deletedAt` older than the retention window — which is
+  // selective. NOT the read path, and do NOT delete this on the strength of Page's note
+  // below: that measurement is about `deletedAt IS NULL`, which matches most of the table and
+  // seq-scans either way. This index serves the inverse query, exactly as Page's own does.
   @@index([deletedAt])
 }
 
