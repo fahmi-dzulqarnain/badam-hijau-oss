@@ -185,23 +185,50 @@ result has the title as **one** key and no injected second key. A test that only
 
 ---
 
-## Task 2: Where the file goes
+## Task 2: Where the file goes ✅
 
 Pure. Separate from Task 1 because path safety is its own argument.
 
 **Files:** `src/lib/git/paths.ts` + tests.
 
-- [ ] **Step 1: `mirrorPathOf(root, spaceKey, path)`**
+- [x] **Step 1: `mirrorPathOf(root, spaceKey, path)`**
 
 `content/<space-key>/<path>.md`. Resolve, then **verify containment** under the root and refuse
 otherwise. Refuse, do not sanitise: a path that needed sanitising is a bug upstream, and silently
 rewriting it hides that.
 
-- [ ] **Step 2: Feed it the things that escape**
+- [x] **Step 2: Feed it the things that escape**
 
 `..`, an absolute path, a space key with a slash, an empty path, a path that normalises to the
 root itself. Each is a refusal with a reason. Pair with the ordinary case so the test is not
 passing because everything is refused.
+
+**The order of two operations is the whole guard, and this is the finding of the task.** `".."`
+plus `".md"` is `"...md"` — a legal filename that resolves **inside** the space directory. So
+appending the extension *before* resolving accepts a traversal with the containment check fully
+present and writes junk: measured, `/srv/badam/content/engineering/...md` where resolving first
+gives `/srv/badam/content.md` and a refusal. `.md` is appended after resolution, and that order is
+load-bearing rather than stylistic.
+
+**Containment is against the space directory, not the working tree.** `../handbook/welcome` never
+leaves `content/`, so a tree-level check accepts one space overwriting another space's file. There
+is deliberately no separate "is absolute" or "contains `..`" test beside it — containment refuses
+both, and a second copy would make the first deletable with the suite still green.
+
+**Two limits left to the layer that knows them, as decisions rather than omissions.** Total path
+length: per-component is safe (`SLUG_MAX_LENGTH` 80 against a measured `NAME_MAX` of 255) but the
+total is not (`MAX_PATH_BYTES` 2000 plus `.md` plus the root, against a measured `PATH_MAX` of
+**1024** on darwin). A guessed cap would refuse a page that published fine, so `ENAMETOOLONG`
+carries the real limit into the job's retry path. And **no case folding**: a fold collision is a
+property of *two* space keys and this function sees one, while refusing uppercase would close the
+ASCII half and leave NFC/NFD and dotless `ı` open — this project's most repeated failure shape. The
+check that closes it is a folded uniqueness constraint where space keys are created, which is
+**Phase 6's**, and `Engineering` versus `engineering` is two rows sharing one directory on a
+case-insensitive filesystem until then.
+
+**A correction to this plan's assumption about macOS:** NFD normalisation of filenames is HFS+
+behaviour. Measured on this machine's APFS, it is normalisation-*insensitive* but byte-preserving —
+a file written NFC is found under NFD, and `readdir` returns the bytes as written.
 
 ---
 
