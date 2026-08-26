@@ -68,7 +68,7 @@ import type { Viewer } from "@/lib/authz/types";
  * joined for one reason — `ts_headline` needs the stored strip — and an `INNER JOIN` would exclude
  * unpublished pages *as a side effect of wanting a snippet*, re-creating the exact
  * unfalsifiability the trigger decision avoided. **Measured: with the join made `INNER`, deleting
- * the `WHERE` clause below leaves all 24 tests in `search-query.test.ts` green.** `LEFT` makes the
+ * the `WHERE` clause below leaves the whole of `search-query.test.ts` green.** `LEFT` makes the
  * `WHERE` clause the only thing excluding a draft, and deleting it then fails. The FK guarantees
  * the version row exists for every page that passes the clause, so nothing downstream has to cope
  * with a missing version — see `HitRow.headline` for the one line that acknowledges the type.
@@ -79,6 +79,46 @@ import type { Viewer } from "@/lib/authz/types";
  * of §6.4's six names living in `src/lib/pages/transition.ts`, and a second copy in SQL would go
  * stale the first time the vocabulary grows a way to retire a document. See
  * `RETIRED_RANK_FACTOR` for why the multiplier is what it is.
+ *
+ * ## The heading double-count does NOT distort ranking, and here are the numbers
+ *
+ * Task 2 left this open for Task 3 to answer with real queries. `searchTextOf` keeps heading text
+ * in the body strip, so a heading's words are indexed at `B` and again at `C`; Task 2 asked
+ * whether that measurably changes an ordering, and said that if it does the fix belongs in the
+ * trigger — `setweight(ts_delete(body, heading_lexemes), 'C')` — and not in the strip.
+ *
+ * **It does not, and it cannot for a single-term query.** Measured against the seeded corpus, with
+ * both formulas built from the same three stored columns: 16 real queries drawn from the seeded
+ * titles, headings and prose, **0 order changes and 0 result-set changes.** Individual ranks move
+ * by up to 27.7%, and no pair of pages swaps.
+ *
+ * Then the structural reason, because 16 queries over 6 pages is an absence and not a proof.
+ * `ts_rank` saturates in word frequency, and the bands it saturates into do not overlap:
+ *
+ * | Quantity | Value |
+ * |---|---|
+ * | One `C`-band hit | 0.121585 |
+ * | `C` band ceiling — the word repeated 1000 times | 0.199524 |
+ * | One `B`-band hit, *without* the double count | 0.243171 |
+ * | One `B`-band hit, *with* it | 0.273567 (+12.5%) |
+ * | `B`+`C` ceiling, 40 heading occurrences | 0.395488 |
+ * | One `A`-band hit | 0.607927 |
+ *
+ * The double count only ever adds `C` positions for a lexeme that is already at `B`, so it can
+ * only ever favour a page whose match is in a heading — the same direction the `B` weight already
+ * points. And it cannot cross a band boundary in either direction: no amount of body repetition
+ * reaches 0.243171, so a body match cannot be overtaken *because* of the extra positions, and the
+ * whole `B`+`C` band tops out at 0.395488, well under a single title hit. The inflation is also
+ * self-limiting — 12.5% at one occurrence, 1.9% at eight, 0.4% at forty — because the positions it
+ * adds are the ones saturation discounts most.
+ *
+ * For scale: the demotion `RETIRED_RANK_FACTOR` applies is x0.4. The double count is worth at most
+ * x1.125. It cannot interact with §6.4's ordering either.
+ *
+ * **So the trigger is left alone.** A `ts_delete` in it would cost a `to_tsvector` and an array
+ * aggregate on every `Page` write to change no ordering, and it would remove the property Task 1
+ * wanted: an h1 or an h4 is indexed by the body strip and by nothing else, since `collectHeadings`
+ * takes h2 and h3 only.
  *
  * ## Not `React.cache()`d
  *
@@ -241,7 +281,8 @@ export type SearchResult =
  * style choice and it was not the first design: looking them up meant a `byId.get(row.spaceId)`
  * whose miss had to do *something*, and the something — skip the row — was a second copy of the
  * space filter, in TypeScript, applied after fetching. **Measured: with that lookup in place,
- * deleting `spaceId = ANY(...)` from the SQL left all 24 tests green.** Exactly the
+ * deleting `spaceId = ANY(...)` from the SQL left the whole of
+ * `tests/integration/search-query.test.ts` green.** Exactly the
  * `resolveRedirect` failure, arriving by the back door of a defensive line.
  *
  * So there is no lookup and nothing to skip. `Space` is joined for its columns only — the join

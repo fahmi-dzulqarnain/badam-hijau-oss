@@ -238,6 +238,34 @@ test("a title match on a page with prose gets an unmarked opening as its snippet
   expect(textOf(hits[0]!)).toContain(HEADING_WORD);
 });
 
+/**
+ * A heading match gets a **marked** snippet, which is the double count's whole benefit.
+ *
+ * Task 3 measured that the heading double-count at `B` and `C` changes no ordering (the numbers
+ * are in the module docstring), so the trigger is left alone. This test guards the other half of
+ * that decision: heading text is in `searchText`, which is the only text `ts_headline` can quote
+ * from, so a match in a section title has prose to be highlighted in.
+ *
+ * Apply the de-duplication in the **strip** instead of in the trigger — which Task 1 and Task 2
+ * both warn against — and this fails: the snippet loses its marked run and a heading match reads
+ * as a page whose snippet has nothing to do with the query.
+ */
+test("a heading match is marked in the snippet, not just counted in the rank", async () => {
+  const f = await fixture();
+  await f.live({
+    slug: "hydrant-ledger",
+    title: "Depot procedure",
+    markdown: documentFor(
+      `${HEADING_WORD} rules`,
+      "The duty officer signs the ledger against the meter reading at the gantry.",
+    ),
+  });
+
+  const hits = hitsOf(await search(f.asAisyah, { q: HEADING_WORD }));
+  expect(hits).toHaveLength(1);
+  expect(matchedIn(hits[0]!)).toEqual([HEADING_WORD]);
+});
+
 // ── The space filter: the one that matters most ───────────────────────────────────────────
 
 test("a non-member does not find a page whose text certainly matches", async () => {
