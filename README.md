@@ -26,6 +26,13 @@ deployed environment**: it enables a passwordless login that inherits any seeded
 memberships. A session minted that way is revoked the moment the flag is turned off, because the
 token records which provider issued it.
 
+Identity moves to Entra ID as of Phase 4 (see
+[`docs/ops/entra-id-and-sharepoint.md`](docs/ops/entra-id-and-sharepoint.md) for the cutover
+steps). Entra ID sends no `picture` claim, so `avatarUrl` is null for every account created
+after the cutover. This is accepted, not fixed: fetching `/me/photo/$value` needs delegated
+Graph tokens — per-user consent, token persistence, refresh — which is exactly the machinery
+Phase 4 avoids by authenticating to Graph as the application.
+
 ## Checks
 
 ```bash
