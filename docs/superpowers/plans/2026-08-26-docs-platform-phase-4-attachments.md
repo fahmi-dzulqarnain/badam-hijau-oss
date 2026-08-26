@@ -841,7 +841,6 @@ Create `src/lib/attachments/schema.ts`:
 
 ```ts
 import { z } from "zod";
-import { stripControl } from "@/lib/text/control";
 import { isAllowedMime } from "@/lib/attachments/policy";
 
 /**
@@ -882,6 +881,19 @@ export const MAX_UPLOAD_BYTES = maxUploadBytes();
 /** A filename is one line in a download dialog. */
 export const FILENAME_MAX_LENGTH = 255;
 
+/**
+ * Strips EVERY C0/C1 control character, `\r`/`\n`/`\t` included.
+ *
+ * This is deliberately not `stripControl` from `@/lib/text/control`: that function keeps
+ * newline, tab and carriage return because they are the structure of a Markdown document.
+ * A filename has no such structure — it is one line in a download dialog — and `\r`/`\n` in
+ * a filename are exactly the classic header/log-injection vector, not content worth
+ * preserving. Reusing `stripControl` here would leave them in place.
+ */
+function stripFilenameControl(value: string): string {
+  return value.replace(/\p{Cc}/gu, "");
+}
+
 export const beginUploadInput = z.object({
   pageId: z.string().min(1).max(64),
 
@@ -891,7 +903,7 @@ export const beginUploadInput = z.object({
    * 500. `contentDisposition` strips again at the point of use — that is not redundancy, it
    * is the header-injection defence living next to the header.
    */
-  filename: z.string().min(1).max(FILENAME_MAX_LENGTH).transform(stripControl),
+  filename: z.string().min(1).max(FILENAME_MAX_LENGTH).transform(stripFilenameControl),
 
   /**
    * Checked against the allowlist HERE rather than at the route, so a rejected type never
