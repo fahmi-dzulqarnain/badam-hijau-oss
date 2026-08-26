@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **910 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **931 vitest + 33 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -35,8 +35,9 @@ Two landmines carried in, both measured rather than guessed:
 | 1. Plain text from Markdown | ✅ |
 | 2. The index, and the trigger that maintains it | ✅ |
 | 3. The query | ✅ |
-| **4. The search route** | **next** |
-| 5–7 | not started |
+| 4. The search route | ✅ |
+| **5. Mermaid hydration** | **next** |
+| 6–7 | not started |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -265,6 +266,17 @@ that three times in three different places: `npm run smoke | tail` reporting tai
 reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
 read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
 run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**Shipping a feature with nothing linking to it has now happened twice.** Phase 2's `movePage`
+went out as a library function with no caller and cost a whole extra task (14b) to reach; Phase 4's
+`/search` went out with no link. Both were caught late, by asking "can a person get to this?"
+rather than by any test. **Add the affordance in the task that builds the thing.**
+
+**Annotating a stale fence was decorative until `plan:check` was fixed.** A fence whose file gained
+an *import* has a different first line, so it was dismissed as `unmatched` **before** the
+supersession note could be seen — and the only signal was `in sync` falling by one while
+`unmatched` rose by one. Supersession now outranks the heuristic. Watch the counts, not just the
+drift line.
 
 **A filter applied after fetching hides the SQL filter it duplicates, and reads as care.** Phase 4
 Task 3's first version assembled hits through a `byId.get(row.spaceId)` lookup whose miss skipped

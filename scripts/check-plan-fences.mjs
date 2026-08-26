@@ -157,6 +157,17 @@ for (const name of readdirSync(PLAN_DIR).filter((f) => f.endsWith(".md"))) {
     // stale RailFoot snapshot hid here once. Only a loosely-matched fence, where the path
     // came from surrounding prose rather than a step directive, may be dismissed.
     const firstLine = (s) => (s.split("\n").find((l) => l.trim()) ?? "").trim();
+
+    // An explicit supersession note outranks the first-line heuristic. Without this, annotating a
+    // stale fence was decorative: a fence whose file gained an *import* has a different first
+    // line, so it was dismissed as `unmatched` before this check could see the note — and the
+    // only signal was `in sync` falling by one while `unmatched` rose by one. Measured on this
+    // repository, on `TopBar.tsx`, by the change that added the search link.
+    if (a !== b && !b.includes(a) && isSuperseded(lines, fence.openLine)) {
+      results.superseded++;
+      continue;
+    }
+
     if (!match.wholeFile && a !== b && !b.includes(a) && firstLine(a) !== firstLine(b)) {
       results.unmatched++;
       results.unmatchedAt.push({ plan: relative(ROOT, path), line: fence.openLine + 1, guess: quoted });

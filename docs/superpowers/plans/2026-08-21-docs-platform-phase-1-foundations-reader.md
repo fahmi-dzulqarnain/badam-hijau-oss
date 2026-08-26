@@ -4456,6 +4456,16 @@ Note it is no longer a client component — `BugReportButton` is.
 
 `src/components/TopBar.tsx` gains the narrow-screen trigger:
 
+> **Superseded by Phase 4 Task 4.** `TopBar` also carries the `Search` link now — the one
+> affordance that reaches `/search`, which Phase 4 otherwise built with nothing linking to it.
+> Read `src/components/TopBar.tsx`.
+
+> **And note how this fence behaved when it went stale**, because it is this checker's known
+> weakness biting on its own repository: adding an import changed the file's *first line*, so
+> the fence did not become `drifted` — it slid into the `unmatched` bin, where nothing would
+> have reported it. `in sync` fell from 51 to 50 and `unmatched` rose from 11 to 12, and that
+> one-count movement was the only signal. **Watch the counts, not just the drift line.**
+
 ```tsx
 import type { BuildInfo } from "@/lib/version/build";
 import { BugReportButton } from "./BugReportButton";

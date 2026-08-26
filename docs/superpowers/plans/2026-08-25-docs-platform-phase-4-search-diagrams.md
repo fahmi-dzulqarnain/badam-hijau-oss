@@ -348,13 +348,13 @@ readable place.
 
 ---
 
-## Task 4: The search route
+## Task 4: The search route ✅
 
 **Files:** `src/app/(reader)/search/page.tsx`, components, tests.
 
-- [ ] `/search?q=` with the filters as query parameters, so a search is a link a person can send.
-- [ ] Empty query, no results, and a query that is only punctuation each say something different.
-- [ ] The `system` filter is absent, not disabled — Phase 6 owns the catalogue.
+- [x] `/search?q=` with the filters as query parameters, so a search is a link a person can send.
+- [x] Empty query, no results, and a query that is only punctuation each say something different.
+- [x] The `system` filter is absent, not disabled — Phase 6 owns the catalogue.
 - [x] Snippets render as **text**, never as HTML. **Discharged by Task 3, and differently from
       how this bullet imagined it.** The delimiters live in the SQL, so they are Task 3's, and
       they are parsed away *inside* `lib/search` — `search()` returns `{ text, match }[]`, and
@@ -362,13 +362,45 @@ readable place.
       collision search: the delimiters are `\u0002`/`\u0003`, which the ingest `stripControl`
       (`\p{Cc}`) removes from every title and every byte of Markdown, plus a test for unbalanced
       delimiters.
-- [ ] **Three outcomes, not two.** Task 3 returns `empty-query`, `no-terms` (the input reduced to
+- [x] **Three outcomes, not two.** Task 3 returns `empty-query`, `no-terms` (the input reduced to
       an empty tsquery — `...`, `-only`, `'`) and a successful search with no hits. Each needs its
       own sentence; collapsing them tells a person their query was fine when it was not.
-- [ ] **Overflow.** Results carry titles, paths and snippets — user-typed text, outside `.body`.
+- [x] **Overflow.** Results carry titles, paths and snippets — user-typed text, outside `.body`.
       That class has bitten **five** times. Inject a 300-character unbreakable token and measure
       on a fronted tab.
 
+
+**The space filter has no menu, and that is where the seam rule bit.** A dropdown means
+enumerating the viewer's readable spaces — a second query, which §13's narrow interface forbids.
+Instead each result's space *name* is a link that narrows to it, carrying the words and the other
+filters, and the narrowed page offers "Search every space". If a proper dropdown is wanted,
+`lib/search` needs a `readableSpaces(viewer)` export: the space read **already happens inside
+`search()`**, so it would be a returned value rather than a new query — but it widens the §13
+interface, so it is a decision rather than an implementation detail.
+
+**A test this task found weak and left in, with a comment saying so.** Its
+`new Set([...]).size === 3` line **passed** under the outcome-collapsing mutant, because the two
+sentences still differ by the query text they quote — only the substring assertions killed it. It
+kept the weak line (it does kill a byte-identical collapse) and annotated it, rather than leaving a
+near-vacuous assertion to be trusted. That is the right handling: a weak assertion labelled is
+worth more than a weak assertion deleted, because the label is what stops the next reader relying
+on it.
+
+**`/search` shipped unreachable, and that is the Task 14b defect arriving a second time.** Nothing
+linked to it — a feature built with no way to get to it, exactly as `movePage` shipped in Phase 2
+as a library function with no caller, at the cost of a whole extra task. This task could not fix it
+without breaking `plan:check` (the natural home, `TopBar.tsx`, is quoted by an in-sync whole-file
+fence and implementers may not edit plans), so it escalated. **Resolved by the controller**: a
+`Search` link in `TopBar`, which all three layouts render and all three sit behind
+`requireViewer` — verified present on `/engineering`, on a page route, and on `/search` itself.
+
+**And fixing it exposed this checker's known weakness on its own repository.** Adding an import
+changed `TopBar.tsx`'s *first line*, so the stale fence did not become `drifted` — it slid into the
+`unmatched` bin, where nothing reports it. The only signal was `in sync` falling from 51 to 50
+while `unmatched` rose from 11 to 12. `plan:check` now checks for a supersession note **before**
+dismissing on a first-line mismatch, so annotating a fence is meaningful rather than decorative:
+`superseded` went 21 → 23 and `unmatched` 12 → 10, and planted drift in a genuinely in-sync fence
+still reports (`49 in sync · 1 drifted`, naming the file).
 ---
 
 ## Task 5: Mermaid hydration
