@@ -617,3 +617,204 @@
   font-size: 12px;
   color: var(--ink-3);
 }
+
+/*
+ * `/search` (Phase 4, Task 10's neighbour by convention rather than by phase).
+ *
+ * Here for the reason every block above it is: `doc.css` is imported by a layout and never by a
+ * page, because Phase 1 measured what a route importing its own stylesheet does — `.doc` computed
+ * `max-width: none` on a hard load and `820px` on a soft navigation to the same route. `/search`
+ * has its own layout for exactly that, and it imports this file. Every selector is prefixed `q-`
+ * and defined in one place.
+ *
+ * `overflow-wrap: anywhere` on the row, the head, the title, the snippet, the meta line, the path
+ * and the notes is the guard for the class that has now bitten SIX times. A result carries three
+ * user-typed strings — `Page.title`, `Page.path` and a passage of body text — and every one of
+ * them is painted OUTSIDE `.body`, so the rule near the top of this file has never reached them.
+ * That is the same shape as the page title, which widened the reader by 4,321px at 1280px before
+ * `.doc > h1` was given the same treatment. `.q-note` carries it for a second reason as well: it
+ * echoes back a filter value off the query string.
+ *
+ * `min-width: 0` on each flex container keeps the track honest and does nothing about inline
+ * content overflowing its box — two different jobs, both needed, as `.idx-row` and `.del-what`
+ * above each record.
+ *
+ * `flex: 1 1 0` and not `1 1 auto` on `.q-title`, for the third time in this file: an `auto` basis
+ * is the content width, which for an unbreakable 300-character title is wider than the row and
+ * pushes the page sideways.
+ */
+.q-lead {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 66ch;
+}
+
+.q-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.q-input {
+  /* A basis, not a width: it grows into the column and shrinks past `min-width: 0` on a narrow
+     one. An input clips its own overflowing value, so the hazard here is the flex basis, not
+     the text. */
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 8px 11px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+}
+
+.q-pick { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+
+.q-k {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.q-pick select {
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.q-go {
+  flex: none;
+  padding: 8px 15px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ground);
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+}
+.q-go:hover { background: var(--accent-ink); border-color: var(--accent-ink); }
+
+.q-note,
+.q-empty {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.q-key { font-family: var(--mono); font-size: 11.5px; }
+
+.q-count {
+  margin: 20px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.q-list { list-style: none; margin: 6px 0 0; padding: 0; }
+
+.q-row {
+  min-width: 0;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.q-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.q-status {
+  flex: none;
+  min-width: 8.5ch;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+/* Retired is a fact about the document, not a warning about the result — §6.4 keeps these pages
+   in the list and readable. Amber says "look at this word" without dimming the row. */
+.q-retired { color: var(--amber); }
+
+.q-title {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.q-title:hover { color: var(--accent-ink); text-decoration: underline; }
+
+.q-snippet {
+  margin: 5px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 78ch;
+  overflow-wrap: anywhere;
+}
+
+/* The matched runs. `mark`'s default is a yellow the rest of this design does not contain, and
+   `overflow-wrap` is inherited, so a match inside an unbreakable token still wraps with it. */
+.q-snippet mark {
+  padding: 0 2px;
+  font-weight: 500;
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-radius: 3px;
+}
+
+/* A page whose body strip is empty — legitimately, when its whole content is one diagram. */
+.q-nosnippet { color: var(--ink-3); font-style: italic; }
+
+.q-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.q-space { color: var(--ink-3); text-decoration: none; border-bottom: 1px dotted var(--line-strong); }
+.q-space:hover { color: var(--accent-ink); border-bottom-color: var(--accent); }
+
+.q-type { flex: none; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; }
+
+.q-when { flex: none; }
+
+/* Its own line, like `.idx-path`: a path is long, and it is the string most likely to be one
+   unbreakable token. */
+.q-path {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
