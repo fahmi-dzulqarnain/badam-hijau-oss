@@ -4456,6 +4456,16 @@ Note it is no longer a client component — `BugReportButton` is.
 
 `src/components/TopBar.tsx` gains the narrow-screen trigger:
 
+> **Superseded by Phase 4 Task 4.** `TopBar` also carries the `Search` link now — the one
+> affordance that reaches `/search`, which Phase 4 otherwise built with nothing linking to it.
+> Read `src/components/TopBar.tsx`.
+
+> **And note how this fence behaved when it went stale**, because it is this checker's known
+> weakness biting on its own repository: adding an import changed the file's *first line*, so
+> the fence did not become `drifted` — it slid into the `unmatched` bin, where nothing would
+> have reported it. `in sync` fell from 51 to 50 and `unmatched` rose from 11 to 12, and that
+> one-count movement was the only signal. **Watch the counts, not just the drift line.**
+
 ```tsx
 import type { BuildInfo } from "@/lib/version/build";
 import { BugReportButton } from "./BugReportButton";
@@ -5923,9 +5933,18 @@ cleaned up, which the Teardown step below does.
 > Phase 3's Task 13 then added a doc-lifecycle pass — publish an ADR, supersede it, confirm the
 > first is `SUPERSEDED` and still readable, confirm the generated index lists and filters both —
 > taking it to **62 checks**, extending `sweep()` to `PageRelation` and adding a `counts()`
-> contract read before and after.
-> Read `scripts/smoke.sh` for the current version. The sentence below claiming the fence is
-> byte-identical to the shipped file was true when written and is not now.
+> contract read before and after. Phase 4's Task 7 then added a search pass — publish a page,
+> find it by a word unique to it, retire it with a second publish and assert it now ranks below a
+> live match — taking it to **82 checks**. `counts()` was unchanged: Phase 4 adds columns and no
+> table.
+> Read `scripts/smoke.sh` for the current version: **this fence is superseded** and no longer
+> matches that file. The sentence below claiming it is byte-identical to the shipped script was
+> true when written and is not now.
+>
+> **Keep those two words inside the last twelve lines above the fence.** Until Phase 4's Task 7
+> extended this note, `isSuperseded`'s window reached the word `SUPERSEDED` in the Phase 3
+> sentence above by luck; four more lines of note pushed it out of reach and the fence dropped
+> straight into `1 drifted`, with `superseded` falling 23 to 22.
 
 **Two defects were baked into the fence below when it was first written**, both now fixed in
 it: three lines carried `'"'"'`-style shell-escaping artifacts left over from the heredoc that

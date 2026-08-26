@@ -326,6 +326,50 @@ const MODULES: Record<string, Registration> = {
     covered: ["listDocTypePages"],
     exempt: [],
   },
+  "src/lib/search/reindex.ts": {
+    load: () => import("@/lib/search/reindex"),
+    // Soft-delete tests: tests/integration/search-vector.test.ts. Phase 4 Task 2's backfill. It
+    // reads `PageVersion` and reaches `Page` only through the `page_search_vector_from_version`
+    // trigger — no `Page` row is named anywhere in the module, which is the shape this sweep was
+    // widened for and a shape it still cannot see on its own.
+    //
+    // It carries **no** `visiblePage()` and the absence is pinned rather than merely allowed:
+    //   "the reindex covers a soft-deleted page's version too" fails outright if a filter is
+    //   added — a page soft-deleted before the backfill would come back from Task 12's restore
+    //   searchable by title and nothing else, with nothing saying so. That is the same direction
+    //   `move.ts`'s subtree read and `delete.ts`'s subtree read both go, and for the same
+    //   reason: a soft-deleted row is a row that is coming back.
+    //
+    // It also carries no permission predicate. There is no viewer: it is a whole-corpus
+    // maintenance pass, it returns two integers and names no page, and the readability question
+    // is asked once, at query time, in Task 3.
+    covered: ["reindexSearchText"],
+    exempt: [],
+  },
+  "src/lib/search/query.ts": {
+    load: () => import("@/lib/search/query"),
+    // Soft-delete tests: tests/integration/search-query.test.ts. Phase 4 Task 3's query, and it
+    // is the shape this sweep was widened for twice over: the page read is a `$queryRaw`, so no
+    // `page` delegate token appears anywhere in the module, and the only delegate call it makes
+    // is on `Space`.
+    //
+    // The soft-delete filter is `p."deletedAt" IS NULL`, written out in SQL rather than composed
+    // from `visiblePage()` — which does not compose into raw SQL. That restatement is safe in a
+    // way `readableSpace`'s would not be: one column compared to one value, with no branch the
+    // two spellings could disagree about. `readableSpace` is a top-level `OR` over a relation, so
+    // the space filter is *derived* from it — `db.space.findMany` under the real predicate, ids
+    // bound into `spaceId = ANY(...)` — rather than retyped. See the module docstring.
+    //
+    // Covered by "a soft-deleted page disappears from results, having been in them", which fails
+    // in both directions: the "before" half is the non-vacuity companion, so a filter that
+    // excluded everything would fail it too. The permission predicate has its own test, "a
+    // non-member does not find a page whose text certainly matches", and it is the one the plan
+    // singles out — a page whose text certainly matches, in a space the viewer cannot read.
+    covered: ["search"],
+    // Pure string splitting on the `ts_headline` delimiters. Exported for its own unit
+    // assertions — an unbalanced delimiter must not lose text — and it queries nothing.
+    exempt: ["segmentsOf"],
+  },
 
   // Query the database but cannot reach a Page row. Declared rather than omitted: an omission
   // reads as an oversight, and this claim is the sort a reviewer can check in one line.

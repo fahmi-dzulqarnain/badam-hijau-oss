@@ -16,6 +16,7 @@ import {
   setFrontmatterStatus,
   type PublishOutcome,
 } from "@/lib/editor/publish";
+import { DocBody } from "@/components/DocBody";
 import {
   editorReducer,
   initialEditorState,
@@ -891,8 +892,15 @@ export function Editor({ page }: { page: EditorPage }) {
                 `.body` is the reader's own class, from `doc.css`, imported by the (editor)
                 layout — never by this route — so the preview inherits the reader's
                 typography instead of an approximation of it.
+
+                `DocBody` and not a bare `div`, for the same reason: it is the component that
+                owns `.body` and hydrates its ```mermaid fences, so an author writing a diagram
+                sees whether it parses in the pane rather than after publishing. It keys its
+                hydration on the html string, which is what makes it safe to hand a new document
+                every two seconds. Mermaid stays a dynamic import here too — a preview with no
+                fence never loads it.
               */
-              <div className="body" dangerouslySetInnerHTML={{ __html: preview.html }} />
+              <DocBody html={preview.html} />
             )}
           </div>
         </section>

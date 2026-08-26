@@ -10,6 +10,7 @@ import { dateFormat } from "@/lib/format";
 import { getPageRelations } from "@/lib/lifecycle/read";
 import { retirementNotice } from "@/lib/lifecycle/retired";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { DocBody } from "@/components/DocBody";
 import { PageInfoCard } from "@/components/PageInfoCard";
 import { RelationList, RetiredBanner } from "@/components/Relations";
 import { Toc } from "@/components/Toc";
@@ -152,10 +153,18 @@ export default async function DocPage({
             readable, so this adds a banner and changes nothing about what follows. */}
         {notice ? <RetiredBanner notice={notice} /> : null}
 
-        {/* `dangerouslySetInnerHTML` is safe here only because `renderMarkdown` sanitises. If
-            that pipeline is ever changed to skip `rehype-sanitize`, this becomes stored XSS —
-            the test in Task 5 Step 2 is what guards it. */}
-        <div className="body" dangerouslySetInnerHTML={{ __html: html }} />
+        {/* `DocBody` holds the `dangerouslySetInnerHTML`, which is safe only because
+            `renderMarkdown` sanitises. If that pipeline is ever changed to skip
+            `rehype-sanitize`, this becomes stored XSS — the test in Task 5 Step 2 is what
+            guards it.
+
+            It is a client component for one reason: a ```mermaid fence is a `.mermaid-source`
+            div until something in the browser turns it into a diagram (spec §12), and Mermaid
+            is 83 MB so that something has to be a dynamic import under a branch. This route
+            pays nothing for it on a page with no fence — the import is never reached, and
+            `scripts/check-diagram-bundle.ts` proves the library is in no route's eager
+            bundle. */}
+        <DocBody html={html} />
 
         {/* The stored direction — what this page supersedes, decides, amends or relates to. */}
         <RelationList relations={outgoing} />

@@ -11,7 +11,7 @@ codebase that does not exist yet produces a plan that gets rewritten.
 | **1. Foundations & reader** | Signed-in staff read seeded published docs: space nav, breadcrumbs, TOC, page info card. Forbidden spaces 404. | §5.1–5.2, §8, §11 (read routes), §12 | — |
 | **2. Authoring** (plan: [phase-2](2026-08-23-docs-platform-phase-2-authoring.md)) | Editors create, draft, preview and publish pages in the browser. Conflict detection on concurrent drafts. Move and delete with redirects. | §5.3, §9, §14 | 1 |
 | **3. Doc types & lifecycle** (plan: [phase-3](2026-08-24-docs-platform-phase-3-doc-types.md)) | ADR/RFC/runbook templates with validated frontmatter. Status vocabularies, typed relations, publish cascades, retired-document banner, generated indexes. | §6, §5.2 (`PageRelation`) | 2 |
-| **4. Search & diagrams** | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
+| **4. Search & diagrams** (plan: [phase-4](2026-08-25-docs-platform-phase-4-search-diagrams.md)) | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
 | **5. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
 | **6. Systems, attachments, admin** | Systems catalogue and facet filters. S3 attachments via presigned URLs. Space/member/system administration. Due-for-review workflow. | §7, §17, §12 (review) | 3 |
 
@@ -49,9 +49,26 @@ Phase 4 hydrates these by reading `textContent`, which **decodes the escaping** 
 receives the literal `</div><script>alert(1)</script>` as diagram source. Whether that
 executes is then entirely Mermaid's decision, not ours.
 
-So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`, which sanitises
-labels and blocks click handlers — not the default `"loose"`), and must not use
-`innerHTML` to move the source around. Treat the escaping in the document as protecting
+So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`) and must not use
+`innerHTML` to move the source around.
+
+> **Correction, measured in Phase 4 Task 5 against `mermaid@11.17.2`.** Two claims in the
+> sentence above were wrong, and the second one would have produced a **vacuous security test**.
+>
+> **`"strict"` is already Mermaid's default** — it is in `defaultConfig`, not `"loose"`. Pinning
+> it explicitly is still exactly right, because a default is a dependency's decision and this one
+> is load-bearing; but it is a *pin*, not a correction of an unsafe default.
+>
+> **And `securityLevel` does not decide whether a label is sanitised.** `sanitizeText` runs
+> DOMPurify at every level, so a `<script>` in a diagram label is stripped under `"loose"` too —
+> verified: the obvious hostile-label test **stays green** with the setting mutated to `"loose"`.
+> What the levels actually disagree about is URL handling:
+> `if (getConfig().securityLevel !== "loose") return sanitizeUrl(url)`. So the assertion that
+> earns its keep is `click A href "javascript:…"`, not a script tag in a label.
+>
+> Nor is the click *handler* half of it: a listener is attached only by the `bindFunctions` that
+> `mermaid.render` returns, and the hydration deliberately never calls it — an independent
+> barrier, which therefore cannot die with this constant either. Treat the escaping in the document as protecting
 the *document*, not as having sanitised the *diagram source*.
 
 ## Phase 2 landmine, measured during Phase 1

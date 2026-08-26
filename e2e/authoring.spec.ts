@@ -16,7 +16,7 @@
  *   which needs two sessions. `browser.newContext()` gives two cookie jars in one browser —
  *   see `actorContext`.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import {
   actorContext,
   db,
@@ -183,10 +183,13 @@ test("the preview pane renders exactly what the published page renders", async (
   // The first render is fired on mount from the same seed the view is built from; wait for it
   // to have produced something rather than comparing an empty pane to a full one.
   await expect(previewBody.locator("h2")).toBeVisible();
-  const previewHtml = await previewBody.innerHTML();
+  await settleDiagrams(previewBody);
+  const previewHtml = normaliseDiagramIds(await previewBody.innerHTML());
 
   await page.goto(`/engineering/${fixture.path}`);
-  const publishedHtml = await page.locator(".doc .body").innerHTML();
+  const publishedBody = page.locator(".doc .body");
+  await settleDiagrams(publishedBody);
+  const publishedHtml = normaliseDiagramIds(await publishedBody.innerHTML());
 
   expect(previewHtml).toBe(publishedHtml);
   // Guards the comparison itself: two empty strings are also equal.
@@ -194,6 +197,41 @@ test("the preview pane renders exactly what the published page renders", async (
   expect(previewHtml).toContain("shiki");
   expect(previewHtml).toContain("mermaid-source");
 });
+
+/**
+ * Both surfaces now hydrate their ```mermaid fences (Phase 4 Task 5), so this comparison has to
+ * wait for both to reach a terminal state.
+ *
+ * Without it the test is a **race**, and it failed as one the first time both sides gained
+ * hydration: the published page had settled to `mermaid-failed` while the preview was still showing
+ * the un-hydrated placeholder, and the diff was the same fence in two different states. Waiting is
+ * also the stronger assertion — the two surfaces must now agree about the *rendered diagram*, not
+ * only about the markup around it, which is exactly what sharing one component is for.
+ *
+ * `RICH_MARKDOWN`'s fence is a bare `C4Context`, which does not parse, so both sides land on
+ * `mermaid-failed`. That is deliberate on both counts: it exercises the error-in-place path from
+ * this test too, and a *successful* render would put a generated `mermaid-svg-N` id in the markup.
+ */
+async function settleDiagrams(body: Locator): Promise<void> {
+  const fences = await body.locator(".mermaid-source").count();
+  for (let index = 0; index < fences; index += 1) {
+    await expect(body.locator(".mermaid-source").nth(index)).toHaveClass(
+      /mermaid-(ready|failed)/,
+    );
+  }
+}
+
+/**
+ * The diagram ids are a module-level counter in `DocBody`, so the preview's are not the published
+ * page's and never can be — the preview draws first, in the same browsing context.
+ *
+ * Normalised rather than excluded, so a diagram that *does* render still has its whole SVG compared;
+ * only the ids are neutralised. There is nothing to neutralise on today's fixture, which is why this
+ * is here for the next one.
+ */
+function normaliseDiagramIds(html: string): string {
+  return html.replace(/mermaid-svg-\d+/g, "mermaid-svg-N");
+}
 
 /* --------------------------------------------------------------- the conflict contract ---- */
 

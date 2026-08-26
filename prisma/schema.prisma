@@ -123,23 +123,38 @@ model BugReport {
 }
 
 model Page {
-  id                 String    @id @default(cuid())
+  id                 String                   @id @default(cuid())
   spaceId            String
   parentId           String?
   slug               String
   path               String
   title              String
-  docType            DocType   @default(DOC)
-  status             DocStatus @default(DRAFT)
-  position           Int       @default(0)
+  docType            DocType                  @default(DOC)
+  status             DocStatus                @default(DRAFT)
+  position           Int                      @default(0)
   ownerId            String?
   reviewedAt         DateTime?
-  publishedVersionId String?   @unique
+  publishedVersionId String?                  @unique
   publishedAt        DateTime?
   createdById        String
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
   deletedAt          DateTime?
+  // Spec §13's search index. On `Page` because `Page` is what a query scans and what carries
+  // every filter beside it — `status`, `docType`, `spaceId`, `deletedAt` — so a filtered search
+  // is one index scan and one heap access rather than a join.
+  //
+  // `Unsupported`, because Prisma has no `tsvector` scalar. The consequences are real and are
+  // the reason this line has a comment: the column is **absent from the generated client**, so
+  // nothing can `select` it, filter on it or write it, and every read of it is raw SQL. Nothing
+  // should want to — it is derived, maintained by the trigger in the `search_vector` migration,
+  // and application code that wrote it would be the second place the index is maintained.
+  //
+  // Nullable, and it is a `?` that nothing is allowed to leave set: the trigger fires
+  // `BEFORE INSERT OR UPDATE` so no row can be written without one. Prisma requires `?` for an
+  // `Unsupported` field it cannot supply a value for on `create`, which is precisely the
+  // situation — the value comes from the trigger.
+  searchVector       Unsupported("tsvector")?
 
   space            Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   parent           Page?         @relation("PageTree", fields: [parentId], references: [id], onDelete: Cascade)
@@ -161,23 +176,48 @@ model Page {
   // table and the planner seq-scans with or without this. It is for the inverse query —
   // listing deleted pages to restore — which is selective.
   @@index([spaceId, deletedAt])
+  // Declared here even though the trigger that fills the column is raw SQL, and the reason is
+  // measured rather than stylistic: with the index created only in the migration,
+  // `prisma migrate dev` diffs the schema against the database, finds an index the schema does
+  // not mention, and generates `DROP INDEX "Page_searchVector_idx"` — on the **next unrelated
+  // migration**, silently, leaving every search a sequential scan. Reproduced on a throwaway
+  // database before this line was written. Prisma models no triggers at all, so the trigger
+  // itself is invisible to that diff in both directions; the index is not.
+  @@index([searchVector(ops: raw("tsvector_ops"))], type: Gin)
 }
 
 model PageVersion {
-  id          String    @id @default(cuid())
-  pageId      String
-  title       String
-  markdown    String
-  frontmatter Json      @default("{}")
-  status      DocStatus
-  authorId    String
-  message     String?
-  gitSha      String?
-  createdAt   DateTime  @default(now())
+  id             String    @id @default(cuid())
+  pageId         String
+  title          String
+  markdown       String
+  // The Markdown of `markdown`, stripped to the prose a person would read aloud, and the
+  // document's h2/h3 text one per line. Both produced by `searchFieldsOf` in the publish
+  // transaction, and read by the `Page` search trigger through `Page.publishedVersionId`.
+  //
+  // On the **version** rather than on `Page` because that is what they are properties of: a
+  // version is immutable published text, and these two columns are a function of it. Put on
+  // `Page` they would be a third thing publish has to keep in step with the version it just
+  // wrote, and a rollback to an earlier version would leave them describing text nobody is
+  // reading.
+  //
+  // `NOT NULL DEFAULT ''`, and `''` is a legitimate value rather than a failed strip: a page
+  // whose entire content is one Mermaid diagram has no prose and no headings. `NULL` would have
+  // to mean "not computed", and a published version in that state is a page that silently does
+  // not exist to search — so the type does not offer the state. The default is what let the
+  // migration add the columns to existing rows; `prisma/reindex.ts` is what fills them in.
+  searchText     String    @default("")
+  searchHeadings String    @default("")
+  frontmatter    Json      @default("{}")
+  status         DocStatus
+  authorId       String
+  message        String?
+  gitSha         String?
+  createdAt      DateTime  @default(now())
 
-  page        Page  @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
-  author      User  @relation("PageVersionAuthor", fields: [authorId], references: [id])
-  publishedOn Page? @relation("PagePublishedVersion")
+  page          Page        @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
+  author        User        @relation("PageVersionAuthor", fields: [authorId], references: [id])
+  publishedOn   Page?       @relation("PagePublishedVersion")
   draftsBasedOn PageDraft[] @relation("DraftBaseVersion")
 
   @@index([pageId, createdAt])

@@ -7,6 +7,7 @@ import { visiblePage } from "@/lib/pages/visible";
 import { defaultPublishStatus, validateTransition } from "@/lib/pages/transition";
 import { stripControl } from "@/lib/text/control";
 import { splitFrontmatter, type FrontmatterErrorCode } from "@/lib/markdown/frontmatter";
+import { searchFieldsOf } from "@/lib/search/fields";
 import {
   KEY_FOR_RELATION,
   validateFrontmatter,
@@ -1078,12 +1079,39 @@ export async function publishPage(
       // atomicity; the transaction is the other half, and the page update below is the one
       // place a failure can arrive after a write.
 
+      // Spec §9 step 6's *application* half, computed here and stored on the row below.
+      //
+      // §13 asks for a vector "derived from … body text stripped of Markdown syntax",
+      // "maintained by a trigger created in a raw SQL migration", and those two clauses cannot
+      // both be satisfied in plpgsql: a trigger cannot run remark. So the split is the one
+      // Phase 4 settled — the application strips, the trigger weights. `searchFieldsOf` produces
+      // the two text columns; the `Page` write below moves `publishedVersionId`, and the
+      // `page_search_vector_refresh` trigger builds the weighted vector from them.
+      //
+      // **`draft.markdown`, the same bytes the row stores**, not `split.body` and not a trimmed
+      // copy. `searchFieldsOf` runs `splitFrontmatter` itself, so handing it the body would be
+      // splitting twice and would differ the moment the two disagreed; and the version column
+      // and its strip must describe the same characters or the snippet quotes text the page does
+      // not contain.
+      //
+      // Inside the transaction and after the lock, because that is where the text it describes
+      // is read. It costs about 0.6ms — `headingsOf` deliberately stops before `rehypeShiki`,
+      // which is the pipeline's slow step and cannot change a heading.
+      //
+      // Both fields can legitimately come back `""`: a page whose whole body is one Mermaid
+      // diagram has no prose and no headings. Publish has already refused an empty *body* two
+      // checks above, and a body that is only a diagram is not empty. Nothing here treats `""`
+      // as a failure, and nothing may: the columns are `NOT NULL DEFAULT ''` for that reason.
+      const searchFields = await searchFieldsOf(draft.markdown);
+
       // Spec §9 step 2.
       const version = await tx.pageVersion.create({
         data: {
           pageId: page.id,
           title,
           markdown: draft.markdown,
+          searchText: searchFields.searchText,
+          searchHeadings: searchFields.searchHeadings,
           status,
           // The publisher, not the last person to autosave. It is the byline the reader
           // shows and the authorship the git mirror will commit under.
@@ -1167,7 +1195,17 @@ export async function publishPage(
         });
       }
 
-      // TODO(phase-4): spec §9 step 6 — refresh the search vector for this page.
+      // Spec §9 step 6 — the search vector — has already happened, twice over, and there is
+      // deliberately no statement here.
+      //
+      // The `Page` update above moved `publishedVersionId` and `title`, which fired
+      // `page_search_vector_refresh` BEFORE that row was written; the vector was built from the
+      // version this transaction had just inserted. An explicit refresh at this point would be a
+      // second place the index is maintained, and the first one to fall behind would do it
+      // silently — every failure of search reads to a user as "that page does not exist".
+      //
+      // The step is called out rather than deleted because the spec numbers it, and a reader
+      // walking §9 against this function would otherwise find six steps where there are seven.
 
       // Spec §9 step 7.
       await writeAudit(tx, {
