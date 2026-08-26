@@ -108,12 +108,21 @@ test("the key order is the documented one, and it is not alphabetical", () => {
 
 test("the whole file, byte for byte", () => {
   // The formatting decisions, all in one place: the fences, one key per line, two-space
-  // indentation, no anchors, an unquoted ISO timestamp, `[]` for an empty list, and the author's
-  // own blank line between the closing fence and their heading.
+  // indentation, an unquoted ISO timestamp, `[]` for an empty list, and the author's own blank
+  // line between the closing fence and their heading — with no second one added.
   //
-  // Kills: `lineWidth` back to its default of 80 (which folds a long scalar), an added blank
-  // line after the closing fence, a `Date` passed to the serializer instead of an ISO string,
-  // and any change to the block that the structural tests above would accept.
+  // Kills: an added blank line after the closing fence, a changed `indent`, and any field
+  // mix-up or reordering. It is also the test a reviewer reads to see the shape rather than
+  // reconstruct it from assertions.
+  //
+  // Two mutants it does **not** kill, measured rather than assumed. `lineWidth` back to its
+  // default of 80 changes nothing here because every value is short — the serializer's own
+  // "a long scalar is written on one line" test is what sees folding. And passing
+  // `version.publishedAt` straight to the serializer instead of `.toISOString()` is an
+  // *equivalent* mutant: `yaml` writes a `Date` as this same unquoted ISO string and reads it
+  // back as a string either way. What refuses that one is the type — `FrontmatterValue` does not
+  // admit a `Date`, so the honest form of the mutation fails `npm run typecheck` and the
+  // dishonest form needs an `as never`.
   expect(mirrorDocumentOf(VERSION)).toBe(
     [
       "---",
@@ -242,6 +251,10 @@ test("a final newline is added when the document has none, and never a second", 
 const HOSTILE_TITLE = `<img src=x onerror="document.title='pwned'">${"x".repeat(250)}`;
 
 test("the hostile e2e title survives as one key with its exact value", () => {
+  // Here for continuity with the two e2e specs that carry this exact string, and honest about
+  // what it is worth: **it kills no mutant this file does not kill better.** 250 `x` characters
+  // and an `<img>` tag contain nothing a YAML parser reacts to, and the naive-serializer mutant
+  // below survives this input untouched. The three cases after it are the ones with teeth.
   const parsed = blockOf({ ...VERSION, title: HOSTILE_TITLE });
 
   expect(parsed.title).toBe(HOSTILE_TITLE);
@@ -249,9 +262,15 @@ test("the hostile e2e title survives as one key with its exact value", () => {
 });
 
 test("a title of nothing but YAML punctuation survives as one key", () => {
-  // Every character that means something to a YAML parser, ten times over: quotes, a colon, a
+  // Every character that means something to a YAML parser, nine times over: quotes, a colon, a
   // hash, an ampersand and an asterisk (anchor and alias), braces and brackets (flow
   // collections), a backslash, a pipe and a greater-than (block scalars).
+  //
+  // Kills: a serializer that writes a plain scalar for anything without a newline in it.
+  // Measured, because that mutant is the plausible hand-rolled implementation — it writes a
+  // correct indented `|-` literal for the injection cases below and passes every one of them,
+  // passes the e2e title above, and dies **here** with `frontmatter-unparseable`. This case and
+  // the next are the only two in the file that see it.
   const punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".repeat(9);
   const parsed = blockOf({ ...VERSION, title: punctuation });
 
@@ -279,8 +298,10 @@ test("a newline in a title injects no second key", () => {
 });
 
 test("a title that is exactly `status: ACCEPTED` is a title, not a key", () => {
-  // The one-line version of the case above, and it kills a narrower mutant: an implementation
-  // that escapes newlines but writes short scalars unquoted. `yaml` quotes this one.
+  // The one-line version of the case above, and it needs no control character at all — which is
+  // what makes it the second of the two tests that kill the "plain unless it contains a newline"
+  // mutant: that one writes `title: status: ACCEPTED` and the block stops parsing. `yaml` quotes
+  // it. A title trimmed or newline-stripped somewhere upstream would still carry this shape.
   const parsed = blockOf({ ...VERSION, title: "status: ACCEPTED" });
 
   expect(parsed.title).toBe("status: ACCEPTED");
@@ -293,8 +314,10 @@ test("a title containing a closing fence does not end the block early", () => {
   // concatenation. A `---` on a line of its own inside the block would terminate it, leaving the
   // rest of the canonical keys as body text — so this asserts the *body* as well as the title.
   //
-  // Kills: a block-scalar writer that does not indent its content (measured: `yaml` indents by
-  // two, so the title's `---` lines cannot be read as a fence).
+  // Kills: a block-scalar writer that does not indent its content. Measured with one — the block
+  // ends at the title's own `---`, so the mirrored body begins `status: ACCEPTED` and what is
+  // left of the block no longer parses. `yaml` indents literal content by two, which is why the
+  // real implementation cannot be made to do it.
   const title = "Topic\n---\nstatus: ACCEPTED\n---\nregistry";
   const version = { ...VERSION, title };
 

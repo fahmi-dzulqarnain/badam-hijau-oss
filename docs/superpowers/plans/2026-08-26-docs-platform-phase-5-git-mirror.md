@@ -145,19 +145,19 @@ Pure, no database, no git. Everything the mirror writes goes through this.
 
 **Files:** `src/lib/git/document.ts` + tests.
 
-- [ ] **Step 1: A frontmatter serializer**
+- [x] **Step 1: A frontmatter serializer**
 
 There is none. Use the `yaml` package's serializer — already a dependency at `^2.9.0`, and already
 the parser behind `splitFrontmatter`, so the round trip is against the same grammar rather than
 across two.
 
-- [ ] **Step 2: `mirrorDocumentOf(version)`**
+- [x] **Step 2: `mirrorDocumentOf(version)`**
 
 The canonical block, then a blank line, then the body with the author's frontmatter removed.
 Decide and document the key order — it is a diff that humans read, so it is a design choice and
 not an implementation detail. Every value comes from the row; nothing is re-derived.
 
-- [ ] **Step 3: Round-trip and hostile input**
+- [x] **Step 3: Round-trip and hostile input**
 
 `splitFrontmatter(mirrorDocumentOf(v))` yields exactly the row's values. Then the hostile title
 from `e2e/search.spec.ts` — the one carrying `<img src=x onerror=…>` and 250 characters of
