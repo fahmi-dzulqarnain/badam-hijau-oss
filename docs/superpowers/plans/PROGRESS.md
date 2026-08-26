@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **883 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **910 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -34,8 +34,9 @@ Two landmines carried in, both measured rather than guessed:
 |---|---|
 | 1. Plain text from Markdown | ✅ |
 | 2. The index, and the trigger that maintains it | ✅ |
-| **3. The query** | **next** |
-| 4–7 | not started |
+| 3. The query | ✅ |
+| **4. The search route** | **next** |
+| 5–7 | not started |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -264,6 +265,19 @@ that three times in three different places: `npm run smoke | tail` reporting tai
 reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
 read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
 run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**A filter applied after fetching hides the SQL filter it duplicates, and reads as care.** Phase 4
+Task 3's first version assembled hits through a `byId.get(row.spaceId)` lookup whose miss skipped
+the row — a second copy of the space filter, in TypeScript, after the query. **Deleting
+`spaceId = ANY(...)` from the SQL left all 24 tests green.** Fixed by joining `Space` for its
+columns, which is FK-guaranteed to drop no row, and deleting the lookup. The same trap then
+arrived by a second route: an `INNER JOIN` for the snippet would have excluded unpublished pages
+as a side effect, so deleting the published-version clause also passed — hence a `LEFT` join and a
+counterfactual mutant kept in the record.
+
+**A mutant that dies for the wrong reason has not proven the assertion you meant.** Same task:
+without a coalesce, the published-clause mutation died as a `TypeError` inside snippet parsing
+rather than as the assertion that names a draft in results.
 
 **Know which columns actually feed a derived value before writing a test about staleness.** The
 Phase 4 plan told Task 2 to prove the search vector *moves* when a cascade changes `status` or a

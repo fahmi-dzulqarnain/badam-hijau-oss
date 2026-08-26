@@ -252,11 +252,11 @@ passes every test and fails on first use.
 
 ---
 
-## Task 3: The query
+## Task 3: The query ✅
 
 **Files:** `src/lib/search/query.ts` + integration tests. Registered in the soft-delete guard.
 
-- [ ] **Step 1: `search(viewer, { q, spaceKey?, docType?, status? })`**
+- [x] **Step 1: `search(viewer, { q, spaceKey?, docType?, status? })`**
 
 `websearch_to_tsquery` — it takes what a person types, including quotes and `-exclusions`, and
 does not throw on syntax a person would plausibly type. `ts_headline` for snippets.
@@ -267,13 +267,70 @@ two languages. **Derive the id list from `readableSpace` rather than restating i
 test that a non-member's search over a members-only space returns nothing, for a page whose text
 certainly matches.
 
-- [ ] **Step 2: Ranking, with retired pages demoted (§6.4)**
+**The first version of this module was wrong, and only mutation testing found it — the most
+valuable catch of the phase.** Dropping `AND p."spaceId" = ANY(...)` from the SQL left **all 24
+tests green**. The cause was not the SQL: hits were assembled through a `byId.get(row.spaceId)`
+lookup against a `Map` built from the readable-space read, and the miss did something — it skipped
+the row. That skip was **a second copy of the space filter, in TypeScript, applied after
+fetching**: the untestable-duplicate-predicate failure *and* the "never filter after fetching"
+rule at once, arriving through a line that looks like care. Fixed by joining `Space` for its
+columns (FK-guaranteed, so it drops no row) and deleting the lookup.
+
+**The same trap arrived by a second route.** `PageVersion` is joined for the snippet, and an
+`INNER JOIN` would exclude unpublished pages *as a side effect of wanting a snippet* — measured:
+with the join made `INNER`, deleting the `WHERE` clause leaves the whole file green. So the join
+is `LEFT`, with the headline coalesced at its one use, and a deliberate counterfactual mutant is
+kept in the record: `LEFT → INNER` **plus** dropping the published clause passes 24 tests, which
+is what justifies `LEFT`.
+
+Worth carrying: **without that coalesce the mutation died as a `TypeError` rather than as the
+assertion naming a draft in results. A mutant that dies for the wrong reason has not proven the
+assertion you meant.**
+
+- [x] **Step 2: Ranking, with retired pages demoted (§6.4)**
 
 `ts_rank`, multiplied down for the retired statuses Phase 3 already enumerates — import that
 list, do not retype it. A retired page that matches better than a live one should still be able
 to outrank it; demotion is a thumb on the scale, not a filter.
 
-- [ ] **Step 3: Soft-deleted and unpublished never appear**
+**`RETIRED_RANK_FACTOR = 0.4`, derived rather than picked: it is `B/A`** — one weight band, so a
+retired page must match one whole band better to draw level. Tested in both directions and once
+per status over the whole imported set, so adding a retired status in Phase 3 cannot leave this
+behind.
+
+**Task 2's open question, answered: the double-count changes no ordering, and the trigger is left
+alone.** Two formulas over the same three stored columns — the shipped one, and one applying
+`ts_delete` to strip heading lexemes from the body band, which is what the trigger fix would have
+been. Over 16 real queries drawn from the seeded titles, headings and prose: **0 order changes, 0
+result-set changes**, with individual ranks moving up to 27.7%.
+
+Sixteen queries over six pages is an absence, not a proof, so the *reason* carries the weight:
+`ts_rank` saturates and the bands do not overlap.
+
+| Quantity | Value |
+|---|---|
+| One `C` hit | 0.121585 |
+| `C` ceiling (a word repeated 1000×) | 0.199524 |
+| One `B` hit, without the double count | 0.243171 |
+| One `B` hit, with it | 0.273567 (+12.5%) |
+| `B`+`C` ceiling, 40 heading hits | 0.395488 |
+| One `A` hit | 0.607927 |
+
+The double count only ever adds `C` positions for a lexeme already at `B`, so it can only favour
+the page `B` already favours — **it widens a gap, it cannot cross one.** No amount of body
+repetition reaches a single `B` hit, and `B`+`C` tops out well below a single title hit. It is
+self-limiting: +12.5% at one occurrence, +1.9% at eight, +0.4% at forty. For scale, the retired
+demotion is ×0.4.
+
+**§8's super-admin access audit is wired into search, beyond this task's brief and argued.**
+`getReadableSpaceByKey` audits a space a super admin *resolves*; search resolves every readable
+space at once, so without this a super admin could read titles and snippets out of every `MEMBERS`
+space they do not belong to and leave no trace. It calls the existing `auditSpaceAccess` — which
+owns `needsAccessAudit` and the per-request dedupe, so this is not a second copy of that rule —
+and **only for spaces that produced a hit**, because auditing the enumeration would write a row
+per `MEMBERS` space on every search.
+
+- [x] **Step 3: Soft-deleted and unpublished never appear**
 
 `deletedAt IS NULL` and a published version. §13: *"an unpublished draft never appears in
 results."* Both need their own test — a draft is invisible to `getPublishedPage` but its `Page`
@@ -298,8 +355,16 @@ readable place.
 - [ ] `/search?q=` with the filters as query parameters, so a search is a link a person can send.
 - [ ] Empty query, no results, and a query that is only punctuation each say something different.
 - [ ] The `system` filter is absent, not disabled — Phase 6 owns the catalogue.
-- [ ] Snippets render as **text**, never as HTML. `ts_headline` returns markup with its own
-      delimiters; choose delimiters that cannot collide with page content and prove it.
+- [x] Snippets render as **text**, never as HTML. **Discharged by Task 3, and differently from
+      how this bullet imagined it.** The delimiters live in the SQL, so they are Task 3's, and
+      they are parsed away *inside* `lib/search` — `search()` returns `{ text, match }[]`, and
+      this route never sees a delimiter it could render by accident. The "prove it" is not a
+      collision search: the delimiters are `\u0002`/`\u0003`, which the ingest `stripControl`
+      (`\p{Cc}`) removes from every title and every byte of Markdown, plus a test for unbalanced
+      delimiters.
+- [ ] **Three outcomes, not two.** Task 3 returns `empty-query`, `no-terms` (the input reduced to
+      an empty tsquery — `...`, `-only`, `'`) and a successful search with no hits. Each needs its
+      own sentence; collapsing them tells a person their query was fine when it was not.
 - [ ] **Overflow.** Results carry titles, paths and snippets — user-typed text, outside `.body`.
       That class has bitten **five** times. Inject a 300-character unbreakable token and measure
       on a fronted tab.
