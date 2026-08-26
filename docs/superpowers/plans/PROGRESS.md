@@ -1,7 +1,7 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is planned.**
+is under way — Task 1 of 9 done.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
 **951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
@@ -47,8 +47,8 @@ Landmines carried in, measured while planning:
 
 | Task | State |
 |---|---|
-| **1. The mirrored document** | **next** |
-| 2. Where the file goes | — |
+| 1. The mirrored document | ✅ |
+| **2. Where the file goes** | **next** |
 | 3. `GitJob` | — |
 | 4. Enqueue, inside the transactions that already exist | — |
 | 5. The git seam | — |
@@ -327,6 +327,22 @@ control characters as escapes, never as literals.** A literal NUL is invisible i
 turns one file into a blind spot for the tool you switched to in order to be safe.
 
 When a search must be trustworthy, read the file with Python and count.
+
+**A git worktree of this repo is not a separate test database, and another session's `npm test`
+will corrupt yours.** Measured during Phase 5 Task 1: a full-suite run reported `211 failed`,
+including `Foreign key constraint violated on PageDraft_pageId_fkey` for a page created two lines
+earlier, and 41 `deadlock detected` errors on `Space`/`Page`/`PageVersion` — the tables `resetDb`
+truncates. None of it was the code. `ps` showed `npm test` running from
+`.claude/worktrees/onedrive-microsoft-sso-7ac97b`, a worktree that shares this checkout's
+`.env.test` and therefore `badam_test`. Two runs, racing `TRUNCATE`s.
+
+`fileParallelism: false` makes this *look* impossible from inside one run, which is what sends you
+looking at the wrong thing — and the failure attributes itself to whatever you changed last. The
+same run also passed at the previous commit, which is what finally ruled the code out. **Before
+diagnosing a mass integration failure, check `ps` for another `npm test` and
+`pg_stat_activity` for connections to `badam_test`.** A pure module's tests can be verified
+without collision — `npx vitest run <paths>` — because only the integration suite touches the
+database.
 
 **A pipeline hides the exit code of its first command**, and this project has now been bitten by
 that three times in three different places: `npm run smoke | tail` reporting tail's status (Phase

@@ -48,7 +48,25 @@ scaffolding rather than content), and neither do keys the validator dropped. A t
 parsing a mirrored file back yields exactly the row's values.
 
 **This needs a serializer, and there is none** — `src/lib/markdown/frontmatter.ts` exports
-`splitFrontmatter` and nothing that writes. Task 1 builds it.
+`splitFrontmatter` and nothing that writes. Task 1 built it, and put it **in that file** rather
+than in `src/lib/git/`: `---` is the fence `remark-frontmatter` matches, and a writer in another
+module is a second, invisible declaration of the grammar that module exists to keep singular.
+
+**Two measurements from Task 1 that the mirror depends on.** `yaml` emits **anchors and aliases by
+default** for a repeated object — `{x: shared, y: shared}` becomes `x: &a1 … y: *a1`, while the
+structurally identical `{x: [a,b], y: [a,b]}` writes both in full. Output that depends on object
+*identity* rather than value cannot be a mirror, so `aliasDuplicateObjects: false`, plus
+`lineWidth: 0` so a one-character title edit does not re-flow every following line. And the plan's
+"then a blank line, then the body" was one line too many: `splitFrontmatter` removes only the
+fence's own line ending, so the author's blank line is already in `body`, and the mirrored body is
+now the stored body byte for byte.
+
+**The unparseable-frontmatter question had a better answer than either the plan offered**, because
+its premise was wrong: `splitFrontmatter` slices `body` from the parsed node's offset *before* any
+cap or YAML error is evaluated, so the author's block is gone on the failure branch too — measured
+directly. "Silently leaving the frontmatter in the body" was never reachable, so reading `body` on
+both branches is right, and refusing would only mean a version publish already accepted stops
+reaching the mirror because a cap was lowered afterwards.
 
 ## What Phase 5 does NOT do
 
@@ -139,7 +157,7 @@ Settled in Phases 1–4. Changing one is a decision, not a detail.
 
 ---
 
-## Task 1: The mirrored document
+## Task 1: The mirrored document ✅
 
 Pure, no database, no git. Everything the mirror writes goes through this.
 
