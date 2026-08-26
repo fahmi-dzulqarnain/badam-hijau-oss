@@ -480,16 +480,56 @@ once both the reader and the preview pane hydrate. Settled both sides and normal
 verification required the browser tests to exist here rather than a task later.
 ---
 
-## Task 6: End-to-end
+## Task 6: End-to-end ✅
 
-- [ ] Search finds a seeded page by a word in its body, and the snippet contains that word.
-- [ ] A non-member searching the same word gets nothing.
-- [ ] A retired page appears below a live one for the same query.
-- [ ] Filters narrow, and a filtered search is a shareable URL.
+- [x] Search finds a seeded page by a word in its body, and the snippet contains that word.
+      *(landed in Task 4 — `e2e/search.spec.ts`, with the `<mark>` over the whole word and a
+      click through to the page)*
+- [x] A non-member searching the same word gets nothing.
+- [x] A retired page appears below a live one for the same query. *(landed in Task 4)*
+- [x] Filters narrow, and a filtered search is a shareable URL. *(landed in Task 4 — replayed in
+      a second browser context with its own cookie jar)*
 - [x] A ```mermaid fence renders as an SVG; a hostile label executes nothing. *(landed in Task 5 — see above)*
 - [x] A malformed diagram shows its error and the rest of the page still reads. *(landed in Task 5 — see above)*
-- [x] Hostile content does not widen any new route. *(landed in Task 5 — see above)*
-- [ ] Cleanup asserted — the suite compares dev-database counts before and after.
+- [x] Hostile content does not widen any new route. *(landed in **Task 4** for `/search`, the only
+      route this phase adds, and in Task 5 for the diagram shapes on the reader route — the
+      annotation naming Task 5 alone was wrong: Task 5's three overflow probes are all on a route
+      Phase 1 shipped)*
+- [x] Cleanup asserted — the suite compares dev-database counts before and after.
+
+**The non-member bullet is a discrimination test, not an absence test, and the plan's own wording
+would have made it near-vacuous.** `search()` deliberately has no early return for an empty
+readable set — the ids go into `spaceId = ANY(...)` and an empty array is false for every row by
+itself — so a viewer with **no** readable space finds nothing whether or not the filter
+discriminates: `ANY('{}')` and a deleted clause are indistinguishable from outside. `stranger`
+is not that viewer: `handbook` is `ALL_STAFF`, so they can read exactly one of the two seeded
+spaces. So one word is seeded into **both** spaces and the assertion is a **count** — 2 hits for
+the `engineering` editor, exactly 1 for stranger — plus a second needle seeded only into
+`engineering`, for which stranger must get the **no-hits** sentence rather than `empty-query` or
+`no-terms`. Getting the right absence for the wrong reason is the failure this phase kept hitting.
+
+**Mutation-verified.** Deleting `AND p."spaceId" = ANY(${spaceIds})` fails it as
+`expect(locator).toHaveCount(expected) failed · Locator: locator('.q-row') · Expected: 1 ·
+Received: 2`, and the members-only half dies on the same mutant (measured directly: stranger's
+`search()` returns the `engineering` page). The editor's half is *unaffected* by that mutation,
+which is why it is there — it is the non-vacuity companion.
+
+**Three things the task brief got wrong about the fixtures, each checked rather than assumed.**
+`sweep()` needed no change: its marker is a **slug** prefix and it never filters on `spaceId`, so
+a `handbook` fixture is removed by the same three statements — recorded in its docstring, since
+Phase 4 is the first caller to depend on it. `handbook` is **not** empty: the seed's `welcome` page
+is the seventh of the seven, so nothing here was the first page in that space. And the actor for a
+`handbook` fixture is the **super admin** — `ALL_STAFF` grants read, not edit, so `aisyah` cannot
+author there; `admin@example.com` holds `EDIT` through `can()`'s `isSuperAdmin` short circuit and
+not through a membership row, because `handbook` has none.
+
+**`reader.spec.ts` did need the count guard, and adding it exposed the guard being too narrow for
+the seventh time.** It writes one real `BugReport` through the dialog — so "it writes nothing" was
+the wrong answer — and `snapshotCounts` had no `bugReports` column, so a guard added without
+widening `Counts` would have passed over the only write the file makes. Widened, and the contract
+was then **shown to fail**: leaking the report reports
+`the reader suite did not leave the dev database as it found it · - "bugReports": 0 · +
+"bugReports": 1`. A cleanup assertion nobody has watched fail is a claim, not a test.
 
 ---
 

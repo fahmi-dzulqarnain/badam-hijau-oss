@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **951 vitest + 40 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **951 vitest + 41 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -37,8 +37,8 @@ Two landmines carried in, both measured rather than guessed:
 | 3. The query | ✅ |
 | 4. The search route | ✅ |
 | 5. Mermaid hydration | ✅ |
-| **6. End-to-end** | **next** |
-| 7. Extend the smoke test | not started |
+| 6. End-to-end | ✅ |
+| **7. Extend the smoke test** | **next** |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -324,6 +324,21 @@ migration. Declare indexes in the schema; put triggers in the migration.
 
 **Two `npm test` runs cannot overlap.** They share the one `_test` database, and the loser reports
 scores of spurious failures that look like real breakage.
+
+**An absence assertion is vacuous when the mechanism under test would produce the same absence
+while broken.** Task 6's "a non-member gets nothing" is the case: `search()` binds the readable
+space ids into `= ANY(...)` with no early return, so an empty array is false for every row *by
+itself* — meaning a viewer with **no** readable space finds nothing whether the filter
+discriminates or not. The fix is a viewer with **one** readable space out of two (`handbook` is
+`ALL_STAFF`, `engineering` is `MEMBERS`), the same word seeded into both, and a **count**. Same
+family as the non-vacuity companion, arriving from the permission side.
+
+**The count contract has now been too narrow too — seventh time for a guard on this project.**
+`reader.spec.ts` was the one spec with no `snapshotCounts` guard, and the reason was assumed to be
+"it writes nothing". It writes a real `BugReport`, and `Counts` had no `bugReports` column — so
+adding the guard without widening `Counts` would have produced a check that passes over the only
+write the file makes. Widened, then **watched fail** by leaking the row on purpose. Bug reporting is
+also the one mutation in the product that writes no audit row, which is why nothing else caught it.
 
 ## Phase 1 — foundations and reader
 
