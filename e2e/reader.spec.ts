@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { db, HOSTILE, measureOverflow, signIn } from "./support";
+import {
+  db,
+  formatCounts,
+  HOSTILE,
+  measureOverflow,
+  signIn,
+  snapshotCounts,
+  type Counts,
+} from "./support";
 
 /**
  * The summary the bug-reporting check below sends. Named so the `afterAll` can take the row
@@ -14,10 +22,35 @@ const BUG_SUMMARY = "The table of contents skips a heading.";
 // `support.ts`: Phase 3's lifecycle spec is the third file to need it, and a constant with
 // three copies is the shape this project has twice watched a *rule* be dropped in.
 
+/**
+ * **This spec does write to the database, and it was the only one of the five with no count
+ * guard.** Phase 4 Task 6 asks the suite to compare dev-database counts before and after; four
+ * specs already did, and the answer for this one turned out not to be "it writes nothing". It
+ * posts a real `BugReport` through the dialog and deletes it in `afterAll` — so the guard belongs
+ * here like everywhere else.
+ *
+ * It needed `snapshotCounts` widened to see it. `BugReport` is the one table this suite writes
+ * that no fixture page can reach, and it was absent from `Counts`; adding the guard without that
+ * column would have produced a check that passes over the only write this file makes, which is
+ * worse than the gap it closes. It also does **not** call `sweep()`, and does not need to: it
+ * creates no page, no version, no draft, no redirect and no audit row (`createBugReport` is a bare
+ * `db.bugReport.create` — bug reporting is deliberately unaudited), and sweeping here would delete
+ * fixtures belonging to whichever spec file the single worker runs next.
+ */
+let baseline: Counts;
+
+test.beforeAll(async () => {
+  baseline = await snapshotCounts();
+  console.log(`[e2e] dev DB before reader: ${formatCounts(baseline)}`);
+});
+
 test.afterAll(async () => {
   // Scoped to this suite's own summary rather than a TRUNCATE, so a developer's real reports
   // survive — the same choice the smoke script makes for the same reason.
   await db.bugReport.deleteMany({ where: { summary: BUG_SUMMARY } });
+  const after = await snapshotCounts();
+  console.log(`[e2e] dev DB after reader:  ${formatCounts(after)}`);
+  expect(after, "the reader suite did not leave the dev database as it found it").toEqual(baseline);
   await db.$disconnect();
 });
 

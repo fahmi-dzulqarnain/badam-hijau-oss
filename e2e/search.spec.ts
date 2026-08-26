@@ -53,6 +53,10 @@ const NEEDLE = {
   ranked: "quokka",
   titleOnly: "narwhal",
   hostile: "cassowary",
+  /** Seeded into `engineering` **and** `handbook`, so one query reaches across both. */
+  bothSpaces: "marmoset",
+  /** Seeded only into `engineering`, so `stranger` must get the no-hits sentence for it. */
+  membersOnly: "wombat",
 } as const;
 
 /** A body a person would write, with the needle in prose rather than in a heading. */
@@ -149,6 +153,132 @@ test("a page with no prose is found by its title and says it has nothing to quot
   await expect(row).toHaveCount(1);
   await expect(row.locator(".q-title")).toHaveText(fixture.title);
   await expect(row.locator(".q-nosnippet")).toHaveText("This page has no body text to quote.");
+});
+
+/* ------------------------------------------------- who may see what, from the other side ---- */
+
+/**
+ * A token that exists in exactly one place in the whole database — the title of the members-only
+ * fixture — so "it appears nowhere on this page" is a statement about one row and not about the
+ * seeded corpus. Never searched for; it is only ever asserted absent.
+ */
+const MEMBERS_ONLY_SENTINEL = "orrery";
+
+/**
+ * Phase 4 Task 6's non-member bullet — *"a non-member searching the same word gets nothing"* —
+ * implemented as a **discrimination** rather than as an absence, because the plan's own wording
+ * would otherwise be near-vacuous here.
+ *
+ * ## Why the obvious version of this test proves almost nothing
+ *
+ * `search()` has no early return for an empty readable set. The ids go into
+ * `AND p."spaceId" = ANY(${spaceIds})` and an empty array makes that clause false for every row
+ * **naturally** — deliberately, so there is no early return whose deletion would be invisible. The
+ * consequence for a test is that a viewer with *no* readable space finds nothing whether or not
+ * the filter discriminates correctly: `= ANY('{}')` and a deleted clause over a one-space database
+ * are indistinguishable from the outside.
+ *
+ * `stranger@example.com` is not that viewer. `handbook` is `ALL_STAFF`, so stranger can read
+ * exactly **one** of the two seeded spaces — which is what forces the `ANY(...)` to do work rather
+ * than to be trivially false. So the same word is seeded into both spaces and the assertion is a
+ * **count**, not an absence.
+ *
+ * ## The mutant this kills
+ *
+ * Delete `AND p."spaceId" = ANY(${spaceIds})` from `src/lib/search/query.ts` and stranger's search
+ * for `bothSpaces` returns **2** rows instead of 1 — measured — with the members-only title, path
+ * and space name all painted on the page, and the count sentence reading "2 pages match" instead
+ * of "One page matches". The engineering-only half of the test dies too, on the same mutant: the
+ * no-hits sentence becomes a result row. The editor's half of the test is *unaffected* by that
+ * mutation, which is exactly why it is here — it is the non-vacuity companion, proving both
+ * needles really match a published page before anything concludes from stranger not finding one.
+ *
+ * ## Getting the right absence for the wrong reason
+ *
+ * The route has three sentences and two of them would be a lie here. A needle seeded only into
+ * `engineering` must produce the **no-hits** sentence for stranger — "No page matches" — and not
+ * "Nothing typed yet" (`empty-query`) and not "a search that was never made" (`no-terms`). A
+ * refusal that arrives because the query never ran is a test of the parser, not of the space
+ * filter, so the sentence is asserted rather than the emptiness.
+ */
+test("a non-member sees only the space they can read, and the members-only page is nowhere on the page", async ({
+  page,
+  browser,
+}) => {
+  const members = await seedPublishedPage({
+    slug: "e2e-search-members",
+    title: `Retry policy for the ${MEMBERS_ONLY_SENTINEL} bridge`,
+    markdown: [
+      bodyAbout(NEEDLE.bothSpaces),
+      `The ${NEEDLE.membersOnly} switch is set per outlet.`,
+      "",
+    ].join("\n"),
+  });
+  // `handbook` is `ALL_STAFF`, and `ALL_STAFF` grants read and not edit — so this fixture cannot
+  // be authored by the `engineering` editor every other fixture in this file uses. The super admin
+  // is the only seeded identity that holds `EDIT` there; `seedPublishedPage` argues why, and
+  // pairing them wrongly fails naming both the actor and the space.
+  const allStaff = await seedPublishedPage({
+    spaceKey: "handbook",
+    actor: "admin@example.com",
+    slug: "e2e-search-allstaff",
+    title: "Claiming expenses",
+    markdown: bodyAbout(NEEDLE.bothSpaces),
+  });
+
+  // ---- the non-vacuity companion: both needles really do match a published page ----
+  await signIn(page, "aisyah@example.com");
+  await page.goto(`/search?q=${NEEDLE.bothSpaces}`);
+  await expect(page.locator(".q-row")).toHaveCount(2);
+  // Unordered: both matches are in the `C` band over near-identical prose, so which one ranks
+  // higher is a density detail this test has no business pinning. What it pins is that the word
+  // reaches across a space boundary for someone who can read both sides of it.
+  expect((await page.locator(".q-space").allInnerTexts()).sort()).toEqual([
+    "Company handbook",
+    "Engineering",
+  ]);
+  await page.goto(`/search?q=${NEEDLE.membersOnly}`);
+  await expect(page.locator(".q-row")).toHaveCount(1);
+  await expect(page.locator(".q-title")).toHaveText(members.title);
+
+  // ---- and now the same two searches as someone who can read one of the two spaces ----
+  const stranger = await actorContext(browser, "stranger@example.com");
+  try {
+    await stranger.page.goto(`/search?q=${NEEDLE.bothSpaces}`);
+
+    const rows = stranger.page.locator(".q-row");
+    await expect(rows).toHaveCount(1);
+    await expect(rows.locator(".q-title")).toHaveText(allStaff.title);
+    await expect(rows.locator(".q-space")).toHaveText("Company handbook");
+    // Not in a count either. The route prints one, and a filter that hides a row from the list
+    // while counting it would be a leak in the shape this project has already been bitten by —
+    // a number is an answer about pages the viewer may not know exist.
+    await expect(stranger.page.locator(".q-count")).toHaveText(
+      `One page matches “${NEEDLE.bothSpaces}”.`,
+    );
+
+    // Nowhere in the DOM: not in a row, not in a note, not in the count, not in the nav. Three
+    // separate strings, because the row paints three — and the sentinel is a token that exists in
+    // exactly one place in the database, so this cannot pass by the seed happening to be quiet.
+    const body = stranger.page.locator("body");
+    await expect(body).not.toContainText(MEMBERS_ONLY_SENTINEL);
+    await expect(body).not.toContainText(members.title);
+    await expect(body).not.toContainText(members.path);
+
+    // ---- the right absence, for the right reason ----
+    await stranger.page.goto(`/search?q=${NEEDLE.membersOnly}`);
+    await expect(stranger.page.locator(".q-row")).toHaveCount(0);
+    const sentence = await stranger.page.locator(".q-empty").innerText();
+    // The no-hits sentence, and neither of the other two. A search that was never made and a
+    // search that found nothing are different claims, and only one of them is true here.
+    expect(sentence).toContain(`No page matches “${NEEDLE.membersOnly}”`);
+    expect(sentence).not.toContain("Nothing typed yet");
+    expect(sentence).not.toContain("never made");
+    await expect(body).not.toContainText(MEMBERS_ONLY_SENTINEL);
+    await expect(body).not.toContainText(members.title);
+  } finally {
+    await stranger.context.close();
+  }
 });
 
 /* ------------------------------------------------------------- three outcomes, three sentences ---- */
