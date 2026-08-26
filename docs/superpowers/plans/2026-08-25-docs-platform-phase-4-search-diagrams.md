@@ -138,20 +138,43 @@ and a link whose text is itself a URL. Test them.
 
 ---
 
-## Task 2: The index, and the trigger that maintains it
+## Task 2: The index, and the trigger that maintains it ✅
 
 **Files:** `prisma/schema.prisma`, a **raw SQL** migration, tests.
 
-- [ ] **Step 1: `PageVersion.searchText` and `Page.searchVector`**
+- [x] **Step 1: `PageVersion.searchText` and `Page.searchVector`**
 
 The text on the version (it is a property of that published text); the vector on `Page` (it is
 what a query scans, and `Page` is what carries `status`, `docType`, `spaceId` and `deletedAt`).
 
 `tsvector` is not a Prisma scalar — it needs `Unsupported("tsvector")` and the index must be
-`GIN`, created in raw SQL. Confirm what `prisma migrate dev` does with an `Unsupported` column
-before building on it; if it cannot round-trip, say so and adjust rather than fighting it.
+`GIN`. **Measured on a throwaway database before anything was written, and triggers and indexes
+turn out to behave oppositely:**
 
-- [ ] **Step 2: The trigger**
+| Object | What `prisma migrate dev` does |
+|---|---|
+| A trigger created **in a migration** | **Survives.** Prisma's diff cannot see it, so it is never dropped and never reported as drift |
+| A trigger created **by hand** against a database | Also survives — **and that is the trap.** Equally invisible, so it exists on the machine that ran it and on no fresh database ever provisioned. **A trigger that is not in a migration is not deployed** |
+| The **GIN index** | **The opposite.** Prisma *does* model indexes, so one created only in SQL is diffed as an extra and the next unrelated `migrate dev` emits `DROP INDEX "Page_searchVector_idx"` — reproduced, as the only statement of a no-op migration |
+
+So the index is **declared in `schema.prisma`** (Prisma emits its own `CreateIndex`) while the
+trigger is hand-written **inside the migration**. The dangerous half is the one that looks safe:
+a by-hand trigger works perfectly on the machine that created it.
+
+**Two triggers, with the weighting expressed once** so they cannot disagree — one on `Page` and
+one on `PageVersion`, because two of the three inputs live on the version.
+
+**What is deliberately not in the vector**, each with a reason rather than an omission:
+
+- **`status`, `docType`, `spaceId` are filters, not text.** §13 lists them as filters and Task 3
+  puts them in the `WHERE` clause, where they are exact. Indexing `ACCEPTED` as a lexeme would let
+  a page *about acceptance testing* match a status filter spelled as a word.
+- **`path` and `slug` are addresses.** Task 1 already drew this line for link URLs, and a path is
+  the same object — assembled from slugs, assembled from the title, which is already at weight A.
+  Indexing it would double-count the title in a hyphen-split form.
+- **`frontmatter` is metadata**, for the reason Task 1 gives.
+
+- [x] **Step 2: The trigger**
 
 `setweight(title,'A') || setweight(headings,'B') || setweight(searchText,'C')`, on the row's own
 `INSERT OR UPDATE`. Weights come from §13.
@@ -169,13 +192,13 @@ as a failed strip.
 
 **Headings are already extracted server-side** by `collectHeadings` — do not re-derive them.
 
-- [ ] **Step 3: Prove the trigger fires on writes that are not publishes**
+- [x] **Step 3: Prove the trigger fires on writes that are not publishes**
 
 The point of a trigger rather than application code. A Phase 3 cascade setting `status`, and a
 Phase 2 move rewriting `path`, must both leave the vector correct. If a field is *not* in the
 vector, say which and why rather than leaving it to be discovered.
 
-- [ ] **Step 4: Backfill**
+- [x] **Step 4: Backfill**
 
 Existing rows have no vector. A migration that leaves seeded pages unsearchable is one that
 passes every test and fails on first use.
@@ -208,6 +231,16 @@ to outrank it; demotion is a thumb on the scale, not a filter.
 `deletedAt IS NULL` and a published version. §13: *"an unpublished draft never appears in
 results."* Both need their own test — a draft is invisible to `getPublishedPage` but its `Page`
 row is real, and the vector lives on `Page`.
+
+**§13 attributes this to the wrong mechanism, and Task 2's backfill proves it.** The spec says the
+vector is "derived from the page's **published** version … so an unpublished draft never appears
+in results" — implying the index achieves the exclusion. It does not. An unpublished page has no
+published version, so it gets a **title-only** vector — measured: the seeded unpublished
+`adr-0043` carries a 35-byte vector that matches a search for its own title. The exclusion has to
+be in the `WHERE` clause. Either filter on `publishedVersionId IS NOT NULL` here, or make the
+trigger leave the vector `NULL` for an unpublished page — **decide which, and say why**, because
+the second makes the index self-documenting while the first keeps all the query's rules in one
+readable place.
 
 ---
 

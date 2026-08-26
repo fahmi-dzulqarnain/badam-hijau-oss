@@ -3,7 +3,7 @@
 **Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
 Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **860 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+PR) · **882 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -33,8 +33,9 @@ Two landmines carried in, both measured rather than guessed:
 | Task | State |
 |---|---|
 | 1. Plain text from Markdown | ✅ |
-| **2. The index, and the trigger that maintains it** | **next** |
-| 3–7 | not started |
+| 2. The index, and the trigger that maintains it | ✅ |
+| **3. The query** | **next** |
+| 4–7 | not started |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -263,6 +264,15 @@ that three times in three different places: `npm run smoke | tail` reporting tai
 reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
 read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
 run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**Prisma treats triggers and indexes oppositely, and the dangerous half looks safe.** Measured in
+Phase 4 Task 2: a trigger created **in a migration** survives every later `migrate dev`, because
+Prisma's diff cannot see it — and a trigger created **by hand** survives too, which is the trap,
+because it is equally invisible and therefore exists on the machine that ran it and on no fresh
+database ever provisioned. **A trigger that is not in a migration is not deployed.** The GIN index
+is the reverse: Prisma *does* model indexes, so one created only in SQL is diffed as an extra and
+the next unrelated `migrate dev` emits `DROP INDEX` — reproduced as the only statement of a no-op
+migration. Declare indexes in the schema; put triggers in the migration.
 
 **Two `npm test` runs cannot overlap.** They share the one `_test` database, and the loser reports
 scores of spurious failures that look like real breakage.

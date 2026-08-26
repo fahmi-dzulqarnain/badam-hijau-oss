@@ -379,7 +379,22 @@ deployment). Confirming a review updates `reviewedAt` without creating a version
 Postgres full-text search. A `tsvector` column on `Page` is derived from the page's
 **published** version — title, headings, and body text stripped of Markdown syntax —
 weighted `A`, `B` and `C` respectively. It is maintained by a trigger created in a raw SQL
-migration, so an unpublished draft never appears in results. Queries use `websearch_to_tsquery` and `ts_headline` for snippets, always filtered
+migration, so an unpublished draft never appears in results.
+
+> **Correction, measured while implementing Phase 4's index.** Two claims in this sentence do not
+> hold as written.
+>
+> **A trigger cannot strip Markdown**, so "derived from … body text stripped of Markdown syntax"
+> is not something plpgsql can do. The publish transaction produces the plain text with the parser
+> that already understands the document, and the trigger builds the weighted vector from stored
+> columns. The trigger is still what keeps the vector from drifting when a write that is *not* a
+> publish changes a searchable field — a §6.3 cascade setting `status`, a §5.3 move rewriting
+> `path` — which is the property worth having.
+>
+> **And the index does not exclude unpublished drafts.** A page with no published version still
+> gets a **title-only** vector, and that matches a search for its own title — measured on the
+> seeded unpublished ADR. The exclusion belongs in the query's `WHERE` clause, not in the
+> derivation. Queries use `websearch_to_tsquery` and `ts_headline` for snippets, always filtered
 by readable space ids. Filters: space, doc type, status, system. Retired documents (§6.4) stay in
 results but are demoted in ranking; the status filter isolates or excludes them.
 
