@@ -211,15 +211,24 @@ test("a leading blank line does not make the block below it frontmatter", () => 
   );
 });
 
-test("a second --- block further down the document is text, because the renderer renders it", async () => {
-  // This pins the decision NOT to enable `remark-frontmatter` on the body pass.
-  // `remark-frontmatter` only ever recognises the block a document opens with, so the reader
-  // sees this one as a rule and a heading. Enabling it here would delete text off the page.
-  const doc = "---\nstatus: ACCEPTED\n---\n\nBody.\n\n---\nnot: frontmatter\n---\n";
+test("a second --- block is text, because the renderer renders it — even butted up against the first", async () => {
+  // This pins the decision NOT to enable `remark-frontmatter` on the body pass, and the
+  // document has to be this one to pin it. `remark-frontmatter` only recognises a block at
+  // offset 0, so with any prose in between the mutant that enables it is *equivalent* —
+  // measured: with `.use(remarkFrontmatter, ["yaml"])` added to the body parser, a version of
+  // this test with "Body." above the second block passed unchanged, 33 of 33.
+  //
+  // Butted up against the first, the second block IS at offset 0 of the body, and the two
+  // implementations part company. The renderer is the tie-break: it sees the whole document,
+  // strips only the block the document opens with, and puts the rest on the page as a rule and
+  // a setext heading — so a reader can see `not: frontmatter`, and search must be able to find
+  // it. Enabling the plugin here would delete visible text out of the index.
+  const doc = "---\nstatus: ACCEPTED\n---\n---\nnot: frontmatter\n---\n\nBody.\n";
 
-  expect(searchTextOf(doc)).toBe("Body.\nnot: frontmatter");
+  expect(searchTextOf(doc)).toBe("not: frontmatter\nBody.");
 
   const { html } = await renderMarkdown(doc);
+  expect(html).toContain("<h2");
   expect(html).toContain("not: frontmatter");
   expect(html).not.toContain("status: ACCEPTED");
 });
