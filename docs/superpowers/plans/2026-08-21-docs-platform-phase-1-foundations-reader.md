@@ -5920,6 +5920,10 @@ cleaned up, which the Teardown step below does.
 > **Superseded snapshot.** Phase 2's Task 15 added an authoring pass — create, save, publish,
 > read, move, follow the redirect, delete, 404 — taking the script from 19 named checks to 37,
 > and rewrote its cleanup into a `sweep()` that also removes the `AuditLog` rows the pass writes.
+> Phase 3's Task 13 then added a doc-lifecycle pass — publish an ADR, supersede it, confirm the
+> first is `SUPERSEDED` and still readable, confirm the generated index lists and filters both —
+> taking it to **62 checks**, extending `sweep()` to `PageRelation` and adding a `counts()`
+> contract read before and after.
 > Read `scripts/smoke.sh` for the current version. The sentence below claiming the fence is
 > byte-identical to the shipped file was true when written and is not now.
 

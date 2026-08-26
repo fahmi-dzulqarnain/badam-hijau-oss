@@ -846,26 +846,64 @@ reader, exactly as a person would.
 
 ---
 
-## Task 13: Extend the smoke test
+## Task 13: Extend the smoke test ✅
 
-- [ ] A cold-start lifecycle pass over HTTP: publish an ADR, supersede it, confirm the first is
-      `SUPERSEDED` and still readable, confirm the index lists both.
-- [ ] Clean up everything, including `PageRelation` rows and the audit rows the cascades write.
-- [ ] Prove it can fail; the exit code is the contract.
+- [x] A cold-start lifecycle pass over HTTP: publish an ADR, supersede it, confirm the first is
+      `SUPERSEDED` and still readable, confirm the index lists both. **37 → 62 named checks.**
+
+      `status:` travels in the saved markdown, never in the request — the publish route reads no
+      body, which is exactly the path Task 11's picker takes. Both ADRs reach `ACCEPTED` on their
+      *first* publish, which is what a cascade needs at both ends, and the publish reply must
+      carry `"dormant":[]` — the cascade reporting that it **fired**, not that it is waiting.
+
+      **Both ADRs are fixtures on purpose.** A cascade writes a status onto a *different* page,
+      and a status written onto a **seeded** page is the one thing `sweep()` could never take
+      back.
+- [x] Clean up everything, including `PageRelation` rows and the audit rows the cascades write —
+      **and deliberately no relation clause in the `raise exception` guard.** Both foreign keys
+      cascade, and every relation this script can write has a `smoke-` page at each end, so such a
+      clause could only ever be true when the `Page` clause above it already is: a check that
+      cannot fail on its own, which is the vacuous shape Task 9 recorded. The guard that *can*
+      fail is a new `counts()` read before the pass and after teardown — the e2e suite's
+      `snapshotCounts` mechanism, and stricter than the sweep, because it also catches rows
+      nothing knew to delete.
+- [x] Prove it can fail; the exit code is the contract. Mutating `cascadeFor` to `return null`
+      produced **5 named failures and exit 1**, and teardown still swept.
+
+      **The mutant earned its keep twice.** The pass first matched page *titles* — and the index
+      and reader routes render inside the space layout, whose nav rail names every page in the
+      space on the same HTML. So the negative index check failed outright, and "the banner names
+      the replacement" stayed **green with no cascade at all**. Both are now bound to structure.
+      Generalising: **any assertion about a list, on a route that renders the reader shell, has to
+      be bound to that list's own markup** — the rail is on every one of those pages.
 
 ---
 
 ## Phase 3 exit criteria
 
-- [ ] `npm test`, `npm run test:e2e`, `npm run smoke` all pass
-- [ ] `npm run typecheck && npm run build` clean; `npm run plan:check` 0 drifted
-- [ ] Frontmatter never appears in a rendered body or a table of contents
-- [ ] An ADR opens on its template and publishes with validated frontmatter
-- [ ] Publishing an ADR that supersedes another retires the other **in the same transaction**,
+All verified on 25 Aug 2026:
+
+- [x] `npm test` — **827 passing, 53 files**
+- [x] `npm run test:e2e` — **27 passing** against a production build
+- [x] `npm run smoke` — **62 checks, exit 0** from a cold start
+- [x] `npm run typecheck && npm run build` clean; `npm run plan:check` **0 drifted**
+- [x] Frontmatter never appears in a rendered body or a table of contents — the bug this phase
+      inherited, fixed in Task 2 before anything was built on it
+- [x] An ADR opens on its template and publishes with validated frontmatter
+- [x] Publishing an ADR that supersedes another retires the other **in the same transaction**,
       and the retired page still reads with a banner naming its replacement
-- [ ] An ADR that decides an RFC closes it
-- [ ] Every guardrail in §6.3 refuses, each with its own message: self-supersede, cycle,
-      cross-type, non-ADR deciding, unaccepted source
-- [ ] A relation never surfaces a page the viewer cannot read, and a refusal never reveals that
+- [x] An ADR that decides an RFC closes it — **after the RFC is accepted**, since `IN_REVIEW →
+      CLOSED` is not in the vocabulary
+- [x] Every guardrail in §6.3 refuses with its own message: cycle, cross-type, non-ADR deciding,
+      unaccepted source. **Self-supersede is Task 5's**, subsumed rather than restated, because
+      only resolution catches a reference to a page's own pre-move path
+- [x] A relation never surfaces a page the viewer cannot read, and a refusal never reveals that
       one exists
-- [ ] Generated ADR and RFC indexes list and filter by status
+- [x] Generated ADR and RFC indexes list and filter by status, reachable from the nav rail
+
+Two spec corrections came out of this phase, both written back into the spec rather than left in
+code comments: §6.1's RFC row contradicted the paragraph below it, so an RFC's first publish had
+nowhere legal to go; and §6.4 promised a retired page "remains editable so it can be annotated"
+while §6.1 gave terminal statuses no onward transition at all, making the promise hollow.
+
+**Phase 3 is complete.**

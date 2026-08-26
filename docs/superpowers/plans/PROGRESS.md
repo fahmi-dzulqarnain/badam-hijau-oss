@@ -1,8 +1,8 @@
 # Execution status
 
-**Phases 1 and 2 are complete. Phase 3 (doc types and lifecycle) is in progress.**
+**Phases 1, 2 and 3 are complete.**
 
-Branch: `main` · **827 vitest + 27 Playwright tests passing**, 37-check cold-start smoke ·
+Branch: `main` · **827 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -16,7 +16,11 @@ completed phases.
 ## Phase 3 — doc types and lifecycle
 
 Decisions taken with the user: relations name their target by **space-relative page path**,
-resolved to a page id at publish time; templates are **Markdown files in the repo**.
+resolved to a page id at publish time; templates are **files in the repo** (one-file modules, not
+`.md` — Task 4 measured why). All 13 tasks done and every exit criterion verified — see the end of
+the [phase-3 plan](2026-08-24-docs-platform-phase-3-doc-types.md). Next: **Phase 4, search and
+diagrams**, which owns the search-ranking demotion §6.4 promises for retired pages and the Mermaid
+hydration constraint the roadmap already records.
 
 | Task | State |
 |---|---|
@@ -32,7 +36,7 @@ resolved to a page id at publish time; templates are **Markdown files in the rep
 | 10. Generated indexes | ✅ |
 | 11. The editor's status and frontmatter surface | ✅ |
 | 12. End-to-end | ✅ |
-| **13. Extend the smoke test** | **next — last task in the phase** |
+| 13. Extend the smoke test | ✅ |
 
 **It started by fixing a bug it inherited** — the render pipeline turned frontmatter into an
 `<hr>` plus a heading whose id landed a junk entry in the table of contents. Fixed in Task 2;
@@ -53,6 +57,15 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **Any assertion about a list, on a route that renders the reader shell, must bind to that
+  list's own markup.** The nav rail names every page in the space on the same HTML, so a
+  title-shaped needle passes for free — Task 13's smoke pass had a banner check that stayed green
+  with the cascade disabled entirely.
+- **Do not add a guard clause that cannot fail on its own.** Task 13 declined to add a
+  `PageRelation` clause to the smoke sweep's exception guard: both foreign keys cascade and every
+  relation has a marked page at each end, so the clause could only be true when the clause above
+  it already was. It added a before/after count comparison instead — which is stricter, because it
+  also catches rows nothing knew to delete.
 - **A refusal that survives deleting the guard it is about is a test of the other guard.** Task
   12's first cycle test passed with cycle detection disabled, because the same publish was also
   refused by the cascade's transition check. Mutation testing is what exposed it — the test was
