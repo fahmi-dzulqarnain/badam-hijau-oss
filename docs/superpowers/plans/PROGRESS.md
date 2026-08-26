@@ -1,14 +1,39 @@
 # Execution status
 
-**Phases 1, 2 and 3 are complete.**
+**Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
 
-Branch: `main` · **827 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
+PR) · **827 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
 [phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
+[phase 4](2026-08-25-docs-platform-phase-4-search-diagrams.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
+
+## Phase 4 — search and diagrams
+
+Decision taken with the user: **the application strips, the trigger weights.** §13 asks for a
+`tsvector` derived from Markdown-stripped body text and maintained by a raw-SQL trigger — and a
+plpgsql trigger cannot run remark. So publish produces the plain text with the parser that
+already understands the document, and the trigger builds the weighted vector from stored columns,
+which keeps what a trigger is *for*: the vector cannot drift from its row when a write that is
+**not** a publish changes a searchable field.
+
+Two landmines carried in, both measured rather than guessed:
+
+- **Hydrating a Mermaid diagram decodes what the sanitiser escaped.** Reading `textContent` hands
+  Mermaid the literal `</div><script>alert(1)</script>`. `securityLevel: "strict"` is required,
+  explicitly, and the source must never move through `innerHTML`. The escaping protects the
+  *document*, not the diagram source.
+- **Mermaid is 84 MB unpacked**, so it must be a dynamic import absent from the bundle of any
+  route without a diagram — asserted against `next build`'s output, not claimed.
+
+| Task | State |
+|---|---|
+| **1. Plain text from Markdown** | **next** |
+| 2–7 | not started |
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
