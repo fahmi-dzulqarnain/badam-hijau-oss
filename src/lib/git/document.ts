@@ -190,9 +190,11 @@ export function mirrorDocumentOf(version: MirroredVersion): string {
     // `MirroredVersion["author"]` later cannot start appearing in every mirrored file without
     // this line changing.
     author: { name: version.author.name, email: version.author.email },
-    // A string, not the `Date`: `yaml` writes a `Date` as an unquoted ISO timestamp and reads it
-    // back as a **string** under YAML 1.2's core schema, so passing the object would be a round
-    // trip that changes type. Formatting it here makes the value explicit and UTC.
+    // A string, not the `Date`. Measured: `yaml` writes a `Date` as this very same unquoted ISO
+    // timestamp, so the bytes would be identical — but it reads back as a **string** under YAML
+    // 1.2's core schema, which makes passing the object a round trip that changes type. The
+    // conversion is stated here so the UTC formatting is this module's decision, and
+    // `FrontmatterValue` refuses a `Date` outright so the choice cannot be undone by accident.
     publishedAt: version.publishedAt.toISOString(),
     declared: version.frontmatter,
   });
