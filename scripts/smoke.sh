@@ -56,6 +56,16 @@ expect_status() { # url expected label
   [ "$got" = "$2" ] && ok "$3 ($1 -> $got)" || fail "$3 ($1 -> $got, wanted $2)"
 }
 
+expect_absent() { # url needle label
+  # The mirror of `expect_body`, and it exists because a filter that filters nothing looks
+  # exactly like a filter that works: `?status=SUPERSEDED` listing the retired ADR proves only
+  # that the page renders. What makes that check mean something is the page NOT listing the ADR
+  # still in force.
+  curl -s -b "$JAR" "$BASE$1" > "$OUT"
+  grep -q -- "$2" "$OUT" \
+    && fail "$3 ('$2' is present at $1)" || ok "$3"
+}
+
 expect_body() { # url needle label
   # Written to a file and grepped, not piped: under `pipefail` a pipeline reports the WRITER's
   # status, and `grep -q` exits on its first match while curl is still writing — so a matching
@@ -110,7 +120,36 @@ action_field() { # field-name
   sed -n "s/.*name=\"$1\" value=\"\([^\"]*\)\".*/\1/p" "$FORM" | sed 's/&quot;/"/g'
 }
 
-# Everything the authoring and bug-report checks create, taken back out.
+# Every row count in the development database, on one line.
+#
+# **`psql` and not `npx prisma db execute`.** That command is a write channel: it returns no
+# result set at all, which is why the sweep below can only assert a count inside a
+# `raise exception` and can never report one. `psql` is not a new dependency — `setup-db.sh`,
+# which the Provision step runs first, is built entirely on it — and this connects the way that
+# script connects: the local server, the `badam` database, the developer's own role. `.env`'s
+# `DATABASE_URL` is deliberately not reused as the connection string; libpq refuses its
+# `?schema=public` parameter outright.
+#
+# This is the guard that covers `PageRelation`, and the reason it has to be a whole-table count
+# rather than another clause in `sweep`'s `raise exception` block is in that block's comment.
+counts() {
+  psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX -v ON_ERROR_STOP=1 -c "
+    select format(
+      '%s spaces / %s pages / %s versions / %s drafts / %s audit / %s redirects / '
+      || '%s relations / %s bug reports / %s soft-deleted',
+      (select count(*) from \"Space\"),
+      (select count(*) from \"Page\"),
+      (select count(*) from \"PageVersion\"),
+      (select count(*) from \"PageDraft\"),
+      (select count(*) from \"AuditLog\"),
+      (select count(*) from \"Redirect\"),
+      (select count(*) from \"PageRelation\"),
+      (select count(*) from \"BugReport\"),
+      (select count(*) from \"Page\" where \"deletedAt\" is not null))" 2>/dev/null \
+    || echo "counts unavailable"
+}
+
+# Everything the authoring, lifecycle and bug-report checks create, taken back out.
 #
 # Called TWICE: once before the authoring pass, because a fixture left behind by a crashed run
 # makes this run's create fail on an occupied path — which reads as a product bug and is not
@@ -127,13 +166,30 @@ action_field() { # field-name
 # - `Redirect` rows are swept by `fromPath` as well as by cascade. A move's redirect points AT
 #   the fixture and cascades with it; a delete's redirect points at the nearest surviving
 #   ANCESTOR, which is a seeded page, so nothing would cascade it away.
+# - `PageRelation` goes with the audit rows and for the same reason — Phase 3. A relation row is
+#   two page ids and carries no marker of its own, so the page ids are the only handle and this
+#   is the last moment they can be read. The schema *would* cascade it from either end, and the
+#   statement is here anyway: an `onDelete: Cascade` in `prisma/schema.prisma` is a decision two
+#   files away that could be relaxed without this script noticing, and cleanup this script is
+#   responsible for should be readable in the sweep that is responsible for it.
 #
 # The `do` block at the end is what makes this a contract rather than a hope: a sweep that
 # silently left rows behind would otherwise be invisible until the next run failed to create.
+#
+# **It has no `PageRelation` clause, and that is deliberate rather than an omission.** Every
+# relation this script can write has a `smoke-` page at both ends, and both foreign keys cascade,
+# so a clause here could only ever be true when the `Page` clause above it is already true — a
+# check that cannot fail on its own, which this project has just spent a task learning to
+# recognise. What can fail is a whole-table count: `counts()` above is read before the passes and
+# again after this sweep, and Teardown compares them. That catches a leaked relation whatever its
+# ends are, along with every other row this script did not mean to leave.
 sweep() {
   npx --no prisma db execute --stdin --schema prisma/schema.prisma > /dev/null 2>&1 <<'SQL'
 update "Page" set "publishedVersionId" = null where slug like 'smoke-%';
 delete from "AuditLog" where "pageId" in (select id from "Page" where slug like 'smoke-%');
+delete from "PageRelation"
+ where "fromId" in (select id from "Page" where slug like 'smoke-%')
+    or "toId"   in (select id from "Page" where slug like 'smoke-%');
 delete from "Redirect" where "fromPath" like 'smoke-%';
 delete from "Page" where slug like 'smoke-%';
 delete from "BugReport" where summary = 'smoke test';
@@ -192,6 +248,11 @@ step "Authoring"
 # which reads as a product bug and is not one.
 sweep && ok "swept any fixtures an earlier run left behind" \
   || fail "could not sweep before the authoring pass"
+
+# Read AFTER that sweep, so a fixture a crashed run left behind is not counted as part of the
+# baseline this run promises to restore.
+BEFORE="$(counts)"
+ok "dev database before the passes: $BEFORE"
 
 sign_in "aisyah@example.com"
 
@@ -288,11 +349,22 @@ code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/bugs"
 step "Teardown"
 # The checks above insert real rows into the DEVELOPMENT database: a bug report, and — since
 # Phase 2's authoring pass — a page, a version, a redirect from the move and four `AuditLog`
-# rows, one for each of create, publish, move and delete. `sweep` removes all of it and then
-# asserts it is gone, so this run leaves `badam` at exactly the counts it found. Scoped to the
-# markers this script writes rather than a TRUNCATE, so a developer's own rows survive.
+# rows, one for each of create, publish, move and delete. Phase 3's lifecycle pass adds two more
+# pages, their versions, a `PageRelation`, and the `page.cascade` audit row the cascade writes on
+# the page it retired. `sweep` removes all of it and then asserts it is gone, so this run leaves
+# `badam` at exactly the counts it found. Scoped to the markers this script writes rather than a
+# TRUNCATE, so a developer's own rows survive.
 sweep && ok "removed everything this run created" \
   || fail "could not clean up after the run — check for smoke- pages and 'smoke test' bugs"
+
+# The cleanup contract, stated as a number rather than as a marker — and the only guard that can
+# see a `PageRelation`, which has no marker to be scoped to. It is also stricter than the sweep:
+# the sweep asserts that everything it knows how to delete is gone, and this asserts that nothing
+# else appeared either.
+AFTER="$(counts)"
+[ "$AFTER" = "$BEFORE" ] \
+  && ok "dev database after the run:  $AFTER" \
+  || fail "the run changed the dev database — before: $BEFORE — after: $AFTER"
 
 step "Result"
 if [ "$FAILURES" -eq 0 ]; then
