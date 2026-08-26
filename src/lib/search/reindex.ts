@@ -84,7 +84,12 @@ export async function reindexSearchText(
       // Explicit select, never `include`.
       select: { id: true, markdown: true, searchText: true, searchHeadings: true },
     });
-    if (versions.length === 0) break;
+    // Read before the loop body, and a `break` rather than a `?.` on the way out. `after`
+    // becoming `undefined` again would drop the `id > …` filter and restart the walk from the
+    // first row — an infinite loop that rewrites nothing and never returns, which is the worst
+    // available failure for a maintenance job someone left running.
+    const last = versions[versions.length - 1];
+    if (last === undefined) break;
 
     for (const version of versions) {
       report.scanned += 1;
@@ -103,7 +108,7 @@ export async function reindexSearchText(
       report.rewritten += 1;
     }
 
-    after = versions[versions.length - 1]?.id;
+    after = last.id;
     options.onBatch?.({ ...report });
   }
 

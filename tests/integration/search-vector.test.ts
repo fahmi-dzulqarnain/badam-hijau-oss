@@ -503,6 +503,42 @@ test("a second reindex rewrites nothing", async () => {
 });
 
 /**
+ * More rows than one batch, because a paginated walk that never takes a second page is a
+ * paginated walk nobody has run.
+ *
+ * The cursor is keyset — `id > last` — rather than `skip`/`take`, so a publish landing mid-run
+ * cannot make it skip a row or read one twice. Both halves of that are invisible at one row:
+ * with the cursor never advancing this loops forever, and with it advancing by an offset the
+ * count comes out wrong. `BATCH` is 100, so 101 versions is the smallest corpus that exercises
+ * the second round trip.
+ */
+test("the reindex walks past its first batch", async () => {
+  const { aisyah, asAisyah, drafted } = await fixture();
+  const page = await drafted({
+    slug: "hydrant-ledger",
+    title: `The ${TITLE_WORD} log`,
+    markdown: documentFor(`${HEADING_WORD} rules`, `Every ${BODY_WORD} delivery is weighed.`),
+  });
+  published(await publishPage(asAisyah, page.id));
+
+  // Unpublished history, which the reindex must still visit: `Page.publishedVersionId` names
+  // one of these, and a walk that stopped at the published one would leave the rest describing
+  // text a rollback could put back on the page.
+  await db.pageVersion.createMany({
+    data: Array.from({ length: 100 }, (_, index) => ({
+      pageId: page.id,
+      title: `Revision ${index}`,
+      markdown: `Superseded prose ${index}.`,
+      status: "CURRENT" as const,
+      authorId: aisyah.id,
+    })),
+  });
+
+  expect(await reindexSearchText(db)).toEqual({ scanned: 101, rewritten: 100 });
+  expect(await reindexSearchText(db)).toEqual({ scanned: 101, rewritten: 0 });
+});
+
+/**
  * The soft-delete question this module answers by **not** filtering.
  *
  * Task 12 promises a restore puts a page back as it was. A backfill that skipped deleted rows
