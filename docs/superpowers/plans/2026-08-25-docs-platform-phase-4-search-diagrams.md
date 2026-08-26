@@ -533,26 +533,89 @@ was then **shown to fail**: leaking the report reports
 
 ---
 
-## Task 7: Extend the smoke test
+## Task 7: Extend the smoke test ✅
 
-- [ ] Publish a page over HTTP, search for a word unique to it, assert it is found; retire it and
+- [x] Publish a page over HTTP, search for a word unique to it, assert it is found; retire it and
       assert it now ranks below a live match.
-- [ ] Clean up everything, and extend the `counts()` contract if this phase adds a table.
-- [ ] Prove it can fail; the exit code is the contract.
+- [x] Clean up everything, and extend the `counts()` contract if this phase adds a table.
+- [x] Prove it can fail; the exit code is the contract.
+
+**62 checks → 82**, in a new `step "Search"` between the lifecycle pass and the bug report. It
+publishes an ADR at `ACCEPTED` carrying the needle in its **body**, asserts it is found, publishes
+a second page with the *same prose* at `CURRENT`, retires the first by saving a new document and
+publishing again, then asserts the retired page is still a result with its status, that both
+match, and that the live one is above it.
+
+**Not one assertion greps for the needle, because that assertion cannot fail.** `/search?q=x`
+paints the term into the search input's `value` *and* into the no-hits sentence — *"No page
+matches “x”."* So a response body containing the needle is entirely consistent with **zero
+results**. Presence is asserted as a result row and as the count sentence (`One page matches` /
+`2 pages match`) instead.
+
+**"Ranks below" is an ordering claim, and the obvious test does not make one.** Finding both paths
+in the body passes in either order, and the response is a single line of HTML, so `grep -n`
+reports line 1 for both — an ordering check that is not one. It compares `grep -boF` byte offsets,
+and the reversed-expectation run was watched to fail.
+
+**The check kills the demotion mutant, and that turns on fixture publish order — which the task
+brief did not name.** Both pages rank identically (`0.12158542`, measured), so with
+`RETIRED_RANK_FACTOR` deleted the query falls through to `ORDER BY publishedAt DESC`. Because the
+retirement is the *later* publish, the retired page then comes first and the check fails. Publish
+the live page last instead and it would pass either way.
+
+**The publish endpoint accepts no body**, so a status can only travel through the document's own
+`status:` frontmatter: the retirement is `PUT /api/drafts/{id}` then publish. That re-save is a
+**201**, not a 200 — the first publish deleted the draft, so `"seen": null` is the true claim and
+`decideSave` answers `create`. Measured in the mirror: with a draft still present the identical
+call answers **409 `conflict`**.
+
+**`counts()` needed nothing, and the reason is worth stating rather than assuming.** Phase 4 adds
+no table — `Page.searchVector` and `PageVersion.searchText`/`searchHeadings` are columns on tables
+already counted. Of the schema's 10 models, `counts()` covers 8; the two it omits are `User` and
+`SpaceMembership`, and nothing in the script writes either (every `sign_in` upserts one of three
+seeded emails; memberships come only from the seed — 3 users / 2 memberships before and after,
+measured across a clean run and two broken ones). So this is the "missing one nothing writes to"
+case, and the exclusion is documented in `counts()` with the trigger for widening it, rather than
+the function being padded. Contrast Task 6, where the same question had the opposite answer.
+
+**The fence quoting `smoke.sh` had been matching `isSuperseded` by accident.** It looks 12 lines
+up, and the annotation had only ever matched on the word `SUPERSEDED` inside a sentence about ADR
+statuses. Extending the note by four lines pushed the real marker out of the window: `1 drifted`,
+with `superseded` falling 23 → 22. The only signal was two counts moving by one. Fifth
+"guard matched by accident" on this project.
 
 ---
 
-## Phase 4 exit criteria
+## Phase 4 exit criteria ✅
 
-- [ ] `npm test`, `npm run test:e2e`, `npm run smoke` all pass
-- [ ] `npm run typecheck && npm run build` clean; `npm run plan:check` 0 drifted
-- [ ] A search returns only pages in spaces the viewer can read — proven with a page whose text
-      matches and whose space the viewer cannot read
-- [ ] Unpublished and soft-deleted pages never appear
-- [ ] Retired pages appear, demoted
-- [ ] Snippets show the matched term and render as text
-- [ ] The index stays correct after a write that is not a publish
-- [ ] A Mermaid diagram renders, a C4 diagram renders, a hostile label executes nothing, and a
-      malformed diagram does not take the page with it
-- [ ] Mermaid is absent from the bundle of a route with no diagram
-- [ ] The PR is open with the phase's exit criteria in its description
+- [x] `npm test`, `npm run test:e2e`, `npm run smoke` all pass — **951** vitest across 60 files,
+      **41** Playwright, **82** smoke checks
+- [x] `npm run typecheck && npm run build` clean; `npm run plan:check` **0 drifted**
+- [x] A search returns only pages in spaces the viewer can read — proven with a page whose text
+      matches and whose space the viewer cannot read, at both levels:
+      `search-query.test.ts` (*"a non-member does not find a page whose text certainly
+      matches"*, plus the `ALL_STAFF` and super-admin cases) and `e2e/search.spec.ts` as a
+      **discrimination** — the same word in two spaces, 2 hits for the editor and exactly 1 for
+      the viewer who reads one of them. Mutation-verified against the deleted `spaceId = ANY`
+      clause.
+- [x] Unpublished and soft-deleted pages never appear — *"an unpublished page does not appear in a
+      search for its own title"* and *"a soft-deleted page disappears from results, **having been
+      in them**"*, the second carrying its own non-vacuity companion
+- [x] Retired pages appear, demoted — and *"a retired page that matches far better still outranks
+      a live one"*, which is what makes it a rank factor rather than a hard sort; *"every retired
+      status is demoted, not just the one the fixtures use"*; end-to-end in `e2e/search.spec.ts`
+      and over HTTP in `scripts/smoke.sh`
+- [x] Snippets show the matched term and render as text — `<mark>` over the whole word, and
+      *"angle brackets in a document reach the snippet as text, not as markup"*
+- [x] The index stays correct after a write that is not a publish — *"a raw UPDATE of the title
+      moves the vector, with no application code involved"* and *"repointing publishedVersionId at
+      an older version re-indexes the page"*; a cascade and a move leave it **byte-identical**,
+      which is the correct answer and not the one this plan first asked for
+- [x] A Mermaid diagram renders, a C4 diagram renders, a hostile label executes nothing, and a
+      malformed diagram does not take the page with it — and the assertion that earns its keep is
+      `click A href "javascript:…"`, because DOMPurify runs at every `securityLevel` and the
+      obvious hostile-label test stays green with the setting mutated to `"loose"`
+- [x] Mermaid is absent from the bundle of a route with no diagram — checked against `next build`'s
+      own manifests with two presence gates, because the absence claim passes identically when
+      mermaid is not in the build at all or the manifest read is the wrong one
+- [x] The PR is open with the phase's exit criteria in its description

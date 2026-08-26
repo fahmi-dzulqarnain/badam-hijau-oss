@@ -1,10 +1,11 @@
 # Execution status
 
-**Phases 1, 2 and 3 are complete. Phase 4 (search and diagrams) is planned.**
+**Phases 1, 2, 3 and 4 are complete.** Phase 4 is on a branch with an open PR; Phases 1–3 are
+in `main`.
 
-Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`; this phase lands through a
-PR) · **951 vitest + 41 Playwright tests passing**, 62-check cold-start smoke ·
-cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
+Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`) · **951 vitest + 41 Playwright
+tests passing**, **82-check** cold-start smoke · typecheck, build and `plan:check` clean ·
+working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
@@ -38,7 +39,29 @@ Two landmines carried in, both measured rather than guessed:
 | 4. The search route | ✅ |
 | 5. Mermaid hydration | ✅ |
 | 6. End-to-end | ✅ |
-| **7. Extend the smoke test** | **next** |
+| 7. Extend the smoke test | ✅ |
+
+**All seven tasks done and every exit criterion verified** — see the end of the
+[phase-4 plan](2026-08-25-docs-platform-phase-4-search-diagrams.md).
+
+Three findings from this phase that generalise, all measured:
+
+- **A security test that cannot fail when the setting it is about is weakened is worse than no
+  test**, because it reads as coverage. `securityLevel: "strict"` is already Mermaid's default and
+  does **not** decide label sanitisation — DOMPurify runs at every level — so the obvious hostile
+  label test stays green with the setting mutated to `"loose"`. The assertion that discriminates is
+  `click A href "javascript:…"`.
+- **An absence assertion needs a viewer who can see *something*.** "A non-member finds nothing"
+  is near-vacuous when the viewer reads no space at all: the ids go into `spaceId = ANY(...)`, and
+  `ANY('{}')` is indistinguishable from a deleted clause. The test that has teeth is a
+  discrimination — the same word in two spaces, and a **count**.
+- **The same needle the test searches for is echoed back into the page**, in the input's `value`
+  and in the no-hits sentence, so over HTTP a body containing it is entirely consistent with zero
+  results. Assert the row, or the count sentence.
+
+The count contract was too narrow for the **seventh** time (`snapshotCounts` could not see the one
+`BugReport` a spec wrote), and a plan-fence guard was found matching **by accident** for the fifth
+time (`isSuperseded` was matching the word `SUPERSEDED` in a sentence about ADR statuses).
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
