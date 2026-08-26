@@ -1,17 +1,61 @@
 # Execution status
 
-**Phases 1, 2, 3 and 4 are complete.** Phase 4 is on a branch with an open PR; Phases 1–3 are
-in `main`.
+**Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
+is planned.**
 
-Branch: `phase-4-search-diagrams` (cut from `main` at `2706769`) · **951 vitest + 41 Playwright
-tests passing**, **82-check** cold-start smoke · typecheck, build and `plan:check` clean ·
-working tree clean
+Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
+**951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
+and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
 [phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
 [phase 4](2026-08-25-docs-platform-phase-4-search-diagrams.md) ·
+[phase 5](2026-08-26-docs-platform-phase-5-git-mirror.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
+
+## Phase 5 — git mirror
+
+Decisions taken with the user: **shell out to the real `git` binary** with argv arrays; **a
+standalone worker script on a schedule** rather than an in-process drain; **a minimal super-admin
+failure page now**, folded into Phase 6's `/admin` later; and **publish, move and delete all
+enqueue** — §9 names only publish, but `movePage` rewrites `Page.path`, so a publish-only mirror
+orphans a file at the old path.
+
+One decision this phase took on its own: **the mirrored file is composed from the version row, not
+copied from it.** `publishPage` stores the author's whole document, frontmatter text included,
+while `PageVersion.frontmatter` holds what validation *accepted* — deliberately a different value.
+The deciding fact is that `title` is a column and not part of the document text, so a verbatim
+mirror would produce files that cannot say what they are. What is given up: the templates'
+explanatory frontmatter comments do not reach the mirror.
+
+Landmines carried in, measured while planning:
+
+- **Three different things here are called `gitSha`**, and two are not this phase's:
+  `buildInfo().gitSha` is the application build (7 chars, from `GIT_SHA`), `BugReport.gitSha` is a
+  copy of that, and `PageVersion.gitSha` is a commit in the **content** repository — a different
+  repository. A page will show two shas that mean different things.
+- **A title is user-controlled and lands in two parsers** — YAML, where a newline could inject a
+  second key, and a commit message. Measured and reassuring: a `GIT_AUTHOR_NAME` of
+  `--upload-pack=…` passed through the environment is stored as a name, not parsed as an option,
+  so env vars are the safe channel and `--author=` string building is the thing to avoid.
+- **A fresh repository answers 128** to `rev-parse HEAD`, `rev-parse --verify HEAD` and `log -1`
+  alike — an expected state, not a crash. Found while a pipeline hid that exit code and reported
+  success, which is the fourth time that trap has bitten this project.
+- **Commit and push are two failures**, and only one may be retried by repeating it. A sha
+  recorded late means a retried push commits twice.
+
+| Task | State |
+|---|---|
+| **1. The mirrored document** | **next** |
+| 2. Where the file goes | — |
+| 3. `GitJob` | — |
+| 4. Enqueue, inside the transactions that already exist | — |
+| 5. The git seam | — |
+| 6. The worker | — |
+| 7. The sha on the page | — |
+| 8. Failures a super admin can see | — |
+| 9. End-to-end and the smoke test | — |
 
 ## Phase 4 — search and diagrams
 
