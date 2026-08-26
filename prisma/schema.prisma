@@ -72,7 +72,7 @@ model User {
   pageVersions PageVersion[]     @relation("PageVersionAuthor")
   draftsEdited PageDraft[]       @relation("DraftUpdatedBy")
   auditEntries AuditLog[]        @relation("AuditActor")
-  attachments  Attachment[]  @relation("AttachmentUploader")
+  attachments  Attachment[]      @relation("AttachmentUploader")
 }
 
 model Space {

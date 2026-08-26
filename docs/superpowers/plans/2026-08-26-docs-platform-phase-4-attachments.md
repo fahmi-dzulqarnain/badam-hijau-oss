@@ -320,7 +320,7 @@ Add to `model Page`, beside `relationsTo`:
 Add to `model User`, beside `auditEntries`:
 
 ```prisma
-  attachments  Attachment[]  @relation("AttachmentUploader")
+  attachments  Attachment[]      @relation("AttachmentUploader")
 ```
 
 - [ ] **Step 3: Generate the migration**
