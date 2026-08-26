@@ -142,11 +142,18 @@ action_field() { # field-name
 # each call site: the authoring pass and the lifecycle pass both create pages, and a parse this
 # fiddly copied into the second one is the shape this project has three times watched two sites
 # agree on the day they were written and then drift.
+#
+# `|| :` for the reason the `/new` fetch above carries one: `awk` exits on the first option while
+# `tr` is still writing, and under `pipefail` that pipeline reports the WRITER's SIGPIPE — the
+# same latent flake `expect_body` documents. It has never fired, because the form is small enough
+# that `tr` finishes first. If it ever does, the caller's own emptiness check names it, rather
+# than `set -e` abandoning the run before Teardown can sweep.
 space_option() {
   tr '<' '\n' < "$FORM" | awk '
     /^select / && /name="spaceId"/ { in_select = 1; next }
     in_select && /^\/select/ { exit }
-    in_select && /^option value="/ { sub(/^option value="/, ""); sub(/".*/, ""); print; exit }'
+    in_select && /^option value="/ { sub(/^option value="/, ""); sub(/".*/, ""); print; exit }' \
+    || :
 }
 
 # One row of a generated index, matched by the `<code class="idx-path">` cell that carries the
