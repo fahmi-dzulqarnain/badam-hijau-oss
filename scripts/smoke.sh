@@ -149,6 +149,23 @@ space_option() {
     in_select && /^option value="/ { sub(/^option value="/, ""); sub(/".*/, ""); print; exit }'
 }
 
+# One row of a generated index, matched by the `<code class="idx-path">` cell that carries the
+# page's path.
+#
+# **A page title is not usable as the needle here, and finding that out is what the negative
+# check below was for.** `/{space}/-/adrs` renders inside the space layout, so the nav rail
+# beside the list names every page in the space, by title, on the same HTML — a title needle is
+# satisfied by the chrome and says nothing about the index. Measured: the first version of the
+# filter check asserted the still-in-force ADR was absent from `?status=SUPERSEDED`, and it
+# failed, because the rail was listing it. The positive checks were passing for the same reason
+# and would have gone on passing with the index rendering nothing at all.
+#
+# `idx-path` is the one class the rail does not use, and the row is where the index says "this
+# page is in this list".
+idx_row() { # slug
+  printf 'idx-path">%s<' "$1"
+}
+
 # Creates a page through `/new`, saves `markdown` into its draft, and leaves the new page's id in
 # `PAGE_ID` — empty if any step failed, so the caller branches on one variable.
 #
@@ -454,11 +471,12 @@ if [ -n "$RETIRED_ID" ] && [ -n "${LIVE_ID:-}" ]; then
 
   # The generated index — spec §11. Both are listed, because a retired ADR is history and not a
   # deletion, and the status filter separates them.
-  expect_body "/engineering/-/adrs" "$ADR_RETIRED_TITLE" "the ADR index lists the retired one"
-  expect_body "/engineering/-/adrs" "$ADR_LIVE_TITLE" "and the one that replaced it"
-  expect_body "/engineering/-/adrs?status=SUPERSEDED" "$ADR_RETIRED_TITLE" \
+  expect_body "/engineering/-/adrs" "$(idx_row "$ADR_RETIRED")" \
+    "the ADR index lists the retired one"
+  expect_body "/engineering/-/adrs" "$(idx_row "$ADR_LIVE")" "and the one that replaced it"
+  expect_body "/engineering/-/adrs?status=SUPERSEDED" "$(idx_row "$ADR_RETIRED")" \
     "filtering to SUPERSEDED keeps the retired one"
-  expect_absent "/engineering/-/adrs?status=SUPERSEDED" "$ADR_LIVE_TITLE" \
+  expect_absent "/engineering/-/adrs?status=SUPERSEDED" "$(idx_row "$ADR_LIVE")" \
     "and drops the one still in force"
 else
   fail "doc lifecycle pass skipped: both ADRs are needed and one was not created"
