@@ -166,6 +166,19 @@ idx_row() { # slug
   printf 'idx-path">%s<' "$1"
 }
 
+# One relation row, label and all. `RetiredBanner` and `RelationList` render through the same
+# `RelationRow`, so this matches the banner's "Superseded by" entry and the relation list under a
+# document alike.
+#
+# Same lesson as `idx_row`, and it arrived the same way — from a mutant rather than from care.
+# With the cascade disabled in `cascadeFor`, "the banner names the replacement by title" stayed
+# **green**: the reader paints the nav rail beside the document, so both titles are on the page
+# whether or not any relation is rendered at all. Binding the label, the link target and the
+# title into one needle is what makes this a statement about the row.
+rel_row() { # label slug title
+  printf 'rel-k">%s</span><a class="rel-title" href="/engineering/%s">%s<' "$1" "$2" "$3"
+}
+
 # Creates a page through `/new`, saves `markdown` into its draft, and leaves the new page's id in
 # `PAGE_ID` — empty if any step failed, so the caller branches on one variable.
 #
@@ -460,14 +473,18 @@ if [ -n "$RETIRED_ID" ] && [ -n "${LIVE_ID:-}" ]; then
   expect_body "/engineering/$ADR_RETIRED" "SUPERSEDED" "and carries the retired status"
   expect_body "/engineering/$ADR_RETIRED" "This document has been superseded." \
     "the banner says what happened"
-  expect_body "/engineering/$ADR_RETIRED" "Superseded by" "and names the replacement"
-  expect_body "/engineering/$ADR_RETIRED" "$ADR_LIVE_TITLE" "by title"
+  expect_body "/engineering/$ADR_RETIRED" \
+    "$(rel_row 'Superseded by' "$ADR_LIVE" "$ADR_LIVE_TITLE")" \
+    "and names the replacement, by §6.2's inverse label, as a link"
   expect_body "/engineering/$ADR_RETIRED" "$ADR_RETIRED_MARKER" \
     "with the body it was published with still whole"
 
-  # The stored direction of the same row, read from the other end.
-  expect_body "/engineering/$ADR_LIVE" "Supersedes" "the replacement lists the relation"
-  expect_body "/engineering/$ADR_LIVE" "$ADR_RETIRED_TITLE" "naming the page it retired"
+  # The stored direction of the same row, read from the other end. It survives the cascade being
+  # disabled — correctly, since the row is written at PROPOSED too — so it is asserting the
+  # relation and not the retirement.
+  expect_body "/engineering/$ADR_LIVE" \
+    "$(rel_row 'Supersedes' "$ADR_RETIRED" "$ADR_RETIRED_TITLE")" \
+    "the replacement lists the page it retired, in the stored direction"
 
   # The generated index — spec §11. Both are listed, because a retired ADR is history and not a
   # deletion, and the status filter separates them.
