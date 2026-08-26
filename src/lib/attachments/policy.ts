@@ -92,6 +92,11 @@ export function contentDisposition(mimeType: string, filename: string): string {
   const fallback = /[^.\s]/.test(ascii) ? ascii : `file${extensionFor(mimeType)}`;
 
   const header = `${kind}; filename="${fallback}"`;
+  // Against `ascii`, NOT against `fallback`. When the name reduces to nothing usable,
+  // `fallback` becomes the `file.ext` placeholder, which `clean` can never equal — so
+  // comparing to it always fell through and appended a bare, empty `filename*=UTF-8''`.
+  // The real question is "does this name carry non-ASCII bytes", and `clean === ascii`
+  // asks exactly that. Caught by test 7 during Task 4.
   if (clean === ascii) return header;
   return `${header}; filename*=UTF-8''${encodeRFC5987(clean)}`;
 }
@@ -99,6 +104,18 @@ export function contentDisposition(mimeType: string, filename: string): string {
 /**
  * `encodeURIComponent` leaves `!'()*` unescaped, and RFC 5987's `attr-char` set excludes
  * them. Percent-encoding them by hand is the documented remedy.
+ *
+ * Two things deliberately NOT done here, established by attacking this function during
+ * Task 4 rather than by reasoning about it:
+ *
+ * - **No length cap.** 255 non-ASCII characters produce a ~1.6KB header, which is well
+ *   inside every common proxy limit. The bound lives where it belongs: `beginUploadInput`
+ *   in `schema.ts` caps `filename` at 255, so an unbounded name never reaches here.
+ * - **`/` is not stripped while `\` is.** That asymmetry is principled, not an oversight:
+ *   `\` is the escape character inside a quoted-string, so leaving it in breaks the header's
+ *   own syntax. `/` has no syntactic meaning in a header, and browsers sanitise path
+ *   separators when writing a download to disk. Do not "fix" the asymmetry by stripping `/`
+ *   — it would silently mangle legitimate names for no gain.
  */
 function encodeRFC5987(value: string): string {
   return encodeURIComponent(value).replace(
