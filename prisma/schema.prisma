@@ -31,6 +31,11 @@ enum BugStatus {
   CLOSED
 }
 
+enum AttachmentState {
+  PENDING
+  COMMITTED
+}
+
 enum DocType {
   DOC
   ADR
@@ -67,6 +72,7 @@ model User {
   pageVersions PageVersion[]     @relation("PageVersionAuthor")
   draftsEdited PageDraft[]       @relation("DraftUpdatedBy")
   auditEntries AuditLog[]        @relation("AuditActor")
+  attachments  Attachment[]  @relation("AttachmentUploader")
 }
 
 model Space {
@@ -122,6 +128,37 @@ model BugReport {
   @@index([reporterId])
 }
 
+model Attachment {
+  id           String          @id @default(cuid())
+  pageId       String
+  // Graph's own id, learned at commit — the item does not exist when the row is created,
+  // which is why this is nullable. `drivePath` is the handle everything else uses.
+  driveItemId  String?         @unique
+  drivePath    String
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  eTag         String?
+  // PENDING from the moment the upload session is minted. The browser uploads directly to
+  // Graph, so the application never sees the bytes and cannot know the upload finished; the
+  // commit endpoint verifies against the store and flips this. A PENDING row is never served.
+  state        AttachmentState @default(PENDING)
+  uploadedById String
+  createdAt    DateTime        @default(now())
+  deletedAt    DateTime?
+
+  // Cascade, matching Page's own relation to Space: without it, hard-deleting a space is
+  // blocked by Prisma's Restrict default on a required relation. Deliberately the opposite
+  // of BugReport, which carries no foreign keys because its value is highest once the page
+  // is gone — an attachment is worthless without its page.
+  page       Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+
+  @@index([pageId])
+  @@index([state, createdAt])
+  @@index([deletedAt])
+}
+
 model Page {
   id                 String    @id @default(cuid())
   spaceId            String
@@ -153,6 +190,7 @@ model Page {
   redirects     Redirect[]     @relation("RedirectTarget")
   relationsFrom PageRelation[] @relation("RelationFrom")
   relationsTo   PageRelation[] @relation("RelationTo")
+  attachments   Attachment[]
 
   @@unique([spaceId, path])
   @@index([spaceId, status])
