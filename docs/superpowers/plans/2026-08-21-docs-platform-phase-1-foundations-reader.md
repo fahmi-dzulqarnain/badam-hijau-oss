@@ -940,6 +940,11 @@ export type SpaceRef = { id: string; visibility: SpaceVisibility };
 
 - [ ] **Step 4: Create `src/lib/authz/can.ts`**
 
+> **Superseded snapshot.** Phase 4's Task 3 review added a co-change warning above the
+> `EDIT`/`PUBLISH` arm, because `editableSpaceWhere` in `where.ts` now duplicates that role
+> list in SQL. Read `src/lib/authz/can.ts` for the current version. Syncing this fence forward
+> would turn this task's "create" step into a rewrite that deletes that comment.
+
 ```ts
 import type { Action, SpaceRef, SpaceRole, Viewer } from "./types";
 

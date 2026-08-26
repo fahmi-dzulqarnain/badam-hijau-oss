@@ -105,9 +105,21 @@ So there is a `PUT /api/attachments/_dev-upload/[...key]` route, **registered un
 membership filter standing alone and a super admin reads nothing. It must make the same
 `isSuperAdmin` short-circuit `can()` makes. Task 3 tests that case first.
 
-**Two `space:` keys in one object literal silently lose one.** The read predicate needs both
-`readableSpace` and `editableSpace` on the page's space. They go in **separate varargs** of
-`visiblePage`, never in one object. Same failure mode the never-spread rule exists for.
+**Merging the two space predicates is a directional authorization bypass.** The read predicate
+needs both `readableSpace` and `editableSpace` on the page's space, and they go in **separate
+varargs** of `visiblePage`, which makes a key collision structurally impossible.
+
+Corrected during Task 3, after a reviewer measured it: two literal `space:` keys in one object
+are **not** silent — that is `TS1117`, a compile error. The form tsc and Prisma cannot see is
+merging them into one value, and which one wins depends on order:
+
+```
+{ space: { ...editableSpace(v), ...readableSpace(v) } }  // BYPASS: edit requirement gone
+{ space: { ...readableSpace(v), ...editableSpace(v) } }  // merely over-restrictive
+```
+
+The first returned a members-only page to a VIEWER against Postgres. Watch for the merge, not
+the duplicate key.
 
 **Reading an attachment reaches `Page` only through a relation filter.** No `page` delegate token
 appears anywhere in `src/lib/attachments/repo.ts`. That is widening #4 in
@@ -470,6 +482,11 @@ Append to `src/lib/authz/where.ts`:
  * Note what is NOT here: `visibility: "ALL_STAFF"`. An ALL_STAFF space is readable by any
  * signed-in user and editable by nobody who is not a member, which is the one place the two
  * predicates must diverge.
+ *
+ * This is the EDIT row of `can()`'s table and nothing else. It is NOT a `MANAGE_SPACE`
+ * predicate — that needs ADMIN alone, and this admits EDITOR, so reusing it there is an
+ * escalation. It is a valid `PUBLISH` predicate only because `can()` collapses PUBLISH into
+ * EDIT today; if that ever splits, this needs a sibling rather than a second caller.
  */
 function editableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
   if (viewer.isSuperAdmin) return {};
@@ -485,7 +502,16 @@ function editableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
  * `{ space: editableSpace(v) }`.
  *
  * Where both predicates are needed on one query they go in SEPARATE varargs of the composing
- * helper, never in one object literal — two `space:` keys in one object silently lose one.
+ * helper, which makes a key collision structurally impossible. Two literal `space:` keys in
+ * one object are at least a compile error (TS1117); what tsc and Prisma cannot see is MERGING
+ * them into one value, and it is DIRECTIONAL. Verified against Postgres:
+ *
+ *     { space: { ...editableSpace(v), ...readableSpace(v) } }  // BYPASS: last AND wins,
+ *                                                              // the edit requirement is gone
+ *     { space: { ...readableSpace(v), ...editableSpace(v) } }  // merely over-restrictive
+ *
+ * The first form returned a members-only page to a VIEWER. That is the shape to watch for,
+ * not the duplicate key.
  */
 export function editableSpace(
   viewer: Viewer,
@@ -1828,6 +1854,17 @@ git commit -m "Add the Graph blob store and its app-only token cache"
 
 The security core of the phase. Every rule lives here; the routes render outcomes.
 
+**Decide `needsAccessAudit` explicitly; do not let it default by omission.** Spec §8 holds that
+a super admin reading a MEMBERS space they do not belong to is legitimate but must leave a
+trace, and `src/lib/pages/repo.ts` audits exactly that on the equivalent page read.
+`readableAttachment` as specified below selects no space fields, so it has no hook to make that
+call — while the matrix in Step 2 asserts a super admin *can* read a draft-only attachment in a
+MEMBERS space they are not a member of. That is the audited case, unaudited.
+
+Either select `space.visibility` and call `needsAccessAudit`, or record in the docstring why an
+attachment read is exempt where the page read is not. Silence is the one unacceptable answer.
+Raised by the Task 3 review.
+
 **Files:**
 - Create: `src/lib/attachments/repo.ts`
 - Test: `tests/integration/attachments-repo.test.ts`
@@ -2175,9 +2212,11 @@ export type ReadableAttachment = {
  * the viewer could edit it. Without it, a VIEWER who guesses an id reads an image referenced
  * only in an unpublished draft.
  *
- * `readableSpace` and `editableSpace` sit in SEPARATE varargs of `visiblePage`, never in one
- * object literal — two `space:` keys in one object silently lose one, which is the same
- * failure mode the never-spread rule exists for.
+ * `readableSpace` and `editableSpace` sit in SEPARATE varargs of `visiblePage`, which makes a
+ * key collision structurally impossible. Not because a duplicate key would be silent — that
+ * is a TS1117 compile error — but because MERGING them into one `space` value is not:
+ * `{ ...editableSpace(v), ...readableSpace(v) }` keeps only the last `AND` and drops the edit
+ * requirement, measured returning a members-only page to a VIEWER.
  */
 function readablePredicate(viewer: Viewer) {
   return visiblePage(

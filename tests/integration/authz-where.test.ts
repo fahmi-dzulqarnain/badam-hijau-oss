@@ -153,3 +153,42 @@ test("editableSpace refuses a non-member of an ALL_STAFF space", async () => {
     await isEditable({ id: stranger.id, isSuperAdmin: false, memberships: [] }, space.id),
   ).toBe(false);
 });
+
+test("can(EDIT) agrees with the SQL predicate for every viewer, role and visibility", async () => {
+  // The EDIT counterpart to the READ agreement test above, and it exists because the three
+  // example-based tests below leave one invariant pinned only by accident. Mutation-tested:
+  // deleting `userId: viewer.id` from `editableSpaceWhere` is an authorization bypass — any
+  // signed-in user may edit any space holding one EDITOR — and the rest of this file stays
+  // green as long as the role loop happens to create an EDITOR before it asserts on a VIEWER.
+  // Reordering that tuple, a change no reviewer would question, hides the bypass entirely.
+  //
+  // So this injects the case no other fixture here contains: a FOREIGN editor in the same
+  // space, giving an unscoped `some` a row to find.
+  for (const isSuperAdmin of [false, true]) {
+    for (const role of ["none", "VIEWER", "EDITOR", "ADMIN"] as const) {
+      for (const visibility of ["MEMBERS", "ALL_STAFF"] as const) {
+        await resetDb();
+        const space = await editSpace(visibility);
+        await memberViewer("foreign-editor@example.com", space.id, "EDITOR");
+
+        const user = await db.user.create({
+          data: { email: "subject@example.com", name: "Subject", isSuperAdmin },
+          select: { id: true },
+        });
+        const memberships: Viewer["memberships"] = [];
+        if (role !== "none") {
+          // A REAL row, for the reason `memberViewer` states: the SQL predicate reads the
+          // row and `can()` reads the array, so both have to be populated to compare them.
+          await db.spaceMembership.create({ data: { spaceId: space.id, userId: user.id, role } });
+          memberships.push({ spaceId: space.id, role });
+        }
+        const viewer: Viewer = { id: user.id, isSuperAdmin, memberships };
+
+        expect(
+          await isEditable(viewer, space.id),
+          `superAdmin=${isSuperAdmin} role=${role} visibility=${visibility}`,
+        ).toBe(can(viewer, { id: space.id, visibility }, "EDIT"));
+      }
+    }
+  }
+});

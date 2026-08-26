@@ -54,6 +54,11 @@ export function readableSpace(
  * Note what is NOT here: `visibility: "ALL_STAFF"`. An ALL_STAFF space is readable by any
  * signed-in user and editable by nobody who is not a member, which is the one place the two
  * predicates must diverge.
+ *
+ * This is the EDIT row of `can()`'s table and nothing else. It is NOT a `MANAGE_SPACE`
+ * predicate — that needs ADMIN alone, and this admits EDITOR, so reusing it there is an
+ * escalation. It is a valid `PUBLISH` predicate only because `can()` collapses PUBLISH into
+ * EDIT today; if that ever splits, this needs a sibling rather than a second caller.
  */
 function editableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
   if (viewer.isSuperAdmin) return {};
@@ -69,7 +74,16 @@ function editableSpaceWhere(viewer: Viewer): Prisma.SpaceWhereInput {
  * `{ space: editableSpace(v) }`.
  *
  * Where both predicates are needed on one query they go in SEPARATE varargs of the composing
- * helper, never in one object literal — two `space:` keys in one object silently lose one.
+ * helper, which makes a key collision structurally impossible. Two literal `space:` keys in
+ * one object are at least a compile error (TS1117); what tsc and Prisma cannot see is MERGING
+ * them into one value, and it is DIRECTIONAL. Verified against Postgres:
+ *
+ *     { space: { ...editableSpace(v), ...readableSpace(v) } }  // BYPASS: last AND wins,
+ *                                                              // the edit requirement is gone
+ *     { space: { ...readableSpace(v), ...editableSpace(v) } }  // merely over-restrictive
+ *
+ * The first form returned a members-only page to a VIEWER. That is the shape to watch for,
+ * not the duplicate key.
  */
 export function editableSpace(
   viewer: Viewer,
