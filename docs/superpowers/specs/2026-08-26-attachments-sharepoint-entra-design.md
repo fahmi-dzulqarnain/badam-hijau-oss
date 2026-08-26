@@ -108,7 +108,18 @@ administrator runs to make the grant.
 
 ### 5.2 The drive key carries no filename and no page path
 
-The key is `/{yyyy}/{mm}/{attachmentId}.{ext}`.
+The key is `{id[0:2]}/{attachmentId}.{ext}`.
+
+> **Amended while writing the phase plan.** This first read `/{yyyy}/{mm}/{attachmentId}.{ext}`,
+> and date sharding does not work: `id` and `createdAt` are both database defaults, so
+> **neither is known before the row exists** and the key cannot be computed for the `create`
+> that produces it. That forces either a second write — leaving a committed row with an empty
+> `drivePath`, which the sweep would reclaim as garbage — or generating ids outside Prisma,
+> breaking the `cuid()` convention every other model follows. Sharding on the id's first two
+> characters is computable inside one transaction and distributes more evenly than months do.
+> What is given up is human browsability of the library, which was the stated reason for date
+> sharding; the library is not a browsing surface, and the sweep cursors on `createdAt` in
+> Postgres, where the column actually lives.
 
 **No filename in the path.** The original filename lives only in Postgres, for
 `Content-Disposition`. Path traversal, Unicode normalisation and collisions therefore
@@ -151,6 +162,15 @@ src/app/api/attachments/
 
 `policy.ts` imports nothing from Prisma, so the readability rule is unit-testable without
 a database — the convention the roadmap fixed in Phase 1.
+
+> **Added while writing the phase plan.** The memory implementation needs somewhere for the
+> browser to `PUT` to, or the direct-upload path cannot be exercised at all and the goal above
+> — that tests and `npm run smoke` run with no tenant credentials — is unreachable. So there
+> is a `PUT /api/attachments/_dev-upload/[...key]` route, registered under exactly the
+> `ALLOW_TEST_LOGIN` discipline: it refuses unless `BLOB_STORE=memory`, and a test asserts it
+> 404s otherwise. Treat it with the same suspicion as the passwordless login — it is an
+> unauthenticated write, and the only thing making that acceptable is that it cannot exist in
+> a deployed process.
 
 ## 6. Data model
 
@@ -325,16 +345,25 @@ Inline: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/avif`, `vid
 **`image/svg+xml` and `text/html` are never inline.** An inline SVG is script execution
 against our own origin, which is strictly worse than the same file hosted anywhere else.
 
-**Inline video requires widening the sanitiser, which is a deliberate act.** `![](x.mp4)`
-produces `<img src="x.mp4">`, and rehype-sanitize's default schema has no `<video>` — and
-[`src/lib/markdown/render.ts`](../../../src/lib/markdown/render.ts) pins that schema
-explicitly "as an explicit pin against an upstream widening". So the schema gains `video`
-with `src`, `controls` and `poster`, and **`src` is constrained by regex to
-`^/api/attachments/[a-z0-9]+$`**.
+**Inline video does NOT widen the sanitiser.**
 
-That regex is worth having for its own sake: a document cannot embed an off-origin video
-or use the element as a tracking beacon. `img` is deliberately left alone — constraining it
-the same way would break existing documents that reference external images.
+> **Amended while writing the phase plan.** This section first proposed adding `<video>` to
+> the sanitiser schema with a `src` allowlist. Measured against the shipped pipeline that is
+> **ineffective**: [`src/lib/markdown/render.ts`](../../../src/lib/markdown/render.ts) sets
+> `remarkRehype`'s `allowDangerousHtml: false`, so raw HTML is dropped *before* the sanitiser
+> runs. The only way to make the schema matter — enabling raw HTML and adding `rehype-raw` —
+> exposes the entire raw-HTML surface of every existing document to the sanitiser, which is a
+> far larger posture change than one element justifies.
+
+Instead, a rehype plugin runs **after** sanitisation and constructs the element itself,
+exactly as `extractMermaid` already does for diagrams. The editor inserts
+`![alt](/api/attachments/<id>/video)`; the plugin rewrites any `<img>` whose `src` matches
+`^/api/attachments/([a-z0-9]+)/video$` into a `<video>` built from the **captured id**.
+
+This is strictly safer than the allowlist first proposed. The `src` is not *validated*, it is
+*reconstructed* from a regex capture, so an off-origin video is impossible by construction
+rather than by allowlist — and the sanitiser is not touched at all, so `img` and every other
+element keep exactly the posture they have today.
 
 ## 8. Deletion and retention
 
