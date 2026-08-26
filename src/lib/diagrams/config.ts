@@ -26,12 +26,21 @@ import type { MermaidConfig } from "mermaid";
  *
  * **What it actually buys, measured rather than assumed.** Mermaid's `sanitizeText` runs DOMPurify
  * over every label at *every* security level, so a label containing `<script>` loses it whatever
- * this says. What `strict` and `loose` genuinely disagree about is **interaction**: flowchart's
- * `setClickFun` and class-diagram's `setClickFunc` both begin
- * `if (getConfig().securityLevel !== "loose") return;`, so a `click A call pwn()` line in a
- * document is a call into `window` under `loose` and nothing at all under `strict`. That — not the
- * label — is the assertion in `e2e/diagrams.spec.ts` that dies when this constant is mutated, and
- * it is why the hostile-label case and the hostile-click case are two tests rather than one.
+ * this says. What `strict` and `loose` genuinely disagree about is **interaction**, and the mutation
+ * run pinned exactly which part:
+ *
+ * - `formatUrl` reads `if (config.securityLevel !== "loose") return sanitizeUrl(url);`, so
+ *   `click A href "javascript:alert(1)"` reaches the reader as a live `<a xlink:href>` under
+ *   `loose` and as an anchor with no href at all under `strict`. **This is the assertion in
+ *   `e2e/diagrams.spec.ts` that dies when this constant is mutated** — verified: setting `"loose"`
+ *   failed it with `a document-supplied URL survived as javascript:alert(1)`, while the
+ *   hostile-*label* test stayed green, which is the plan's expectation corrected by measurement.
+ * - `setClickFun` also opens `if (getConfig().securityLevel !== "loose") return;`, but the listener
+ *   it would register is attached only by the `bindFunctions` that `mermaid.render` returns — and
+ *   `DocBody` never calls it. That barrier is independent of this constant, so it cannot be the
+ *   mutant-killing assertion; it is asserted anyway.
+ *
+ * Which is why the hostile-label case and the hostile-click case are two tests rather than one.
  */
 export const MERMAID_SECURITY_LEVEL = "strict" as const;
 
