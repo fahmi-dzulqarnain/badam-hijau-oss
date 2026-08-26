@@ -139,6 +139,16 @@ function parseColor(color: string): [number, number, number] | null {
  *
  * `theme: "base"` and not `"neutral"` or `"dark"`: `base` is the only built-in theme documented as
  * the one to customise, and the others ignore most of what is passed here.
+ *
+ * **One diagram type does not answer to this, and it is left alone deliberately.** A C4 diagram's
+ * shape fills come from `config.c4.person_bg_color` and its forty siblings — `#08427B` for a person,
+ * `#1168BD` for a system, grey for anything external — not from `themeVariables`, and they are
+ * written with `!important`. Measured on the seeded `architecture/mqtt-contracts` page: the person is
+ * C4 blue with white label text on both palettes. That is left as it is, because those colours *are*
+ * the C4 notation — person, system, container and external each have their own, and repainting all
+ * of them one accent green would delete the encoding the notation exists for. They are mid-to-dark
+ * blues with white captions, so they are legible either way; the diagram's background, its edge
+ * labels and its title still come from the tokens below.
  */
 export function mermaidConfig(tokens: DiagramTokens): MermaidConfig {
   const darkMode = isDarkColor(tokens["--ground"]);
@@ -164,12 +174,9 @@ export function mermaidConfig(tokens: DiagramTokens): MermaidConfig {
       fontSize: "13.5px",
 
       background: tokens["--ground"],
-      // `mainBkg` is what a node is filled with, and it is also what Mermaid derives `personBkg`
-      // from — so this one line is what colours a C4 diagram's people.
       mainBkg: tokens["--accent-wash"],
       primaryColor: tokens["--accent-wash"],
       primaryTextColor: tokens["--ink"],
-      // Likewise `personBorder`, which Mermaid derives from `primaryBorderColor`.
       primaryBorderColor: tokens["--accent"],
       secondaryColor: tokens["--surface-2"],
       secondaryTextColor: tokens["--ink"],
