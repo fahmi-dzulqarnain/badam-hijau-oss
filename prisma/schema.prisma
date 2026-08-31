@@ -434,10 +434,17 @@ model GitJob {
 
   pageId    String
   // The version whose bytes get written. Null is a legitimate value, not a missing one: a
-  // `DELETE` has no content, and a `MOVE` or `RESTORE` of a page with no published version has
-  // no file to write either. It is captured rather than read from `Page.publishedVersionId` at
-  // drain time for the same reason the paths are — a later publish would otherwise retroactively
-  // change which text an already-queued job mirrors.
+  // `DELETE` has no content and a `MOVE` is a `git mv`, so neither writes bytes.
+  //
+  // **This comment used to add "or a `MOVE`/`RESTORE` of a page with no published version", and
+  // Task 4 made that state unreachable**: a page that was never published has no file in the
+  // mirror, so none of the four mutations enqueues for one at all. `PUBLISH` and `RESTORE`
+  // therefore always carry a version. A future unpublish would reopen the question — see
+  // `enqueueMirrorJobs`, which owns that rule and states what would have to change.
+  //
+  // Captured rather than read from `Page.publishedVersionId` at drain time for the same reason
+  // the paths are: a later publish would otherwise retroactively change which text an
+  // already-queued job mirrors.
   versionId String?
 
   // The mirror address as it stood when the job was enqueued: the file is

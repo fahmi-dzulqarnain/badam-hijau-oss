@@ -295,26 +295,56 @@ finished rows, `state` leading the claim index costs 4 buffers to seek past them
 
 ---
 
-## Task 4: Enqueue, inside the transactions that already exist
+## Task 4: Enqueue, inside the transactions that already exist ✅
 
 **Files:** `src/lib/git/enqueue.ts`, `src/lib/pages/publish.ts`, `move.ts`, `delete.ts` + tests.
 
-- [ ] **Step 1: Enqueue on publish — §9 step 8, inside the same transaction**
+- [x] **Step 1: Enqueue on publish — §9 step 8, inside the same transaction**
 
 The spec is explicit that step 8 "is committed with it". So a published version without a queued
 job is not a state this system can reach, and the test for that is that a forced enqueue failure
 rolls the publish back. That is the *opposite* of the "never on the critical path" property, which
 is about the push — say so in the code, because the two read as contradictory.
 
-- [ ] **Step 2: Enqueue on move and on delete**
+- [x] **Step 2: Enqueue on move and on delete**
 
 A move carries both paths. A soft delete removes the file; **restore puts it back**, so restore
 enqueues too or the mirror stays missing a page Postgres has. Check `restorePage` for what it
 already does and give it the same treatment.
 
-- [ ] **Step 3: Register with the guard that has been too narrow seven times**
+- [x] **Step 3: Register with the guard that has been too narrow seven times**
 
 `src/lib/pages/visible.test.ts`. Read its docstring first.
+
+Registered `reachesPage: false`: every column of every job is a value the caller already read
+under its own lock, so the module reads no `Page` row. **That absence is the design, not an
+oversight**, and the `why` says so — because `restorePage` enqueues for pages whose `deletedAt` was
+set a statement earlier, a version that *did* read `Page` would need a deliberately soft-delete-
+blind query with its own argument and test.
+
+**A page that was never published enqueues nothing.** It has no file in the mirror, so a job for
+one could only ever be a no-op — and a queue containing no-ops makes "the queue drained" and "the
+mirror changed" stop being the same observation, which is this project's most repeated test
+failure built into the schema on purpose. The faithful-log-of-intent role is already held by
+`AuditLog`, which records every move, delete and restore regardless. Safe because
+`publishedVersionId` is never cleared; a future unpublish is the line that would break it, and
+`enqueueMirrorJobs` names it.
+
+**Two corrections to this plan's account of a move, both from the code rather than argued.** It
+said every rewritten row's file moves. False twice: never-published rows have no file, and
+**soft-deleted descendants are rewritten too** — their delete removed their file, and their
+restore writes it back at whatever path they have by then. So `movePage` filters `deletedAt ===
+null`, reusing the set the redirect reclaim already computes, and a three-row subtree move can
+legitimately enqueue one job. `movePage` also does not return those rows; it returns counts, and
+the rows are internal.
+
+**And a correction to how the `db`-instead-of-`tx` mistake fails.** This plan implies it always
+commits independently and silently. Measured: for publish and move it *times out* instead, because
+both update columns under a unique index and hold `FOR UPDATE`, which the second connection's
+foreign-key check blocks on. Only delete and restore — which touch `deletedAt` under `FOR NO KEY
+UPDATE` — commit silently and pass everything. So the test for the transactional property is
+written against a **restore**, where the mutant fails cleanly instead of arriving as a lock
+mystery.
 
 ---
 
