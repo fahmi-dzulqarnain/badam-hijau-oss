@@ -17,6 +17,12 @@ export class MemoryBlobStore implements BlobStore {
 
   constructor(private readonly origin: string) {}
 
+  /**
+   * `sizeBytes` and `mimeType` are declared and ignored, and the declaration is not optional:
+   * TypeScript checks call arity against a CLASS's own signature, not against the interface it
+   * implements, and the tests call this on the concrete type. Narrowing it to `(key)` compiles
+   * the class fine and then fails every call site with TS2554.
+   */
   async beginUpload(key: string, sizeBytes: number, mimeType: string): Promise<UploadSession> {
     return {
       uploadUrl: `${this.origin}/api/attachments/_dev-upload/${key}`,
@@ -47,6 +53,11 @@ export class MemoryBlobStore implements BlobStore {
       : bytes;
 
     return {
+      // COPIED into a fresh array rather than passed straight in. `subarray` yields a
+      // `Uint8Array<ArrayBufferLike>`, and `BodyInit` in this lib.dom requires the narrower
+      // `Uint8Array<ArrayBuffer>`, so `new Response(slice)` is a TS2345. The copy is
+      // acceptable precisely because this is the fake — the Graph store streams instead, and
+      // a copy there would defeat the point of never buffering a video.
       stream: new Response(new Uint8Array(slice)).body!,
       sizeBytes: slice.byteLength,
       totalBytes: bytes.byteLength,
