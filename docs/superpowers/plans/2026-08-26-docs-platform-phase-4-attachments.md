@@ -1741,8 +1741,8 @@ test("beginUpload asks for a session and returns its url and expiry", async () =
   );
   expect(session.uploadUrl).toBe("https://upload/1");
   expect(session.expiresAt.toISOString()).toBe("2026-08-26T10:00:00.000Z");
-  expect(calls[0].url).toContain("/drives/d/root:/ab/abc.png:/createUploadSession");
-  expect(calls[0].headers.get("authorization")).toBe("Bearer TOKEN");
+  expect(calls[0]!.url).toContain("/drives/d/root:/ab/abc.png:/createUploadSession");
+  expect(calls[0]!.headers.get("authorization")).toBe("Bearer TOKEN");
 });
 
 test("stat returns null on 404 and size on 200", async () => {
