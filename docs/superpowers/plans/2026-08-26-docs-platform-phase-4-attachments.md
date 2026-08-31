@@ -157,6 +157,17 @@ Settled in Phases 1–3. Changing one is a decision, not a detail.
 - `npm run plan:check` must report **0 drifted** before a task is closed.
 - Implementers create a new commit, never `--amend`, and stage explicit paths.
 
+**A mass test failure is interference until proven otherwise.** There is one local Postgres and
+one `badam_test` database, with no per-worktree isolation, and the integration harness truncates
+it between tests. Two `vitest` runs at once therefore truncate each other's fixtures, and the
+symptom is dozens to hundreds of `Unique constraint failed` errors on fixed fixture values —
+not a compile error, not one focused failure. Seen for real during Task 6: 146 failures, then
+859/859 on an immediate re-run with nothing changed, with two orphaned vitest workers from a
+previous run still alive.
+
+So: before treating a large failure count as a regression, run `ps aux | grep vitest`, kill any
+orphans, and re-run. A genuine regression from one task's change is small and specific.
+
 **Editing a file an earlier plan quotes whole-file will trip `plan:check`, and the fix is not
 to re-sync that fence.** Found during Task 3: `src/lib/authz/where.ts` and
 `tests/integration/authz-where.test.ts` are quoted whole-file by the Phase 1 plan, so appending
