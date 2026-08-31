@@ -387,6 +387,24 @@ const MODULES: Record<string, Registration> = {
       "source page by relation rows a publish in that space wrote; no page identity leaves " +
       "the module.",
   },
+  "src/lib/git/enqueue.ts": {
+    reachesPage: false,
+    why:
+      "writes GitJob and reads nothing. Phase 5 Task 4: the one delegate call is " +
+      "`tx.gitJob.createMany`, on a client its caller supplies, and every column of every row " +
+      "is a value the caller already read under its own lock — a `pageId` and a `path` are " +
+      "passed in, never looked up. There is no `Page` query to filter, directly or through a " +
+      "relation, so the module is registered here rather than as `covered`. " +
+      "That absence is the design and not an accident, and the reason is `restorePage`: it " +
+      "enqueues for pages whose `deletedAt` was set a statement ago, so it is the one caller " +
+      "in this codebase for which a soft-delete filter would be the bug rather than the " +
+      "guard — a version of this module that read `Page` would need a deliberately " +
+      "`deletedAt`-blind query, the argument for it, and a test, exactly as `restorePage`, " +
+      "`listDeletedPages` and `findDeleted` each carry one. Reading nothing is what makes all " +
+      "three unnecessary. The insert does take a foreign-key `KEY SHARE` lock on the `Page` " +
+      "row, which is not a read: it returns no column and applies no predicate, and the row it " +
+      "names is the row the caller has already authorised and written.",
+  },
   "src/lib/audit/log.ts": {
     reachesPage: false,
     why:
