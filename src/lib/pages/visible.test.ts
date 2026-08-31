@@ -86,6 +86,23 @@ type Registration =
   | { reachesPage: false; why: string };
 
 const MODULES: Record<string, Registration> = {
+  "src/lib/attachments/repo.ts": {
+    load: () => import("@/lib/attachments/repo"),
+    // Soft-delete tests: tests/integration/attachments-repo.test.ts —
+    //   `readableAttachment` reaches `Page` ONLY through a relation filter — no `page`
+    //   delegate token appears anywhere in the module. Exactly the shape widening #4 was
+    //   written for. "SOFT-DELETING THE PAGE hides its attachments, and restoring it brings
+    //   them back" covers it: soft-deleting the page hides the attachment, and undoing that
+    //   brings it back.
+    //   `beginUpload`, `commitUpload` and `softDeleteAttachment` each restate their own
+    //   `visiblePage()` on their own query, covered respectively by "beginUpload answers
+    //   not-found for an unreadable page", "commitUpload re-checks EDIT rather than trusting
+    //   beginUpload's check", and "a VIEWER cannot soft-delete, and the refusal does not
+    //   disturb the row" (the last of which also pins that `updateMany` puts the predicate in
+    //   the write, not a read the write then trusts).
+    covered: ["readableAttachment", "beginUpload", "commitUpload", "softDeleteAttachment"],
+    exempt: [],
+  },
   "src/lib/pages/repo.ts": {
     load: () => import("@/lib/pages/repo"),
     // Soft-delete tests: tests/integration/pages-repo.test.ts —
