@@ -158,3 +158,47 @@ test("commitUpload re-checks EDIT rather than trusting beginUpload's check", asy
 
   expect(await commitUpload(c.editor, a.id)).toEqual({ ok: false, reason: "not-found" });
 });
+
+/** Long enough for a blocked statement to have actually reached the lock. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+
+test("two concurrent soft-deletes: exactly one wins", async () => {
+  // The permission predicate must be part of the WRITE, not a read the write then trusts.
+  // `updateMany` is one statement, so the second caller re-evaluates `deletedAt: null` after
+  // the first commits and matches zero rows. A `findFirst` + `update`-by-id refactor is two
+  // statements against two snapshots: both reads see a live row, both writes succeed, and
+  // both callers are told they deleted it.
+  //
+  // Staged with the held-lock pattern `publish.test.ts` uses, because racing them with a bare
+  // Promise.all is not deterministic — an unblocked race usually serialises by luck and the
+  // test would pass for the wrong reason.
+  const c = await cast({ visibility: "MEMBERS", published: true });
+  const a = await attach(c.pageId, c.editor.id);
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // Hold the Attachment row lock so both callers must queue behind it.
+  const holder = db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM "Attachment" WHERE "id" = ${a.id} FOR UPDATE`;
+      await held;
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
+  await settle();
+
+  const first = softDeleteAttachment(c.editor, a.id);
+  const second = softDeleteAttachment(c.editor, a.id);
+  await settle();
+
+  release();
+  await holder;
+
+  const results = [await first, await second];
+  const won = results.filter((r) => r.ok).length;
+  expect(won, JSON.stringify(results)).toBe(1);
+  expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, reason: "not-found" }]);
+});
