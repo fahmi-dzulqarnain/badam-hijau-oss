@@ -63,13 +63,47 @@ export function extensionFor(mimeType: string): string {
 }
 
 /**
- * The object key. Sharded on the id's first two characters rather than on the year and month
- * the spec first proposed: `id` and `createdAt` are both database defaults, so neither is
- * known when the key must be computed for the `create` that produces the row. A prefix shard
- * also distributes more evenly than months do.
+ * The object key, sharded on a HASH of the id rather than a slice of it.
+ *
+ * Not sharded on the date the spec first proposed, because `id` and `createdAt` are both
+ * database defaults: neither is known when the key must be computed for the `create` that
+ * produces the row.
+ *
+ * And **not sharded on `id.slice(0, 2)`**, which is what replaced the date and was worse than
+ * what it replaced. A Prisma `cuid()` is `"c" + Date.now().toString(36) + counter + fingerprint
+ * + random`, so the first character is the literal `c` and the second is the most significant
+ * base-36 digit of a millisecond timestamp — which advances about once every two and a half
+ * years. Measured on twelve consecutively minted ids: **one** distinct value for the leading
+ * two characters, twelve for the trailing two. Every attachment for years would have landed in
+ * one SharePoint folder, and `yyyy/mm` would at least have given twelve buckets a year.
+ *
+ * Hashing rather than slicing the tail, because the tail is only random by an accident of
+ * cuid v1's layout. A hash decorrelates the shard from whatever structure the id scheme
+ * happens to carry, so this does not silently collapse again if that scheme ever changes.
  */
 export function driveKeyFor(attachmentId: string, mimeType: string): string {
-  return `${attachmentId.slice(0, 2)}/${attachmentId}${extensionFor(mimeType)}`;
+  return `${shardFor(attachmentId)}/${attachmentId}${extensionFor(mimeType)}`;
+}
+
+/**
+ * FNV-1a, 32-bit, folded to 256 buckets and rendered as two hex characters.
+ *
+ * Not a security hash and not required to be one — nothing here resists an adversary, and the
+ * id is not a secret. Its only job is to destroy any correlation between neighbouring ids, so
+ * the bucket cannot track a timestamp. 256 buckets keeps a folder well under SharePoint's
+ * 5,000-item view threshold at any volume this platform will see.
+ *
+ * `Math.imul` because the FNV prime multiply overflows 32 bits, and plain `*` on a JS number
+ * silently loses the low bits it is supposed to keep. `>>> 0` converts back to unsigned before
+ * the modulo, since the XOR-and-multiply leaves a signed 32-bit value.
+ */
+function shardFor(attachmentId: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < attachmentId.length; i += 1) {
+    hash ^= attachmentId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return ((hash >>> 0) % 256).toString(16).padStart(2, "0");
 }
 
 /**

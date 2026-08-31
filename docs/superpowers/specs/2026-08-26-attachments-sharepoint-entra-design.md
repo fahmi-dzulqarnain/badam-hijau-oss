@@ -108,18 +108,33 @@ administrator runs to make the grant.
 
 ### 5.2 The drive key carries no filename and no page path
 
-The key is `{id[0:2]}/{attachmentId}.{ext}`.
+The key is `{hash(id)}/{attachmentId}.{ext}`, where the shard is two hex characters.
 
-> **Amended while writing the phase plan.** This first read `/{yyyy}/{mm}/{attachmentId}.{ext}`,
-> and date sharding does not work: `id` and `createdAt` are both database defaults, so
-> **neither is known before the row exists** and the key cannot be computed for the `create`
-> that produces it. That forces either a second write — leaving a committed row with an empty
-> `drivePath`, which the sweep would reclaim as garbage — or generating ids outside Prisma,
-> breaking the `cuid()` convention every other model follows. Sharding on the id's first two
-> characters is computable inside one transaction and distributes more evenly than months do.
-> What is given up is human browsability of the library, which was the stated reason for date
-> sharding; the library is not a browsing surface, and the sweep cursors on `createdAt` in
-> Postgres, where the column actually lives.
+> **Amended twice, and the second amendment corrects the first.**
+>
+> This originally read `/{yyyy}/{mm}/{attachmentId}.{ext}`. Date sharding does not work:
+> `id` and `createdAt` are both database defaults, so **neither is known before the row
+> exists** and the key cannot be computed for the `create` that produces it. That forces
+> either a second write — leaving a committed row with an empty `drivePath`, which the sweep
+> would reclaim as garbage — or generating ids outside Prisma, breaking the `cuid()`
+> convention every other model follows.
+>
+> It was then amended to `{id[0:2]}/…`, on the claim that a prefix shard "distributes more
+> evenly than months do". **That claim was false, and the replacement was worse than what it
+> replaced.** A Prisma `cuid()` is `"c" + Date.now().toString(36) + counter + fingerprint +
+> random`: the first character is a literal `c`, and the second is the most significant
+> base-36 digit of a millisecond timestamp, which turns over roughly once every two and a half
+> years. Measured on twelve consecutively minted ids: **one** distinct value for the leading
+> two characters against twelve for the trailing two. Every attachment for years would have
+> landed in a single SharePoint folder — where `yyyy/mm` would at least have given twelve
+> buckets a year.
+>
+> The shard is now **FNV-1a over the id, folded to 256 buckets**. Hashed rather than sliced
+> from the tail, because the tail is random only by an accident of cuid v1's layout: a hash
+> decorrelates the shard from whatever structure the id scheme carries, so this cannot quietly
+> collapse again if that scheme changes. What is given up is human browsability of the
+> library, which was date sharding's stated benefit; the library is not a browsing surface,
+> and the sweep cursors on `createdAt` in Postgres, where the column actually lives.
 
 **No filename in the path.** The original filename lives only in Postgres, for
 `Content-Disposition`. Path traversal, Unicode normalisation and collisions therefore
@@ -130,8 +145,6 @@ values in one statement under a space-wide advisory lock. Encoding the path woul
 every move a cascading set of drive renames inside that transaction. The attachment id is
 immutable, so the key is stable across any move.
 
-Date sharding keeps the library browsable for a human and gives the retention sweep a
-natural cursor.
 
 ### 5.3 The `BlobStore` seam survives D12
 
