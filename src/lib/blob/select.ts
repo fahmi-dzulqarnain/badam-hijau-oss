@@ -21,17 +21,48 @@ export function resolveStoreKind(env: Partial<NodeJS.ProcessEnv> = process.env):
         "There is no default: see src/lib/blob/select.ts.",
     );
   }
+  // An ALLOWLIST of known development environments, NOT `!== "production"`.
+  //
+  // The inverted form was wrong and was caught by review. Next only DEFAULTS `NODE_ENV`
+  // (`process.env.NODE_ENV = process.env.NODE_ENV || defaultEnv` in its bin), so an explicitly
+  // set value survives — `NODE_ENV=staging npx next start` warns and proceeds. Under the old
+  // guard that combination accepted `memory` silently, in a genuinely deployed process, while
+  // `.env.example` ships `BLOB_STORE="memory"` for the setup-db.sh reason. Anything that is
+  // not recognisably a development environment must ask explicitly.
   if (
     raw === "memory" &&
-    env.NODE_ENV === "production" &&
+    !DEV_ENVS.has(env.NODE_ENV ?? "") &&
     env.BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION !== "1"
   ) {
     throw new Error(
-      'BLOB_STORE="memory" in production loses every upload on restart and cannot be shared ' +
-        "between replicas. Set BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 only if you mean it.",
+      `BLOB_STORE="memory" under NODE_ENV=${JSON.stringify(env.NODE_ENV ?? null)} loses every ` +
+        "upload on restart and cannot be shared between replicas. Set " +
+        "BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 only if you mean it.",
     );
   }
   return raw;
+}
+
+/** Where an in-memory store needs no explanation. Everything else must opt in. */
+const DEV_ENVS = new Set(["development", "test"]);
+
+/**
+ * Whether the unauthenticated dev upload route may exist.
+ *
+ * **This is a SECOND, positive flag, and it is deliberately not `memoryStoreEnabled()`.**
+ * Selecting the memory store answers "where do bytes go"; this answers "does an
+ * unauthenticated write endpoint exist", and those are different questions that were
+ * originally conflated.
+ *
+ * The polarity is what matters, and getting it backwards is what review caught. Gating the
+ * route on the memory store alone made it **on by default** in every process where `NODE_ENV`
+ * was not the literal string `production` — the exact inverse of `testLoginEnabled`, which is
+ * off everywhere until someone writes an exact `"1"`. This now matches that discipline: off
+ * unless asked for, an exact `"1"`, and additionally requiring the memory store, so the flag
+ * alone cannot open a route in a process whose bytes go to SharePoint.
+ */
+export function devUploadEnabled(env: Partial<NodeJS.ProcessEnv> = process.env): boolean {
+  return env.ALLOW_DEV_UPLOAD === "1" && memoryStoreEnabled(env);
 }
 
 /**

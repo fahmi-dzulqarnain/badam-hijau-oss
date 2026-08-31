@@ -339,7 +339,16 @@ step "Build"
 npm run build > "$LOG" 2>&1 && ok "production build" || { cat "$LOG"; fail "build"; exit 1; }
 
 step "Serve"
-ALLOW_TEST_LOGIN=1 npx next start --port "$PORT" > "$LOG" 2>&1 &
+# `next start` sets NODE_ENV=production, so the memory store needs its override here. That
+# flag only accepts "uploads are lost on restart", which is exactly right for a run that tears
+# its own data down. ALLOW_DEV_UPLOAD is the SEPARATE flag opening the unauthenticated upload
+# endpoint the memory store's session URLs point at — two flags because they answer two
+# different questions, and neither alone is sufficient.
+ALLOW_TEST_LOGIN=1 \
+  BLOB_STORE=memory \
+  BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 \
+  ALLOW_DEV_UPLOAD=1 \
+  npx next start --port "$PORT" > "$LOG" 2>&1 &
 SERVER=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/" && break; sleep 1; done
 curl -s -o /dev/null "$BASE/" && ok "listening on $PORT" || { cat "$LOG"; fail "server did not start"; exit 1; }

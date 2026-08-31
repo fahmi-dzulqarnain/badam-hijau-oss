@@ -1281,7 +1281,7 @@ Create `src/lib/blob/select.test.ts`:
 
 ```ts
 import { expect, test } from "vitest";
-import { memoryStoreEnabled, resolveStoreKind } from "./select";
+import { devUploadEnabled, memoryStoreEnabled, resolveStoreKind } from "./select";
 
 test("an unset BLOB_STORE refuses to boot rather than guessing", () => {
   // Neither default is safe. "memory" lets a deployment accept uploads and lose them on
@@ -1299,6 +1299,45 @@ test("an unrecognised value is refused, not treated as one of the two", () => {
 test("both valid values resolve outside production", () => {
   expect(resolveStoreKind({ BLOB_STORE: "memory", NODE_ENV: "development" })).toBe("memory");
   expect(resolveStoreKind({ BLOB_STORE: "graph", NODE_ENV: "production" })).toBe("graph");
+});
+
+test("memory is refused under any NODE_ENV that is not a known dev one", () => {
+  // An ALLOWLIST, not `!== "production"`. Next only DEFAULTS NODE_ENV, so an explicitly set
+  // value survives — `NODE_ENV=staging next start` warns and proceeds. Under the inverted
+  // guard that combination silently accepted `memory` in a genuinely deployed process.
+  //
+  // The cast is the point, not a workaround: `@types/node` declares NODE_ENV as
+  // `"development" | "production" | "test"`, and the runtime accepts any string at all. The
+  // gap between the type and reality is precisely where the bug lived, so the test has to
+  // reach past the type to reproduce it.
+  for (const NODE_ENV of ["staging", "prod", "Production", "", "qa"]) {
+    const env = { BLOB_STORE: "memory", NODE_ENV } as Partial<NodeJS.ProcessEnv>;
+    expect(() => resolveStoreKind(env), NODE_ENV).toThrow(/BLOB_STORE="memory"/);
+  }
+  expect(resolveStoreKind({ BLOB_STORE: "memory", NODE_ENV: "development" })).toBe("memory");
+  expect(resolveStoreKind({ BLOB_STORE: "memory", NODE_ENV: "test" })).toBe("memory");
+});
+
+test("devUploadEnabled needs BOTH an exact 1 and the memory store", () => {
+  // The route this gates is the only unauthenticated write in the application. Gating it on
+  // the memory store alone made it ON by default wherever NODE_ENV was not exactly
+  // "production" — the inverse of ALLOW_TEST_LOGIN's discipline. Neither flag alone opens it.
+  const dev = { NODE_ENV: "development" } as const;
+  expect(devUploadEnabled({ ...dev, BLOB_STORE: "memory", ALLOW_DEV_UPLOAD: "1" })).toBe(true);
+
+  expect(devUploadEnabled({ ...dev, BLOB_STORE: "memory" })).toBe(false);
+  expect(devUploadEnabled({ ...dev, BLOB_STORE: "graph", ALLOW_DEV_UPLOAD: "1" })).toBe(false);
+  expect(devUploadEnabled({ ALLOW_DEV_UPLOAD: "1" })).toBe(false);
+});
+
+test("devUploadEnabled is an exact 1, like ALLOW_TEST_LOGIN, and never throws", () => {
+  const base = { NODE_ENV: "development", BLOB_STORE: "memory" } as const;
+  for (const value of ["true", "yes", "on", "0", "", " 1", "1 "]) {
+    expect(devUploadEnabled({ ...base, ALLOW_DEV_UPLOAD: value }), value).toBe(false);
+  }
+  // Called on every request to the route, including where BLOB_STORE is missing entirely.
+  expect(() => devUploadEnabled({})).not.toThrow();
+  expect(() => devUploadEnabled({ BLOB_STORE: "nonsense", ALLOW_DEV_UPLOAD: "1" })).not.toThrow();
 });
 
 test("memory is refused in production unless explicitly overridden", () => {
@@ -1370,17 +1409,48 @@ export function resolveStoreKind(env: Partial<NodeJS.ProcessEnv> = process.env):
         "There is no default: see src/lib/blob/select.ts.",
     );
   }
+  // An ALLOWLIST of known development environments, NOT `!== "production"`.
+  //
+  // The inverted form was wrong and was caught by review. Next only DEFAULTS `NODE_ENV`
+  // (`process.env.NODE_ENV = process.env.NODE_ENV || defaultEnv` in its bin), so an explicitly
+  // set value survives — `NODE_ENV=staging npx next start` warns and proceeds. Under the old
+  // guard that combination accepted `memory` silently, in a genuinely deployed process, while
+  // `.env.example` ships `BLOB_STORE="memory"` for the setup-db.sh reason. Anything that is
+  // not recognisably a development environment must ask explicitly.
   if (
     raw === "memory" &&
-    env.NODE_ENV === "production" &&
+    !DEV_ENVS.has(env.NODE_ENV ?? "") &&
     env.BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION !== "1"
   ) {
     throw new Error(
-      'BLOB_STORE="memory" in production loses every upload on restart and cannot be shared ' +
-        "between replicas. Set BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 only if you mean it.",
+      `BLOB_STORE="memory" under NODE_ENV=${JSON.stringify(env.NODE_ENV ?? null)} loses every ` +
+        "upload on restart and cannot be shared between replicas. Set " +
+        "BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 only if you mean it.",
     );
   }
   return raw;
+}
+
+/** Where an in-memory store needs no explanation. Everything else must opt in. */
+const DEV_ENVS = new Set(["development", "test"]);
+
+/**
+ * Whether the unauthenticated dev upload route may exist.
+ *
+ * **This is a SECOND, positive flag, and it is deliberately not `memoryStoreEnabled()`.**
+ * Selecting the memory store answers "where do bytes go"; this answers "does an
+ * unauthenticated write endpoint exist", and those are different questions that were
+ * originally conflated.
+ *
+ * The polarity is what matters, and getting it backwards is what review caught. Gating the
+ * route on the memory store alone made it **on by default** in every process where `NODE_ENV`
+ * was not the literal string `production` — the exact inverse of `testLoginEnabled`, which is
+ * off everywhere until someone writes an exact `"1"`. This now matches that discipline: off
+ * unless asked for, an exact `"1"`, and additionally requiring the memory store, so the flag
+ * alone cannot open a route in a process whose bytes go to SharePoint.
+ */
+export function devUploadEnabled(env: Partial<NodeJS.ProcessEnv> = process.env): boolean {
+  return env.ALLOW_DEV_UPLOAD === "1" && memoryStoreEnabled(env);
 }
 
 /**
@@ -1424,61 +1494,134 @@ Create `tests/integration/dev-upload-route.test.ts`:
 
 ```ts
 import { expect, test, vi } from "vitest";
+import type { MemoryBlobStore } from "@/lib/blob/memory";
 
 /**
  * The dev upload route is the price of the upload/download asymmetry: the browser must PUT
- * somewhere real for the memory store to exercise the direct-upload path at all. That makes
- * it a write endpoint with no authentication, which is acceptable ONLY while it cannot exist
- * outside a memory-store process.
+ * somewhere real for the memory store to exercise the direct-upload path at all. That makes it
+ * the one write endpoint in the application with no authentication.
  *
- * Tested the way a browser sees it, and with `vi.resetModules()` because the route reads the
- * flag at import time — a cached module would answer for the previous test's environment.
- * Same reasoning as `src/lib/auth/providers.test.ts`, and the same trap: importing anything
- * that pulls in Prisma loads `.env` into `process.env`, so the flag is stubbed at the module
- * rather than through the environment.
+ * It is gated on `devUploadEnabled()` — an explicit `ALLOW_DEV_UPLOAD=1` **and** the memory
+ * store. Review caught the earlier version gating on the memory store alone, which made the
+ * route ON by default in every process where `NODE_ENV` was not the literal string
+ * `production`; Next only DEFAULTS that variable, so `NODE_ENV=staging next start` proceeded
+ * with an open write endpoint. These tests pin the gate, not the intent.
+ *
+ * `vi.resetModules()` is needed so `vi.doMock` takes effect on a fresh import — NOT because
+ * the route reads the flag at import time. It does not: `devUploadEnabled()` is called per
+ * request, which is the stronger property. An earlier version of this comment claimed
+ * otherwise, and a comment that describes a security mechanism as weaker than it is invites
+ * someone to "fix" the code to match.
  */
-async function put(key: string, body: string): Promise<number> {
+async function put(
+  key: string | string[],
+  body: string,
+  headers: Record<string, string> = {},
+): Promise<number> {
   const { PUT } = await import("@/app/api/attachments/_dev-upload/[...key]/route");
-  const response = await PUT(new Request("http://localhost/x", { method: "PUT", body }), {
-    params: Promise.resolve({ key: key.split("/") }),
+  const request = new Request("http://localhost/x", { method: "PUT", body, headers });
+  const response = await PUT(request, {
+    params: Promise.resolve({ key: Array.isArray(key) ? key : key.split("/") }),
   });
   return response.status;
 }
 
-test("the route 404s when the memory store is not selected", async () => {
+function mockGate(enabled: boolean, store?: MemoryBlobStore) {
+  vi.doMock("@/lib/blob/select", () => ({
+    devUploadEnabled: () => enabled,
+    memoryStore: () => store,
+  }));
+}
+
+async function freshStore(): Promise<MemoryBlobStore> {
+  const { MemoryBlobStore } = await import("@/lib/blob/memory");
+  return new MemoryBlobStore("http://localhost");
+}
+
+test("the route 404s when the dev upload flag is off", async () => {
   vi.resetModules();
-  vi.doMock("@/lib/blob/select", () => ({ memoryStoreEnabled: () => false }));
+  mockGate(false);
 
   expect(await put("ab/abc.png", "hello")).toBe(404);
   vi.doUnmock("@/lib/blob/select");
 });
 
+test("every other method 404s too, so OPTIONS cannot confirm the route is in the build", async () => {
+  // Without explicit stubs Next auto-implements the unhandled verbs — 405 for most and a 204
+  // carrying `Allow: OPTIONS, PUT` for OPTIONS — either of which distinguishes a gated route
+  // from an unregistered path without ever consulting the gate.
+  vi.resetModules();
+  mockGate(false);
+
+  const mod = await import("@/app/api/attachments/_dev-upload/[...key]/route");
+  for (const method of ["GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const) {
+    const response = await mod[method]();
+    expect(response.status, method).toBe(404);
+  }
+  vi.doUnmock("@/lib/blob/select");
+});
+
 test("the route accepts a PUT and the bytes are then readable", async () => {
   vi.resetModules();
-  const { MemoryBlobStore } = await import("@/lib/blob/memory");
-  const store = new MemoryBlobStore("http://localhost");
-  vi.doMock("@/lib/blob/select", () => ({
-    memoryStoreEnabled: () => true,
-    memoryStore: () => store,
-  }));
+  const store = await freshStore();
+  mockGate(true, store);
 
-  expect(await put("ab/abc.png", "hello")).toBe(201);
+  expect(await put("ab/abc.png", "hello", { "content-length": "5" })).toBe(201);
   expect(await store.stat("ab/abc.png")).toMatchObject({ sizeBytes: 5 });
   vi.doUnmock("@/lib/blob/select");
 });
 
-test("a key that escapes its prefix is refused", async () => {
-  // The key arrives as path segments. Postgres never sees it, but the memory store's Map
-  // would happily hold `../../etc/passwd`, and the Graph store's path builder would not.
-  // Refusing traversal here keeps the two stores' key spaces the same shape.
+test("a key is validated by SHAPE, so an encoded traversal cannot slip through", async () => {
+  // The per-segment blacklist this replaced was bypassable and its test did not notice. Next
+  // decodes catch-all segments AFTER splitting on `/`, so `..%2f..%2fetc%2fpasswd` arrives as
+  // ONE array element containing real slashes and no element ever equals "..". The last two
+  // cases below are exactly what that produced; they are the reason this is an allowlist.
   vi.resetModules();
-  const { MemoryBlobStore } = await import("@/lib/blob/memory");
-  vi.doMock("@/lib/blob/select", () => ({
-    memoryStoreEnabled: () => true,
-    memoryStore: () => new MemoryBlobStore("http://localhost"),
-  }));
+  const store = await freshStore();
+  mockGate(true, store);
 
-  expect(await put("../etc/passwd", "x")).toBe(400);
+  const rejected: (string | string[])[] = [
+    "../etc/passwd",
+    ["..", "etc", "passwd"],
+    ["../../etc/passwd"],
+    ["..\\..\\x"],
+    ["x y"],
+    ["..."],
+    ["ab", "abc.png", "extra"],
+    ["AB", "abc.png"],
+    ["ab", "abc"],
+  ];
+  for (const key of rejected) {
+    expect(await put(key, "x", { "content-length": "1" }), JSON.stringify(key)).toBe(400);
+  }
+  // Nothing above reached the store.
+  for await (const _ of store.list("")) throw new Error("a rejected key was stored");
+
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("a missing Content-Length is 411 and an oversized one is 413, before the body is read", async () => {
+  // The same guard order the drafts route uses, and for the same reason: `Number(null)` is 0,
+  // so a numeric-only cap waves a chunked body through. Without this the fake was strictly
+  // MORE permissive than the real store, buffering an unbounded body into a Map that only
+  // `reset()` clears.
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+
+  const { MAX_UPLOAD_BYTES } = await import("@/lib/attachments/schema");
+  const { PUT } = await import("@/app/api/attachments/_dev-upload/[...key]/route");
+
+  const bare = new Request("http://localhost/x", { method: "PUT", body: "x" });
+  bare.headers.delete("content-length");
+  expect(
+    (await PUT(bare, { params: Promise.resolve({ key: ["ab", "abc.png"] }) })).status,
+  ).toBe(411);
+
+  expect(
+    await put("ab/abc.png", "x", { "content-length": String(MAX_UPLOAD_BYTES + 1) }),
+  ).toBe(413);
+
   vi.doUnmock("@/lib/blob/select");
 });
 ```
@@ -1489,36 +1632,100 @@ Create `src/app/api/attachments/_dev-upload/[...key]/route.ts`:
 
 ```ts
 import { NextResponse } from "next/server";
-import { memoryStore, memoryStoreEnabled } from "@/lib/blob/select";
+import { memoryStore, devUploadEnabled } from "@/lib/blob/select";
+import { MAX_UPLOAD_BYTES } from "@/lib/attachments/schema";
 
 /**
- * Where the memory store's upload sessions point. **Never live outside a memory-store
- * process**, and treated with the same suspicion as the passwordless test login: it is an
- * unauthenticated write.
+ * Where the memory store's upload sessions point, and the only unauthenticated write in the
+ * application. Treated with the same suspicion as the passwordless test login.
  *
- * It is not a hole in the deployed system because it cannot exist there — `BLOB_STORE=graph`
- * makes every request here a 404, byte-identical to a route that was never registered. The
- * `dev-upload-route` integration test pins that, because "it is only for development" is a
- * claim, not a mechanism.
+ * It exists because uploads bypass the application: the browser PUTs bytes to whatever URL the
+ * store hands it, so for `BLOB_STORE=memory` that URL must be something a test, a Playwright
+ * browser and `scripts/smoke.sh` can actually PUT to. Without it the direct-upload path is not
+ * exercisable at all and the "runs with no tenant credentials" goal is unreachable.
+ *
+ * **`devUploadEnabled()`, not `memoryStoreEnabled()`, and the difference is the whole safety
+ * argument.** Gating on the memory store alone made this route ON by default in every process
+ * where `NODE_ENV` was not the literal string `production` — and Next only DEFAULTS that
+ * variable, so `NODE_ENV=staging npx next start` warns and proceeds. That is the inverse of
+ * `ALLOW_TEST_LOGIN`, which is off everywhere until someone writes an exact `"1"`. Now this
+ * matches: it requires an explicit `ALLOW_DEV_UPLOAD=1` **and** the memory store, so neither
+ * flag alone opens a write endpoint.
+ *
+ * **What the gate does and does not hide.** Every request that could write is a 404. The
+ * route's *presence* in a build is still detectable — an earlier version of this comment
+ * claimed the 404 was "byte-identical to a route that was never registered", and that was
+ * false: Next auto-implements `OPTIONS` from the userland exports, so an unregistered path and
+ * a gated one answer differently. The stubs below close that by handling every method through
+ * the same gate. Fingerprinting confers nothing either way, but a false claim in a security
+ * comment is worse than no claim.
  */
+
+/** `{2 hex}/{id}{ext}` — the shape `driveKeyFor` produces, and the only shape accepted. */
+const DRIVE_KEY = /^[0-9a-f]{2}\/[a-z0-9]+\.[a-z0-9]+$/;
+
+function notFound() {
+  return NextResponse.json({ error: "not-found" }, { status: 404 });
+}
+
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ key: string[] }> },
 ) {
-  if (!memoryStoreEnabled()) {
-    return NextResponse.json({ error: "not-found" }, { status: 404 });
-  }
+  if (!devUploadEnabled()) return notFound();
 
   const { key } = await params;
-  // Traversal is refused rather than normalised, so both stores hold the same shape of key.
-  if (key.some((segment) => segment === "" || segment === "." || segment === "..")) {
+  const joined = key.join("/");
+
+  // Validated against the shape a key is SUPPOSED to have, not by blacklisting `..` segments.
+  // The per-segment blacklist was bypassable and its test did not notice: Next decodes
+  // catch-all segments AFTER splitting on `/`, so `..%2f..%2fetc%2fpasswd` arrives as ONE
+  // element containing real slashes, and a per-segment check never sees a `..` segment.
+  // Harmless against the memory store's Map, but `GraphBlobStore` builds
+  // `/drives/{id}/root:/{key}:`, where a traversal would walk the drive. An allowlist of the
+  // one legal shape cannot be bypassed by an encoding that produces a different one.
+  if (!DRIVE_KEY.test(joined)) {
     return NextResponse.json({ error: "invalid-key" }, { status: 400 });
   }
 
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  await memoryStore().put(key.join("/"), bytes);
+  // The same guard order the drafts route uses, for the same reason: a missing header is its
+  // own rejection because `Number(null)` is 0, so a numeric-only cap waves a chunked body
+  // straight through. Without this the fake was strictly MORE permissive than Graph — it
+  // buffered an unbounded body into a Map that only `reset()` clears, so a large PUT
+  // exhausted the heap of the very dev server the tests depend on.
+  const declared = request.headers.get("content-length");
+  if (declared === null) {
+    return NextResponse.json(
+      { error: "length-required", message: "A Content-Length header is required." },
+      { status: 411 },
+    );
+  }
+  const bytes = Number(declared);
+  if (!Number.isInteger(bytes) || bytes < 0 || bytes > MAX_UPLOAD_BYTES) {
+    return NextResponse.json(
+      { error: "too-large", message: "That upload is too large." },
+      { status: 413 },
+    );
+  }
+
+  await memoryStore().put(joined, new Uint8Array(await request.arrayBuffer()));
   return new NextResponse(null, { status: 201 });
 }
+
+/**
+ * Every other method, through the same gate.
+ *
+ * Not dead code: without these, Next auto-implements them — unhandled verbs as 405 and
+ * `OPTIONS` as a 204 carrying `Allow: OPTIONS, PUT`, both of which confirm the route module is
+ * compiled into the build without ever consulting the gate. Routing them here makes the 404
+ * uniform.
+ */
+export const GET = notFound;
+export const POST = notFound;
+export const PATCH = notFound;
+export const DELETE = notFound;
+export const HEAD = notFound;
+export const OPTIONS = notFound;
 ```
 
 - [ ] **Step 6: Run both suites**
@@ -2185,6 +2392,23 @@ test("a super admin reads a draft-only attachment in a MEMBERS space they do not
   expect((await readableAttachment(c.superAdmin, a.id))?.id).toBe(a.id);
 });
 
+test("that same read leaves a space.access audit row, and a member's read leaves none", async () => {
+  // Spec §8, paid the same way `getReadableSpaceByKey` pays it — see the repo module's
+  // docstring for why this read is the one place that hook has to live: no upstream route
+  // resolves this page's space through `getReadableSpaceByKey` before fetching an attachment
+  // by id, so this is the only choke point that could ever record the access.
+  const c = await cast({ visibility: "MEMBERS", published: false });
+  const a = await attach(c.pageId, c.editor.id);
+
+  await readableAttachment(c.superAdmin, a.id);
+  const rows = await db.auditLog.findMany({ where: { action: "space.access" } });
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ actorId: c.superAdmin.id, spaceId: c.spaceId });
+
+  await readableAttachment(c.editor, a.id);
+  expect(await db.auditLog.count({ where: { action: "space.access" } })).toBe(1);
+});
+
 test("a PENDING attachment is never readable, even by the uploader", async () => {
   const c = await cast({ visibility: "ALL_STAFF", published: true });
   const a = await attach(c.pageId, c.editor.id, { state: "PENDING" });
@@ -2300,6 +2524,7 @@ import { db } from "@/lib/db";
 import { can } from "@/lib/authz/can";
 import { editableSpace, readableSpace } from "@/lib/authz/where";
 import { visiblePage } from "@/lib/pages/visible";
+import { auditSpaceAccess } from "@/lib/audit/log";
 import { blobStore } from "@/lib/blob/select";
 import { driveKeyFor } from "@/lib/attachments/policy";
 import type { BeginUploadInput } from "@/lib/attachments/schema";
@@ -2312,7 +2537,8 @@ import type { Viewer } from "@/lib/authz/types";
  * Note that no `page` delegate call appears anywhere in this file: reading an attachment
  * reaches a `Page` row only through a RELATION FILTER. That is the shape `visible.test.ts`
  * was widened for the fourth time — invisible to both halves of its sweep — which is why this
- * module's registration there is not a formality.
+ * module's registration there is not a formality. `readableAttachment` also reaches `Space`
+ * only through the same relation, nested one level further, for the audit hook argued below.
  */
 
 export type ReadableAttachment = {
@@ -2344,17 +2570,57 @@ function readablePredicate(viewer: Viewer) {
   );
 }
 
+/**
+ * **The `needsAccessAudit` decision (Task 9).**
+ *
+ * Spec §8 says a super admin reading a `MEMBERS` space they do not belong to is legitimate but
+ * must leave a trace, and `src/lib/pages/repo.ts` pays that debt inside `getReadableSpaceByKey`
+ * — the one place *every* page read passes through first. `listSpacePages` and the other
+ * readers in that module deliberately do NOT audit themselves; they rely on their caller having
+ * resolved the space through `getReadableSpaceByKey` earlier in the same request, and the
+ * module's docstring argues that precondition explicitly rather than leaving it assumed.
+ *
+ * That precondition does not hold here. An attachment is fetched by its own id, not by
+ * `(spaceKey, path)`, and the route that will serve it (Task 12) has no reason to resolve the
+ * page's space through `getReadableSpaceByKey` first — the common case is a bare `<img src>`
+ * request that never touches page resolution at all, often in a different HTTP request than
+ * the page that referenced it. `readableAttachment` is therefore not "one more reader behind an
+ * already-audited resolve", it is the ONLY choke point a super-admin attachment read passes
+ * through. Trusting call ordering here would be exactly the gap Task 3's review flagged:
+ * the audited case, unaudited.
+ *
+ * So this selects `page.space.{id,key,visibility}` — nested through the same relation filter
+ * that already reaches `Page`, adding no new delegate call — and calls `auditSpaceAccess` for
+ * every successful read. `auditSpaceAccess` itself re-checks `needsAccessAudit` and is a no-op
+ * for anyone but a super admin outside their own MEMBERS space, so an ordinary editor or viewer
+ * read costs nothing beyond the already-fetched columns. See
+ * "that same read leaves a space.access audit row" in attachments-repo.test.ts.
+ *
+ * `beginUpload`, `commitUpload` and `softDeleteAttachment` are EDIT-gated, and a super admin
+ * bypasses that gate the same way. This task's instruction named only the READ path, and nothing
+ * downstream of it in the routes planned so far turns an edit action into a bare content
+ * disclosure the way a GET does — so those three are left as they are rather than folded into
+ * this decision by extension. If a later task adds an edit-only surface reachable without ever
+ * resolving the space, it will need the same argument made for it, not silently inherit this one.
+ */
 export async function readableAttachment(
   viewer: Viewer,
   id: string,
 ): Promise<ReadableAttachment | null> {
-  return db.attachment.findFirst({
+  const row = await db.attachment.findFirst({
     where: { id, deletedAt: null, state: "COMMITTED", page: readablePredicate(viewer) },
     select: {
       id: true, drivePath: true, filename: true,
       mimeType: true, sizeBytes: true, eTag: true,
+      page: { select: { space: { select: { id: true, key: true, visibility: true } } } },
     },
   });
+  if (!row) return null;
+
+  await auditSpaceAccess(viewer, row.page.space);
+
+  const { page: _page, ...attachment } = row;
+  return attachment;
 }
 
 export type BeginUploadResult =
@@ -2370,7 +2636,7 @@ export async function beginUpload(
   input: BeginUploadInput,
 ): Promise<BeginUploadResult> {
   const page = await db.page.findFirst({
-    where: visiblePage({ id: input.pageId }, { space: readableSpace(viewer) }),
+    where: visiblePage({ id: input.pageId, space: readableSpace(viewer) }),
     select: { id: true, space: { select: { id: true, visibility: true } } },
   });
   if (!page) return { ok: false, reason: "not-found" };

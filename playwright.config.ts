@@ -27,6 +27,16 @@ export default defineConfig({
     // The command builds before it serves, and a cold Next build here takes longer than
     // the 60s default — which fails the whole run before a single test starts.
     timeout: 300_000,
-    env: { ALLOW_TEST_LOGIN: "1", GIT_SHA: "df0ef11abc" },
+    // `next start` sets NODE_ENV=production, so the memory store needs its override here —
+    // that flag only accepts "uploads are lost on restart", which is correct for a test
+    // harness. ALLOW_DEV_UPLOAD is the separate flag that opens the unauthenticated upload
+    // endpoint; both are deliberately explicit, and neither alone is sufficient.
+    env: {
+      ALLOW_TEST_LOGIN: "1",
+      GIT_SHA: "df0ef11abc",
+      BLOB_STORE: "memory",
+      BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      ALLOW_DEV_UPLOAD: "1",
+    },
   },
 });
