@@ -1,7 +1,7 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is under way — Tasks 1–2 of 9 done.**
+is under way — Tasks 1–3 of 9 done.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
 **951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
@@ -49,8 +49,8 @@ Landmines carried in, measured while planning:
 |---|---|
 | 1. The mirrored document | ✅ |
 | 2. Where the file goes | ✅ |
-| **3. `GitJob`** | **next** |
-| 4. Enqueue, inside the transactions that already exist | — |
+| 3. `GitJob` | ✅ |
+| **4. Enqueue, inside the transactions that already exist** | **next** |
 | 5. The git seam | — |
 | 6. The worker | — |
 | 7. The sha on the page | — |

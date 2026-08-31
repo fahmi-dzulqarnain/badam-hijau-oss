@@ -232,11 +232,11 @@ a file written NFC is found under NFD, and `readdir` returns the bytes as writte
 
 ---
 
-## Task 3: `GitJob`
+## Task 3: `GitJob` ✅
 
 **Files:** `prisma/schema.prisma`, a migration.
 
-- [ ] **Step 1: The model**
+- [x] **Step 1: The model**
 
 Per spec §5.2 and `GitJobState { PENDING RUNNING FAILED DONE }`. It needs: the page, the version
 for a publish, the *kind* of change, the paths involved (a move needs the old one, and the old
@@ -247,10 +247,51 @@ Adding a table means checking Phase 4's lesson: the e2e `snapshotCounts` and `sc
 `counts()` both enumerate tables, and Phase 4 found one blind to the only write a spec made. This
 phase **does** add a table, so both contracts need it — and the smoke test writes to it.
 
-- [ ] **Step 2: Indexes for the claim query, not for reading**
+- [x] **Step 2: Indexes for the claim query, not for reading**
 
 The worker's query is "the next claimable job", which is a partial-order scan by state and next
 attempt. Index for that. Say in a comment which query each index serves.
+
+**`createdAt` cannot order these rows, and the reason is worse than this plan assumed.** The plan
+said two jobs enqueued in the same millisecond would tie. Measured: Prisma binds `@default(now())`
+**client-side**, so the column's `DEFAULT CURRENT_TIMESTAMP` never fires, and a single `createMany`
+writes **byte-identical** values — which is exactly the shape a move enqueuing one job per moved
+descendant will use. The tie is guaranteed for the operation that most needs ordering, not a rare
+coincidence. Hence `id Int @default(autoincrement())` as both identity and order. Rejected:
+`cuid()` (not a documented monotonic sequence), `(createdAt, id)` (deterministic, but it orders the
+guaranteed tie *arbitrarily* — deterministic is not correct), and a separate `seq` beside a cuid
+`id` (two surrogate keys is two ways to name a row and a query that can order by the wrong one).
+
+**What the sequence does not give, measured, and handed to Task 6 as an obligation.** Sequence
+values are issued at INSERT, not COMMIT: a slow transaction holding `62009` commits *after* a fast
+`62010`, so a worker claiming the lowest ready id drains the later job first with no error
+anywhere. For one page the enqueues are nearly exclusive — publish takes the `PageDraft` row lock,
+create and move take the space advisory lock — but a publish and a move of the same page take
+**different** locks and can interleave exactly that way. `@@index([pageId, id])` exists for the
+earlier-unfinished check that closes it.
+
+**Every path is captured at enqueue, and `spaceKey` with them.** This plan's argument — that a
+move's old path is unreconstructible — was too narrow. A publish enqueued before a move and
+drained after it would, reading `Page.path` at drain time, write its file at the *new* path, and
+the move's own job would then `git mv` a path that never existed: a correctly ordered queue still
+producing a wrong tree. Capturing the path but joining the key would give a job whose address
+comes from two different instants. The rule, stated once in the schema: **capture the mutable,
+join the immutable.** `Page.docType` is the one join to watch — `document.ts` needs it and
+`PageVersion` does not carry it, safe only while nothing updates it.
+
+**Foreign keys go the opposite way from `BugReport` in the same schema, deliberately.** That model
+holds ids *without* keys because its value is highest once the row is gone; a `GitJob` is work
+rather than a record, and work for a page that no longer exists has nothing to mirror. `versionId`
+cascades rather than nulling, because a publish job with no version is a job that writes an empty
+file. Safe because this product has no hard delete — with the rule recorded at the line that **a
+future hard delete must remove the mirrored file before the row.**
+
+**`DONE` rows are kept, because deleting them makes success unobservable.** "The job drained" and
+"no job was ever enqueued" would become the same observation, and every drain assertion in Tasks 6
+and 9 would go vacuous — this project's most repeated test failure, arriving through the schema.
+The cost is unbounded growth with no retention pass, deferred to Phase 6 alongside `/admin`,
+because a sweep with no operator surface is a cron job nobody knows about. Measured over 60,000
+finished rows, `state` leading the claim index costs 4 buffers to seek past them.
 
 ---
 
