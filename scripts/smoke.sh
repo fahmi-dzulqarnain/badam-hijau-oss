@@ -347,11 +347,18 @@ author_page() { # slug title docType markdown-as-a-json-string
 # `PageVersion.searchText`/`searchHeadings` are columns on tables already counted here, and the
 # search index is a GIN index over one of those columns rather than a row anywhere. So the search
 # pass's cleanup contract is the existing nine numbers, unchanged.
+#
+# **Phase 5 does add one**, and `GitJob` is counted here from the task that creates the table
+# rather than from the task that writes to it. Task 4 makes publish, move, delete and restore each
+# enqueue a row, so this script starts creating them the moment that lands; a column added later
+# would leave exactly those tasks unwatched, which is the same "the contract could not see the
+# only write" gap Phase 4 Task 6 closed after the fact. `GitJob` cascades from `Page`, so `sweep()`
+# below needs no statement of its own — and this number is what proves that rather than assumes it.
 counts() {
   psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX -v ON_ERROR_STOP=1 -c "
     select format(
       '%s spaces / %s pages / %s versions / %s drafts / %s audit / %s redirects / '
-      || '%s relations / %s bug reports / %s soft-deleted',
+      || '%s relations / %s bug reports / %s git jobs / %s soft-deleted',
       (select count(*) from \"Space\"),
       (select count(*) from \"Page\"),
       (select count(*) from \"PageVersion\"),
@@ -360,6 +367,7 @@ counts() {
       (select count(*) from \"Redirect\"),
       (select count(*) from \"PageRelation\"),
       (select count(*) from \"BugReport\"),
+      (select count(*) from \"GitJob\"),
       (select count(*) from \"Page\" where \"deletedAt\" is not null))" 2>/dev/null \
     || echo "counts unavailable"
 }
