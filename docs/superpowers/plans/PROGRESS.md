@@ -336,6 +336,21 @@ truncates. None of it was the code. `ps` showed `npm test` running from
 `.claude/worktrees/onedrive-microsoft-sso-7ac97b`, a worktree that shares this checkout's
 `.env.test` and therefore `badam_test`. Two runs, racing `TRUNCATE`s.
 
+**Resolved for this checkout, and the fix is worth knowing.** `.env.test` is untracked, and a
+worktree has its own copy — both merely happened to name `badam_test`. This checkout now points at
+**`badam_p5_test`**, created and brought up with `prisma migrate deploy`. Proof it works: the run
+immediately after the switch passed **998/998 with zero deadlocks while the other session's
+processes were running**, under conditions that had just produced 207 failures. The guards only
+require a name ending in `_test`, so nothing else changed. The **dev** database `badam` is still
+shared, so `npm run smoke` and Playwright can still collide.
+
+**A related trap the collision checklist misses entirely: a shared migration *history*.**
+`20260826160447_attachments`, from another branch, is applied to `badam_test` and `badam` but is on
+neither `main` nor this branch. `prisma migrate dev` therefore offers to **reset the schema**,
+which would drop another branch's table and the dev data — and neither `ps` nor `pg_stat_activity`
+can see this coming. Use `prisma migrate deploy` (it applies without drift-checking), generate new
+migrations against a throwaway database, and run `prisma migrate status` before any `migrate dev`.
+
 `fileParallelism: false` makes this *look* impossible from inside one run, which is what sends you
 looking at the wrong thing — and the failure attributes itself to whatever you changed last. The
 same run also passed at the previous commit, which is what finally ruled the code out. **Before
