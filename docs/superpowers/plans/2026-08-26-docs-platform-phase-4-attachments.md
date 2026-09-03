@@ -4971,6 +4971,20 @@ relitigated" —
   never reaches it, so the element is built after sanitisation from a regex-captured id.
 - `BLOB_STORE` has no default, in either direction.
 - `Cache-Control: private` on the attachment proxy is a permission boundary.
+- The proxy reports what the store **did**, not what it was asked. A ranged request is not
+  obliged to get a partial answer — Graph redirects `/content` to a CDN that may return 200
+  with the whole object — so `BlobBody.partial` carries that, and `Content-Length` is declared
+  only when the store declared one.
+- Non-inline types are served as `application/octet-stream`. `nosniff` does not protect
+  `text/html`: it stops a browser guessing a *different* type, and that one is genuinely
+  executable.
+
+And record as **open, to decide deliberately rather than discover**: `readableAttachment`
+audits every read, so a super admin scrubbing a video in a MEMBERS space emits one
+`space.access` row per range request. Auditing too much is the safe direction and the choke
+point is correct — an attachment is fetched by its own id, so the repository is the only place
+that read passes — but the volume wants a de-dup window before the log becomes unreadable at
+the moment someone needs it.
 
 - [ ] **Step 4: Run everything**
 
