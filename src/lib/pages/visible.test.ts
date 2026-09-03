@@ -271,6 +271,34 @@ const MODULES: Record<string, Registration> = {
     covered: ["deletePage", "restorePage", "listDeletedPages"],
     exempt: [],
   },
+  "src/lib/pages/history.ts": {
+    load: () => import("@/lib/pages/history"),
+    // Soft-delete tests: tests/integration/page-history.test.ts. Phase 5 Task 7's version
+    // history. Three queries, and only the first one names `Page` — which is the point of
+    // listing them rather than the module:
+    //   the page read carries `visiblePage()` at the top level and `readableSpace` as its
+    //   `space` relation filter, and both are covered: "a soft-deleted page has no history, and
+    //   reads as not-found" is the soft-delete test, and "a non-member cannot read the history of
+    //   a page in a space they cannot read" is the permission one. The second is a
+    //   discrimination rather than an absence — the same viewer reads one space and not the
+    //   other, and the readable page's rows are counted — because an absence assertion made by a
+    //   viewer who can see nothing is near-vacuous, which is what Phase 4's non-member search
+    //   turned out to be;
+    //   the version read and the `GitJob` aggregate carry **no** predicate of either kind, and
+    //   both absences are deliberate: they are keyed on the `pageId` the read above authorised,
+    //   in the same function, with nothing caller-supplied in between. A `page: visiblePage(...)`
+    //   on either could be deleted with the whole suite green — the `resolveRedirect` shape,
+    //   measured twice in this project — so a second copy would make neither testable. What is
+    //   pinned instead is that removing the copy that exists changes the answer.
+    //
+    //   The `GitJob` aggregate is also the reason this module is not `reachesPage: false` on the
+    //   strength of its last two queries: it reads rows *about* a page for a reader, so the
+    //   question "which pages may this viewer learn the mirror state of" has to be answered
+    //   somewhere, and it is answered once, above, by the page read.
+    covered: ["listPageVersions"],
+    // Pure: folds a `groupBy` result into two numbers. Queries nothing.
+    exempt: ["mirrorQueueOf"],
+  },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),
     // Soft-delete tests: tests/integration/drafts-repo.test.ts

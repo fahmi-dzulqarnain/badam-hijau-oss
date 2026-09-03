@@ -895,3 +895,171 @@
   padding: 0;
   background: none;
 }
+
+/*
+ * A content sha (Task 7), in the reader's meta row and on every version-history row.
+ *
+ * The one shape on this page that `overflow-wrap` cannot rescue: a git object name is 40
+ * characters of hex with **no break opportunity anywhere in it**, so at 12.5px monospace it
+ * demands roughly 300px of one unbroken line — which is more than the 12px-wide gutters of a
+ * narrow `.meta` row have, and exactly how this class of bug has landed six times before. The
+ * component shows `SHA_DISPLAY_LENGTH` characters and keeps the full value in a `title`, which
+ * has no width at any viewport.
+ *
+ * `overflow-wrap: anywhere` is kept anyway and is deliberately not dead: it is what stops a
+ * future longer display form from re-opening the class silently. Ten characters cannot overflow
+ * anything here.
+ */
+.sha {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The link from a page to its version history (Task 7, spec §10).
+ *
+ * In `.meta` for the reason `.doc-edit` above is: `.rail-r` is `display: none` below 1180px, so
+ * the right rail is where an affordance ceases to exist on a narrower window. It carries no
+ * `margin-left: auto` — `.doc-edit` owns the far end of the row, and two elements claiming it
+ * would put the history link wherever the flex algorithm happened to leave it, which differs
+ * between a viewer (no Edit link) and an editor.
+ */
+.doc-history {
+  font-size: 12.5px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.doc-history:hover { text-decoration: underline; }
+
+/*
+ * The version history (Task 7), on `/{space}/-/history/{path}`.
+ *
+ * Here rather than in a stylesheet of its own for the reason `.del-*` and `.rel-*` both state:
+ * `doc.css` is already imported by the space layout and this route renders inside `.doc`, and
+ * Phase 1 measured what a per-route stylesheet does — `.doc` computed `max-width: none` on a
+ * hard load and `820px` on a soft navigation to the same route. Every selector is prefixed
+ * `ver-` and defined in exactly one place.
+ *
+ * `overflow-wrap: anywhere` on the row, the page name, the author and the version's title is the
+ * guard for a class this project has now met six times, arriving here by its **seventh** shape: a
+ * version list paints another row's data — an author name from the OIDC profile and a title from
+ * whoever published — so "it is only my own text" is not available as an argument, exactly as it
+ * stopped being one for Phase 4's search results.
+ *
+ * `min-width: 0` on the flex containers keeps the grid track honest and does nothing about inline
+ * content overflowing its box; both are needed, and they are two different jobs — the lesson
+ * `.del-what`, `.rel-title` and `.q-row` each carry in the same shape.
+ */
+.ver-lead {
+  margin: 4px 0 18px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.ver-page { color: var(--accent); overflow-wrap: anywhere; }
+
+/* Amber and not red, matching `.retired`, `.del-error` and `.mermaid-failed`: the page is
+   readable and published, and only its mirror is behind. */
+.ver-stuck,
+.ver-queued {
+  margin: 0 0 18px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+  max-width: 66ch;
+}
+.ver-queued {
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+
+.ver-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.ver-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.ver-list > li { border-bottom: 1px solid var(--line); }
+
+.ver-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 10px 2px;
+  overflow-wrap: anywhere;
+}
+
+.ver-what {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  align-items: baseline;
+  flex: 1 1 22ch;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ver-when {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  /* A basis rather than a width, so a long name wraps past it instead of pushing the row. */
+  min-width: 16ch;
+}
+
+.ver-who { font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+
+.ver-status {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.ver-current {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+}
+
+.ver-renamed {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.ver-where { flex: none; min-width: 0; }
+
+.ver-none { font-size: 12px; color: var(--ink-3); }
+
+.ver-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 66ch;
+}

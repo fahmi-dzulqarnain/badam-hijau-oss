@@ -1,0 +1,63 @@
+import { notFound } from "next/navigation";
+import { requireViewer } from "@/lib/auth/viewer";
+import { listPageVersions } from "@/lib/pages/history";
+import { pageHistoryHref } from "@/lib/pages/href";
+import { VersionHistory } from "@/components/VersionHistory";
+
+/**
+ * `/{space}/-/history/{path}` — a page's version history, spec §10.
+ *
+ * ## Why it lives under `-/` and not beside the page
+ *
+ * The obvious URL is `/{space}/{path}/-/history`, and it is unrepresentable: `[...path]` is a
+ * catch-all, and a catch-all has to be the last segment of a route. So the only two shapes
+ * available are a reserved segment *before* the page path, or a separate top-level route keyed on
+ * a page id.
+ *
+ * A top-level route is the worse of the two, and the reason is not aesthetics. `/history/{id}`
+ * would be a **static segment at the same depth as `[space]`**, so it would shadow any space
+ * whose key is `history` — and space keys are created by people, where the `-/` segment is
+ * reserved by the product: `validateSlug` refuses any slug beginning with `-`, with its own error
+ * code and its own test, upstream of both `createPage` and `movePage`. `/search` already carries
+ * the top-level shape and shadows a space keyed `search`; that is existing debt, not a pattern to
+ * extend.
+ *
+ * ## The catch-all it nests inside, and how the collision was checked
+ *
+ * `/{space}/-/history/a/b` matches this route **and** `[space]/[...path]` with
+ * `path = ["-", "history", "a", "b"]`. Next resolves the literal segment first: a static segment
+ * outranks a dynamic one, which outranks a catch-all, evaluated left to right. Three routes in
+ * this codebase have relied on that since Phase 2 — `-/deleted`, `-/adrs` and `-/rfcs` — and the
+ * only thing new here is that the reserved segment is followed by a catch-all of its own.
+ *
+ * Checked rather than assumed, because the assumption is the interesting half: the build's route
+ * manifest was read for the two regexes, and a real `next start` was driven at both URLs. The
+ * measurement is in the task record. Two things make it safe by construction rather than by
+ * luck: no page path can begin with `-`, so nothing a person creates can even reach the
+ * ambiguity; and if precedence ever inverted, the catch-all route would answer with a 404 rather
+ * than with someone else's page, because there is no page at the path `-/history/…` to find.
+ *
+ * ## No `resolveRedirect`
+ *
+ * The reader route follows a `Redirect` row for a moved page; this one does not, and
+ * `pageHistoryHref` states the trade. Every link here is generated from the page's current path
+ * on the page itself, so a stale history URL is only reachable from a bookmark.
+ */
+export default async function PageHistoryRoute({
+  params,
+}: {
+  params: Promise<{ space: string; path: string[] }>;
+}) {
+  const { space: spaceKey, path } = await params;
+  const routePath = path.join("/");
+  // The full URL as the sign-in return path. Correct rather than effective, for the reason the
+  // reader route states at length: the space layout's own `requireViewer` has only the space key
+  // and will usually redirect first on a cold load.
+  const viewer = await requireViewer(pageHistoryHref(spaceKey, routePath));
+
+  const result = await listPageVersions(viewer, { spaceKey, path: routePath });
+  // Unreadable, soft-deleted and nonexistent are one answer, as everywhere (spec §8).
+  if (!result.ok) notFound();
+
+  return <VersionHistory spaceKey={spaceKey} history={result.history} />;
+}
