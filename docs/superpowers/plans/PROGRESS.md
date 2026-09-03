@@ -1,7 +1,7 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is under way — Tasks 1–4 of 9 done.**
+is under way — Tasks 1–5 of 9 done.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
 **951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
@@ -51,8 +51,8 @@ Landmines carried in, measured while planning:
 | 2. Where the file goes | ✅ |
 | 3. `GitJob` | ✅ |
 | 4. Enqueue, inside the transactions that already exist | ✅ |
-| **5. The git seam** | **next** |
-| 6. The worker | — |
+| 5. The git seam | ✅ |
+| **6. The worker** | **next** |
 | 7. The sha on the page | — |
 | 8. Failures a super admin can see | — |
 | 9. End-to-end and the smoke test | — |
@@ -327,6 +327,11 @@ control characters as escapes, never as literals.** A literal NUL is invisible i
 turns one file into a blind spot for the tool you switched to in order to be safe.
 
 When a search must be trustworthy, read the file with Python and count.
+
+**`timeout` and `gtimeout` are not installed on this machine**, and a missing wrapper reports its
+own absence as the command's status: three probes in Phase 5 Task 5 returned `exit=127 elapsed=0s`,
+which nearly established that `git push` does not hang against a dead peer. It does. Same family as
+the pipeline trap — the status you read belongs to something other than what you meant to measure.
 
 **A git worktree of this repo is not a separate test database, and another session's `npm test`
 will corrupt yours.** Measured during Phase 5 Task 1: a full-suite run reported `211 failed`,

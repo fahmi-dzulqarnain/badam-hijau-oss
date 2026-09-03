@@ -348,33 +348,82 @@ mystery.
 
 ---
 
-## Task 5: The git seam
+## Task 5: The git seam ✅
 
 **Files:** `src/lib/git/repo.ts` + tests.
 
-- [ ] **Step 1: One place that spawns `git`**
+- [x] **Step 1: One place that spawns `git`**
 
 Argv arrays, captured status, captured stderr. No shell. A helper that returns a discriminated
 result rather than throwing on non-zero, because "no commits yet" (exit 128) is an expected answer
 in a fresh clone and not an error.
 
-- [ ] **Step 2: The operations, each idempotent**
+- [x] **Step 2: The operations, each idempotent**
 
 Ensure a repository exists (clone, or init when there is no remote — §19: a remote is optional).
 Write a file, stage it, `git mv`, `git rm`. Commit with the publisher as author through
 `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`, with the committer being the service. Push as a **separate**
 operation.
 
-- [ ] **Step 3: The hostile identity, and the empty repository**
+- [x] **Step 3: The hostile identity, and the empty repository**
 
 Both measured while planning: a `GIT_AUTHOR_NAME` beginning `--upload-pack=` is stored as a name,
 not parsed as a flag — assert that, so a later refactor to `--author=` string building fails here.
 And a fresh repository answers 128 to `rev-parse HEAD`; assert the seam reports that as "no
 commits" rather than surfacing a crash.
 
-- [ ] **Step 4: `content/` out of this repository's sight**
+- [x] **Step 4: `content/` out of this repository's sight**
 
 `.gitignore`. A nested working tree is otherwise committed noise.
+
+**And it is worse than noise, which this plan did not know.** `git rev-parse --show-toplevel` run
+in a *subdirectory* answers with the **ancestor's** root: measured inside this checkout, a probe
+directory reports `--is-inside-work-tree true` and a toplevel of `/Users/fahmi/badam-hijau`. So a
+boolean "is this a repository?" check on an empty `content/` would say yes and then commit every
+mirrored page into the **application's own history**. `ensureRepository` compares an equality
+against the resolved root instead — on **realpaths**, because `path.resolve` does not follow
+symlinks and `os.tmpdir()` is one on macOS, which made the string comparison refuse a legitimate
+temporary repository.
+
+**The hostile-identity assertion this plan asked for does not discriminate, and the one that does
+is about email rather than argument parsing.** The `--upload-pack=` name is stored verbatim on both
+channels — the `--author=` refactor this plan said it would catch was built, and **all 31 tests
+stayed green**, because that string is one argv element whose content is a value either way. It is
+kept, as a characterisation test that says so. What separates the channels is a name containing an
+address, measured on both:
+
+```
+env vars:   %an=[Evil ceo@example.com]  %ae=[publisher@example.com]
+--author=:  %an=[Evil]                  %ae=[ceo@example.com]
+```
+
+git splits `--author=` on the **first** `<`, so a user-controlled display name **overwrites the
+author email** — and the author email is what a git host matches to an account, while `User.name`
+comes from the OIDC profile. Two environment variables cannot cross fields. That is the assertion
+that earns its keep.
+
+**`GIT_LITERAL_PATHSPECS=1` is load-bearing rather than hygiene**, for the reason Task 2 already
+found: `Space.key` has no validation. `git add -- ':odd/welcome.md'` exits 128 without it, and
+`:odd` and `:(icase)odd` are the spellings that discriminate.
+
+**The empty commit exits 1 with its message on *stdout* and stderr completely empty** — a seam
+building its error from stderr would report a blank reason. It is absorbed by asking
+`git diff --cached --quiet` *before* committing, which works with no `HEAD` at all (it diffs
+against the empty tree), so a fresh clone needs no special branch. `committed: false` comes back
+with **`sha` = HEAD**, because nothing staged against HEAD means HEAD already holds those bytes —
+so a worker that crashed after committing gets the right sha on retry without knowing it crashed.
+After that pre-check, a non-zero `git commit` is an unclassified failure and Task 6 may treat it as
+one. **This plan's example of the empty commit was wrong**: a status-only republish does not reach
+it, because `status` and `version` are both keys in Task 1's canonical block and `publishPage`
+always writes a new version row. The reachable routes are a repeated `MOVE`/`DELETE`/`RESTORE` and
+the retry-after-commit.
+
+**Timeouts kill the process group, not the child.** `git push` spawns `git-remote-http`; signalling
+only the direct child leaves the grandchild holding the inherited pipes, `close` never fires, and
+the bounded promise never settles — the `kill(pid)` mutant hangs the test rather than failing it.
+Sixty seconds for network operations, ten for local ones, and a zero or garbage override falls back
+rather than disabling the ceiling, because "no ceiling" is the wedged worker this exists to
+prevent.
 
 ---
 
