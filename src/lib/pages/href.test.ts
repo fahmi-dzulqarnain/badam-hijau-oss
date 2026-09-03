@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { pageHref } from "./href";
+import { pageHistoryHref, pageHref } from "./href";
+import { validateSlug } from "./slug";
 
 test("keeps the separators of a multi-segment path and encodes nothing else", () => {
   expect(pageHref("engineering", "architecture/mqtt-contracts/topic-registry")).toBe(
@@ -37,4 +38,52 @@ test("encodes every segment, not just the first", () => {
 
 test("a single-segment path is not split apart", () => {
   expect(pageHref("handbook", "welcome")).toBe("/handbook/welcome");
+});
+
+/* -------------------------------------------------------------------------- */
+/* Version history (Task 7)                                                   */
+/* -------------------------------------------------------------------------- */
+
+test("a page's history lives under the reserved segment", () => {
+  expect(pageHistoryHref("engineering", "architecture/mqtt-contracts")).toBe(
+    "/engineering/-/history/architecture/mqtt-contracts",
+  );
+});
+
+test("the history URL encodes the page path per segment, like the page URL", () => {
+  expect(pageHistoryHref("engineering", "adr/c#-migration/why?")).toBe(
+    "/engineering/-/history/adr/c%23-migration/why%3F",
+  );
+});
+
+test("the history URL encodes the space key too", () => {
+  expect(pageHistoryHref("odd key#1", "welcome")).toBe(
+    "/odd%20key%231/-/history/welcome",
+  );
+});
+
+/**
+ * The two builders agree about the path, which is what makes the history URL derivable from a
+ * page URL by a reader as well as by the code. It also pins the thing that would break silently:
+ * one builder gaining an encoding rule the other does not.
+ */
+test("the history URL is the page URL with the reserved segment spliced in", () => {
+  const path = "a b/c#d/e?f";
+  const page = pageHref("engineering", path);
+  expect(pageHistoryHref("engineering", path)).toBe(
+    page.replace("/engineering/", "/engineering/-/history/"),
+  );
+});
+
+/**
+ * The guarantee the route stands on, stated where the URL is built: no page path can begin with
+ * `-`, so nothing a person creates can occupy this URL. `validateSlug` is what refuses it, with
+ * its own error code and its own test; this asserts the two have not drifted apart.
+ */
+test("no slug can shadow the reserved segment", () => {
+  expect(validateSlug("-history").ok).toBe(false);
+  expect(validateSlug("-").ok).toBe(false);
+  // The non-vacuity companion: a slug that is merely similar is fine, so the refusal above is
+  // about the leading character and not about the word.
+  expect(validateSlug("history").ok).toBe(true);
 });
