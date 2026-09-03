@@ -78,3 +78,38 @@ test("delete treats 404 as success", async () => {
   const fetchImpl = vi.fn(async () => new Response("", { status: 404 }));
   await expect(store(fetchImpl as unknown as typeof fetch).delete("k")).resolves.toBeUndefined();
 });
+
+test("a 200 answer to a RANGED request is reported as not partial", async () => {
+  // Graph redirects /content to a pre-authenticated CDN URL that is under no obligation to
+  // honour Range. The store must report what the upstream DID, or the proxy labels a whole
+  // object 206 and emits a Content-Range its body contradicts.
+  const fetchImpl = vi.fn(async () => new Response("hello", { status: 200, headers: { "content-length": "5" } }));
+  const body = await store(fetchImpl as unknown as typeof fetch).fetch("k", { start: 1, end: 3 });
+  expect(body!.partial).toBe(false);
+  expect(body!.sizeBytes).toBe(5);
+});
+
+test("a 206 is reported as partial", async () => {
+  const fetchImpl = vi.fn(
+    async () =>
+      new Response("ell", {
+        status: 206,
+        headers: { "content-range": "bytes 1-3/5", "content-length": "3" },
+      }),
+  );
+  const body = await store(fetchImpl as unknown as typeof fetch).fetch("k", { start: 1, end: 3 });
+  expect(body!.partial).toBe(true);
+});
+
+test("a missing Content-Length stays null rather than becoming zero", async () => {
+  // A chunked or transfer-compressed upstream sends none. `?? 0` turned "did not say" into
+  // "zero bytes", which the proxy then declared on the wire in front of a full body.
+  const fetchImpl = vi.fn(async () => {
+    const response = new Response("hello", { status: 200 });
+    response.headers.delete("content-length");
+    return response;
+  });
+  const body = await store(fetchImpl as unknown as typeof fetch).fetch("k");
+  expect(body!.sizeBytes).toBeNull();
+  expect(body!.totalBytes).toBe(0);
+});

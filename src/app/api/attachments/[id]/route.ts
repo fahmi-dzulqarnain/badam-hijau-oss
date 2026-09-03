@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { loadViewer } from "@/lib/auth/viewer";
 import { readableAttachment, softDeleteAttachment } from "@/lib/attachments/repo";
 import { blobStore } from "@/lib/blob/select";
-import { contentDisposition } from "@/lib/attachments/policy";
+import { contentDisposition, isInlineMime } from "@/lib/attachments/policy";
 import type { ReadableAttachment } from "@/lib/attachments/repo";
 
 /**
@@ -45,9 +45,14 @@ async function serve(request: Request, id: string, withBody: boolean) {
   let body;
   try {
     body = await blobStore().fetch(attachment.drivePath, range ?? undefined);
-  } catch {
+  } catch (error) {
     // 502, not 404: a Graph outage must not read as every attachment having been deleted.
     // The page itself still renders — this is one broken image, never a 500.
+    //
+    // Logged because a Graph outage, an expired client secret and an unset BLOB_STORE all
+    // produce this same opaque status, and without a trace there is nothing on the floor to
+    // tell them apart. The id and the error only — no bytes, no drive path.
+    console.error(`[attachments] store unavailable for ${attachment.id}:`, error);
     return NextResponse.json(
       { error: "store-unavailable", message: "File storage is not responding." },
       { status: 502 },
@@ -61,13 +66,22 @@ async function serve(request: Request, id: string, withBody: boolean) {
   }
 
   const headers = commonHeaders(attachment, body.eTag);
-  headers.set("content-length", String(body.sizeBytes));
-  if (range) {
+
+  // Declared only when the store actually declared one. A missing upstream `Content-Length`
+  // used to arrive here as `0`, which then went on the wire in front of a full body.
+  if (body.sizeBytes !== null) headers.set("content-length", String(body.sizeBytes));
+
+  // `body.partial`, NOT `range`. Asking for a range does not oblige the upstream to honour
+  // it: Graph redirects `/content` to a pre-authenticated CDN URL that may answer 200 with
+  // the whole object. Labelling that 206 emitted a `Content-Range` the body contradicted —
+  // a player would write whole-object bytes at the range's offset and corrupt the file. When
+  // the range was ignored, serve the full representation and say so.
+  if (range && body.partial) {
     headers.set("content-range", `bytes ${range.start}-${range.end}/${body.totalBytes}`);
   }
 
   return new NextResponse(withBody ? body.stream : null, {
-    status: range ? 206 : 200,
+    status: range && body.partial ? 206 : 200,
     headers,
   });
 }
@@ -76,7 +90,17 @@ function commonHeaders(attachment: ReadableAttachment, eTag: string | null): Hea
   const headers = new Headers();
   // From Postgres, never from the store. The mime was validated once against the allowlist at
   // upload; letting the store decide would let a file's own metadata pick its interpretation.
-  headers.set("content-type", attachment.mimeType);
+  //
+  // And only for a type meant to render. `text/html` and `image/svg+xml` are uploadable but
+  // never inline, and for those `nosniff` is no help at all — it stops a browser GUESSING a
+  // different type, and here the type is genuinely executable. That left
+  // `Content-Disposition: attachment` as the single thing between an editor-uploaded file and
+  // same-origin script execution. Serving every non-inline type as an opaque stream removes
+  // the dependency on one header being honoured; the disposition still names the file.
+  headers.set(
+    "content-type",
+    isInlineMime(attachment.mimeType) ? attachment.mimeType : "application/octet-stream",
+  );
   // Load-bearing: the application never sees the bytes, so a file declared `image/png` may
   // contain anything. `nosniff` is what stops a browser deciding it is HTML and running it.
   headers.set("x-content-type-options", "nosniff");
@@ -90,7 +114,11 @@ function commonHeaders(attachment: ReadableAttachment, eTag: string | null): Hea
   // in a browser cache.
   headers.set("cache-control", `private, max-age=${YEAR}, immutable`);
   headers.set("vary", "Cookie");
-  if (eTag) headers.set("etag", eTag);
+  // Validated, not trusted. `Headers.set` throws on an invalid value, and this runs OUTSIDE
+  // the try that produces the 502 — so a malformed upstream ETag would surface as an
+  // unhandled 500 rather than the route's own error. Dropping it is always safe: nothing
+  // consumes it, since no conditional handling exists.
+  if (eTag && /^(W\/)?"[\x21\x23-\x7E]*"$/.test(eTag)) headers.set("etag", eTag);
   return headers;
 }
 
@@ -129,7 +157,12 @@ function parseRange(
   // A suffix range — `bytes=-500` means the LAST 500 bytes, not the first.
   if (rawStart === "") {
     const length = Number(rawEnd);
-    if (length === 0) return "unsatisfiable";
+    // `totalBytes === 0` is the only input in this parser that can yield a negative offset:
+    // it would return `{ start: 0, end: -1 }`, which reaches the wire as
+    // `Content-Range: bytes 0--1/0`. Unreachable today only because `sizeBytes` is
+    // `.positive()` two modules away and `commitUpload` refuses a mismatch — an invariant
+    // this function neither states nor enforces, so it enforces it here.
+    if (length === 0 || totalBytes === 0) return "unsatisfiable";
     return { start: Math.max(0, totalBytes - length), end: totalBytes - 1 };
   }
 

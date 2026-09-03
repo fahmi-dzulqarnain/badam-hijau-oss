@@ -1142,10 +1142,25 @@ export type BlobRange = { start: number; end: number };
 
 export type BlobBody = {
   stream: ReadableStream<Uint8Array>;
-  /** Bytes in THIS response: the range length, or the whole object. */
-  sizeBytes: number;
+  /**
+   * Bytes in THIS response, or **null when the store did not say**.
+   *
+   * Null is a real answer, not an error: an upstream may respond chunked or
+   * transfer-compressed and send no `Content-Length` at all. Synthesising a `0` there and
+   * putting it on the wire declares a length the body then contradicts, which truncates a
+   * well-behaved client and desynchronises a proxy's framing.
+   */
+  sizeBytes: number | null;
   /** Bytes in the whole object, which `Content-Range` needs even for a partial response. */
   totalBytes: number;
+  /**
+   * Whether the store actually returned a PARTIAL response, rather than whether one was asked
+   * for. Load-bearing: asking for a range does not oblige an upstream to honour it, and Graph
+   * redirects `/content` to a pre-authenticated CDN URL that may answer 200 with the whole
+   * object. A caller that infers `206` from its own request instead of from this flag emits a
+   * `Content-Range` its body contradicts.
+   */
+  partial: boolean;
   eTag: string | null;
 };
 
@@ -1229,6 +1244,10 @@ export class MemoryBlobStore implements BlobStore {
       stream: new Response(new Uint8Array(slice)).body!,
       sizeBytes: slice.byteLength,
       totalBytes: bytes.byteLength,
+      // The fake always honours a range and always knows its own length, which is exactly why
+      // it cannot exercise the two cases a real upstream can produce. Those are covered in
+      // `graph.test.ts` instead.
+      partial: range !== undefined,
       eTag: `"${this.#version}"`,
     };
   }
@@ -2110,17 +2129,28 @@ export class GraphBlobStore implements BlobStore {
 
     const response = await this.#fetch(`${this.#item(key)}/content`, { headers, redirect: "follow" });
     if (response.status === 404) return null;
-    if (!response.ok && response.status !== 206) {
+    // `!response.ok` alone. The previous `&& response.status !== 206` was DEAD: 206 is inside
+    // ok's 200-299 window, so the clause never evaluated — and, worse, it read as though a
+    // non-partial answer to a ranged request were being handled when nothing checked for one.
+    if (!response.ok) {
       throw new Error(`content fetch failed with ${response.status}`);
     }
 
-    const sizeBytes = Number(response.headers.get("content-length") ?? 0);
+    // Absent stays absent. `?? 0` turned "the upstream did not say" into "zero bytes", which
+    // the proxy then declared on the wire in front of a full body.
+    const declared = response.headers.get("content-length");
+    const sizeBytes = declared === null ? null : Number(declared);
+
     return {
       stream: response.body!,
       sizeBytes,
       // A 206 reports the SLICE in Content-Length; the object's real length is only in
       // Content-Range. The proxy needs the total to build its own header.
-      totalBytes: totalFromContentRange(response.headers.get("content-range")) ?? sizeBytes,
+      totalBytes:
+        totalFromContentRange(response.headers.get("content-range")) ?? sizeBytes ?? 0,
+      // What the upstream DID, not what we asked for. Graph follows a redirect to a CDN that
+      // is under no obligation to honour `Range`.
+      partial: response.status === 206,
       eTag: response.headers.get("etag"),
     };
   }
@@ -3256,7 +3286,7 @@ function mockStore(overrides: Record<string, unknown> = {}) {
   vi.doMock("@/lib/blob/select", () => ({
     blobStore: () => ({
       fetch: async () => ({
-        stream: new Response("hello").body!, sizeBytes: 5, totalBytes: 5, eTag: '"1"',
+        stream: new Response("hello").body!, sizeBytes: 5, totalBytes: 5, partial: false, eTag: '"1"',
       }),
       ...overrides,
     }),
@@ -3320,7 +3350,7 @@ test("a Range request gets 206 with a correct Content-Range", async () => {
     blobStore: () => ({
       fetch: async (_key: string, range?: { start: number; end: number }) => {
         expect(range).toEqual({ start: 1, end: 3 });
-        return { stream: new Response("ell").body!, sizeBytes: 3, totalBytes: 5, eTag: '"1"' };
+        return { stream: new Response("ell").body!, sizeBytes: 3, totalBytes: 5, partial: true, eTag: '"1"' };
       },
     }),
   }));
@@ -3341,7 +3371,7 @@ test("an open-ended range resolves against the stored size", async () => {
     blobStore: () => ({
       fetch: async (_key: string, range?: { start: number; end: number }) => {
         expect(range).toEqual({ start: 2, end: 4 });
-        return { stream: new Response("llo").body!, sizeBytes: 3, totalBytes: 5, eTag: '"1"' };
+        return { stream: new Response("llo").body!, sizeBytes: 3, totalBytes: 5, partial: true, eTag: '"1"' };
       },
     }),
   }));
@@ -3396,6 +3426,102 @@ test("404 when the row exists but the store has no bytes", async () => {
   mockStore({ fetch: async () => null });
   expect((await (await route()).GET(new Request("http://x/a1"), params)).status).toBe(404);
 });
+
+test("a store that IGNORES the range is served as 200, not mislabelled 206", async () => {
+  // The bug this pins: asking for a range does not oblige an upstream to honour it. Graph
+  // redirects /content to a pre-authenticated CDN URL that may answer 200 with the whole
+  // object, and inferring 206 from our own request emitted a Content-Range the body
+  // contradicted — a player would write whole-object bytes at the range's offset and corrupt
+  // the file. Invisible to every other test here, because MemoryBlobStore always honours a
+  // range.
+  vi.resetModules();
+  mockReadable("video/mp4");
+  vi.doMock("@/lib/blob/select", () => ({
+    blobStore: () => ({
+      fetch: async () => ({
+        stream: new Response("hello").body!,
+        sizeBytes: 5,
+        totalBytes: 5,
+        partial: false, // asked for bytes=1-3, answered with the lot
+        eTag: '"1"',
+      }),
+    }),
+  }));
+
+  const response = await (await route()).GET(
+    new Request("http://x/a1", { headers: { range: "bytes=1-3" } }), params,
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-range")).toBeNull();
+  expect(await response.text()).toBe("hello");
+});
+
+test("a store that declares no length does not get one invented", async () => {
+  // An upstream may answer chunked or transfer-compressed and send no Content-Length. `?? 0`
+  // turned that into a declared zero in front of a full body, which truncates a well-behaved
+  // client and desynchronises a proxy's framing.
+  vi.resetModules();
+  mockReadable();
+  vi.doMock("@/lib/blob/select", () => ({
+    blobStore: () => ({
+      fetch: async () => ({
+        stream: new Response("hello").body!,
+        sizeBytes: null,
+        totalBytes: 5,
+        partial: false,
+        eTag: '"1"',
+      }),
+    }),
+  }));
+
+  const response = await (await route()).GET(new Request("http://x/a1"), params);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-length")).toBeNull();
+  expect(await response.text()).toBe("hello");
+});
+
+test("a non-inline type is served as an opaque stream, not as its own executable type", async () => {
+  // `nosniff` does not help for text/html: it stops a browser guessing a DIFFERENT type, and
+  // here the type is genuinely executable. That left Content-Disposition as the only thing
+  // between an editor-uploaded file and same-origin script execution.
+  for (const mimeType of ["text/html", "image/svg+xml", "application/pdf"]) {
+    vi.resetModules();
+    mockReadable(mimeType);
+    mockStore();
+    const response = await (await route()).GET(new Request("http://x/a1"), params);
+    expect(response.headers.get("content-type"), mimeType).toBe("application/octet-stream");
+    expect(response.headers.get("content-disposition"), mimeType).toMatch(/^attachment;/);
+  }
+
+  // An inline type still gets its real type, or nothing renders.
+  vi.resetModules();
+  mockReadable("image/png");
+  mockStore();
+  const png = await (await route()).GET(new Request("http://x/a1"), params);
+  expect(png.headers.get("content-type")).toBe("image/png");
+});
+
+test("a malformed upstream ETag is dropped, not put on the wire", async () => {
+  // `Headers.set` throws on an invalid value, and that throw is outside the try that produces
+  // the 502 — so it would surface as an unhandled 500 rather than the route's own error.
+  vi.resetModules();
+  mockReadable();
+  vi.doMock("@/lib/blob/select", () => ({
+    blobStore: () => ({
+      fetch: async () => ({
+        stream: new Response("hello").body!,
+        sizeBytes: 5,
+        totalBytes: 5,
+        partial: false,
+        eTag: 'not "a" valid etag',
+      }),
+    }),
+  }));
+
+  const response = await (await route()).GET(new Request("http://x/a1"), params);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("etag")).toBeNull();
+});
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -3412,7 +3538,7 @@ import { NextResponse } from "next/server";
 import { loadViewer } from "@/lib/auth/viewer";
 import { readableAttachment, softDeleteAttachment } from "@/lib/attachments/repo";
 import { blobStore } from "@/lib/blob/select";
-import { contentDisposition } from "@/lib/attachments/policy";
+import { contentDisposition, isInlineMime } from "@/lib/attachments/policy";
 import type { ReadableAttachment } from "@/lib/attachments/repo";
 
 /**
@@ -3455,9 +3581,14 @@ async function serve(request: Request, id: string, withBody: boolean) {
   let body;
   try {
     body = await blobStore().fetch(attachment.drivePath, range ?? undefined);
-  } catch {
+  } catch (error) {
     // 502, not 404: a Graph outage must not read as every attachment having been deleted.
     // The page itself still renders — this is one broken image, never a 500.
+    //
+    // Logged because a Graph outage, an expired client secret and an unset BLOB_STORE all
+    // produce this same opaque status, and without a trace there is nothing on the floor to
+    // tell them apart. The id and the error only — no bytes, no drive path.
+    console.error(`[attachments] store unavailable for ${attachment.id}:`, error);
     return NextResponse.json(
       { error: "store-unavailable", message: "File storage is not responding." },
       { status: 502 },
@@ -3471,13 +3602,22 @@ async function serve(request: Request, id: string, withBody: boolean) {
   }
 
   const headers = commonHeaders(attachment, body.eTag);
-  headers.set("content-length", String(body.sizeBytes));
-  if (range) {
+
+  // Declared only when the store actually declared one. A missing upstream `Content-Length`
+  // used to arrive here as `0`, which then went on the wire in front of a full body.
+  if (body.sizeBytes !== null) headers.set("content-length", String(body.sizeBytes));
+
+  // `body.partial`, NOT `range`. Asking for a range does not oblige the upstream to honour
+  // it: Graph redirects `/content` to a pre-authenticated CDN URL that may answer 200 with
+  // the whole object. Labelling that 206 emitted a `Content-Range` the body contradicted —
+  // a player would write whole-object bytes at the range's offset and corrupt the file. When
+  // the range was ignored, serve the full representation and say so.
+  if (range && body.partial) {
     headers.set("content-range", `bytes ${range.start}-${range.end}/${body.totalBytes}`);
   }
 
   return new NextResponse(withBody ? body.stream : null, {
-    status: range ? 206 : 200,
+    status: range && body.partial ? 206 : 200,
     headers,
   });
 }
@@ -3486,7 +3626,17 @@ function commonHeaders(attachment: ReadableAttachment, eTag: string | null): Hea
   const headers = new Headers();
   // From Postgres, never from the store. The mime was validated once against the allowlist at
   // upload; letting the store decide would let a file's own metadata pick its interpretation.
-  headers.set("content-type", attachment.mimeType);
+  //
+  // And only for a type meant to render. `text/html` and `image/svg+xml` are uploadable but
+  // never inline, and for those `nosniff` is no help at all — it stops a browser GUESSING a
+  // different type, and here the type is genuinely executable. That left
+  // `Content-Disposition: attachment` as the single thing between an editor-uploaded file and
+  // same-origin script execution. Serving every non-inline type as an opaque stream removes
+  // the dependency on one header being honoured; the disposition still names the file.
+  headers.set(
+    "content-type",
+    isInlineMime(attachment.mimeType) ? attachment.mimeType : "application/octet-stream",
+  );
   // Load-bearing: the application never sees the bytes, so a file declared `image/png` may
   // contain anything. `nosniff` is what stops a browser deciding it is HTML and running it.
   headers.set("x-content-type-options", "nosniff");
@@ -3500,7 +3650,11 @@ function commonHeaders(attachment: ReadableAttachment, eTag: string | null): Hea
   // in a browser cache.
   headers.set("cache-control", `private, max-age=${YEAR}, immutable`);
   headers.set("vary", "Cookie");
-  if (eTag) headers.set("etag", eTag);
+  // Validated, not trusted. `Headers.set` throws on an invalid value, and this runs OUTSIDE
+  // the try that produces the 502 — so a malformed upstream ETag would surface as an
+  // unhandled 500 rather than the route's own error. Dropping it is always safe: nothing
+  // consumes it, since no conditional handling exists.
+  if (eTag && /^(W\/)?"[\x21\x23-\x7E]*"$/.test(eTag)) headers.set("etag", eTag);
   return headers;
 }
 
@@ -3539,7 +3693,12 @@ function parseRange(
   // A suffix range — `bytes=-500` means the LAST 500 bytes, not the first.
   if (rawStart === "") {
     const length = Number(rawEnd);
-    if (length === 0) return "unsatisfiable";
+    // `totalBytes === 0` is the only input in this parser that can yield a negative offset:
+    // it would return `{ start: 0, end: -1 }`, which reaches the wire as
+    // `Content-Range: bytes 0--1/0`. Unreachable today only because `sizeBytes` is
+    // `.positive()` two modules away and `commitUpload` refuses a mismatch — an invariant
+    // this function neither states nor enforces, so it enforces it here.
+    if (length === 0 || totalBytes === 0) return "unsatisfiable";
     return { start: Math.max(0, totalBytes - length), end: totalBytes - 1 };
   }
 

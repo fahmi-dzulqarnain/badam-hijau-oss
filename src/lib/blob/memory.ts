@@ -61,6 +61,10 @@ export class MemoryBlobStore implements BlobStore {
       stream: new Response(new Uint8Array(slice)).body!,
       sizeBytes: slice.byteLength,
       totalBytes: bytes.byteLength,
+      // The fake always honours a range and always knows its own length, which is exactly why
+      // it cannot exercise the two cases a real upstream can produce. Those are covered in
+      // `graph.test.ts` instead.
+      partial: range !== undefined,
       eTag: `"${this.#version}"`,
     };
   }

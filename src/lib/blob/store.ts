@@ -21,10 +21,25 @@ export type BlobRange = { start: number; end: number };
 
 export type BlobBody = {
   stream: ReadableStream<Uint8Array>;
-  /** Bytes in THIS response: the range length, or the whole object. */
-  sizeBytes: number;
+  /**
+   * Bytes in THIS response, or **null when the store did not say**.
+   *
+   * Null is a real answer, not an error: an upstream may respond chunked or
+   * transfer-compressed and send no `Content-Length` at all. Synthesising a `0` there and
+   * putting it on the wire declares a length the body then contradicts, which truncates a
+   * well-behaved client and desynchronises a proxy's framing.
+   */
+  sizeBytes: number | null;
   /** Bytes in the whole object, which `Content-Range` needs even for a partial response. */
   totalBytes: number;
+  /**
+   * Whether the store actually returned a PARTIAL response, rather than whether one was asked
+   * for. Load-bearing: asking for a range does not oblige an upstream to honour it, and Graph
+   * redirects `/content` to a pre-authenticated CDN URL that may answer 200 with the whole
+   * object. A caller that infers `206` from its own request instead of from this flag emits a
+   * `Content-Range` its body contradicts.
+   */
+  partial: boolean;
   eTag: string | null;
 };
 

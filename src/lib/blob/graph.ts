@@ -94,17 +94,28 @@ export class GraphBlobStore implements BlobStore {
 
     const response = await this.#fetch(`${this.#item(key)}/content`, { headers, redirect: "follow" });
     if (response.status === 404) return null;
-    if (!response.ok && response.status !== 206) {
+    // `!response.ok` alone. The previous `&& response.status !== 206` was DEAD: 206 is inside
+    // ok's 200-299 window, so the clause never evaluated — and, worse, it read as though a
+    // non-partial answer to a ranged request were being handled when nothing checked for one.
+    if (!response.ok) {
       throw new Error(`content fetch failed with ${response.status}`);
     }
 
-    const sizeBytes = Number(response.headers.get("content-length") ?? 0);
+    // Absent stays absent. `?? 0` turned "the upstream did not say" into "zero bytes", which
+    // the proxy then declared on the wire in front of a full body.
+    const declared = response.headers.get("content-length");
+    const sizeBytes = declared === null ? null : Number(declared);
+
     return {
       stream: response.body!,
       sizeBytes,
       // A 206 reports the SLICE in Content-Length; the object's real length is only in
       // Content-Range. The proxy needs the total to build its own header.
-      totalBytes: totalFromContentRange(response.headers.get("content-range")) ?? sizeBytes,
+      totalBytes:
+        totalFromContentRange(response.headers.get("content-range")) ?? sizeBytes ?? 0,
+      // What the upstream DID, not what we asked for. Graph follows a redirect to a CDN that
+      // is under no obligation to honour `Range`.
+      partial: response.status === 206,
       eTag: response.headers.get("etag"),
     };
   }
