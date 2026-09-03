@@ -1,7 +1,7 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is under way — Tasks 1–6 of 9 done.**
+is under way — Tasks 1–7 of 9 done.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
 **951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
@@ -53,8 +53,8 @@ Landmines carried in, measured while planning:
 | 4. Enqueue, inside the transactions that already exist | ✅ |
 | 5. The git seam | ✅ |
 | 6. The worker | ✅ |
-| **7. The sha on the page** | **next** |
-| 8. Failures a super admin can see | — |
+| 7. The sha on the page | ✅ |
+| **8. Failures a super admin can see** | **next** |
 | 9. End-to-end and the smoke test | — |
 
 ## Phase 4 — search and diagrams
@@ -327,6 +327,13 @@ control characters as escapes, never as literals.** A literal NUL is invisible i
 turns one file into a blind spot for the tool you switched to in order to be safe.
 
 When a search must be trustworthy, read the file with Python and count.
+
+**Playwright's browser binaries keep vanishing from this machine** — twice on 2026-09-03, once
+mid-session after a passing 41-spec run. It presents as a mass failure (40 of 41 specs failing in
+~3ms with `browserType.launch: Executable doesn't exist`), not as a missing dependency, so check
+`~/Library/Caches/ms-playwright/` before believing a route regression. Reinstalling is
+`npx playwright install chromium`, roughly 95 MB. Playwright takes a `__dirlock` in that directory
+during install, so two sessions cannot install at once — the second waits.
 
 **A literal NUL was found in a third file, and this one had been hiding from `rg` for a whole
 task.** `src/lib/git/repo.test.ts` was written with `":odd/welcome.md\0"` as an actual byte, so `rg`
