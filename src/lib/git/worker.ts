@@ -313,7 +313,7 @@ export function backoffMs(config: WorkerConfig, attempts: number): number {
  * returns `int4`. Written out so the two-argument overload is chosen by this file rather than by
  * whatever Prisma infers next.
  */
-const MIRROR_LOCK_CLASS = 20260826;
+export const MIRROR_LOCK_CLASS = 20260826;
 
 /** Postgres' `lock_timeout` cancellation. The one error code that means "someone else has it". */
 const LOCK_NOT_AVAILABLE = "55P03";
@@ -402,6 +402,11 @@ export type ClaimedJob = {
   fromPath: string | null;
   /** After the increment this claim applied. It is also the fencing token — see {@link finishJob}. */
   attempts: number;
+  /**
+   * A **later** job for this page has already been applied. See {@link claimNextJob} for the one
+   * interleaving that reaches it and why it is a refusal rather than a silent application.
+   */
+  laterApplied: boolean;
 };
 
 /**
@@ -448,6 +453,30 @@ export async function reclaimAbandonedJobs(config: WorkerConfig): Promise<number
  * `ORDER BY "nextAttemptAt", "id"` matches `@@index([state, nextAttemptAt, id])` exactly, which
  * Task 3 measured as a bare index scan against the same query ordered by `id` alone planning an
  * extra sort of every ready row.
+ *
+ * ## What the barrier cannot see, and the column that catches it afterwards
+ *
+ * **Correcting the brief for this task, which believed `@@index([pageId, id])` closed the whole
+ * hazard:** the barrier is a `NOT EXISTS` evaluated in this statement's snapshot, and the
+ * inversion Task 3 measured is precisely a row that **is not yet committed**. A publish holding
+ * id 62009 open while a move takes 62010 and commits leaves 62009 *invisible* here, so `NOT
+ * EXISTS` is trivially true, 62010 is claimed, and 62009 is drained afterwards — out of enqueue
+ * order, exactly as before. The barrier closes every case where both rows are visible, which is
+ * the common one (a job backing off while a later job for the same page is due now would
+ * otherwise be drained first by `ORDER BY "nextAttemptAt"`), and it does not close that one.
+ *
+ * Closing it properly needs a visibility fence rather than an ordering one — claiming only rows
+ * whose inserting transaction is older than `pg_snapshot_xmin(pg_current_snapshot())` — and the
+ * cost of that is that **any** long-running transaction anywhere in the database stalls the whole
+ * mirror. That is a worse failure than the one it prevents, so it is not done.
+ *
+ * What is done instead is to make the residual **noticed**, which is §10's actual promise:
+ * `laterApplied` reports whether a job with a higher id for the same page has already reached
+ * `DONE`. It can only be true through the interleaving above, it means the tree has already moved
+ * past this job, and applying it anyway is the silent wrong tree this phase exists to avoid. So
+ * the job is failed with a message that says so and lands on Task 8's page. In normal draining it
+ * is always false: the barrier means jobs for one page finish in id order, so nothing later can be
+ * `DONE` while an earlier one is still claimable.
  */
 export async function claimNextJob(config: WorkerConfig): Promise<ClaimedJob | null> {
   const rows = await db.$queryRaw<ClaimedJob[]>`
@@ -472,7 +501,14 @@ export async function claimNextJob(config: WorkerConfig): Promise<ClaimedJob | n
         LIMIT 1
      )
     RETURNING j."id", j."kind", j."pageId", j."versionId", j."spaceKey", j."path",
-              j."fromPath", j."attempts"`;
+              j."fromPath", j."attempts",
+              EXISTS (
+                SELECT 1
+                  FROM "GitJob" AS l
+                 WHERE l."pageId" = j."pageId"
+                   AND l."id" > j."id"
+                   AND l."state" = 'DONE'
+              ) AS "laterApplied"`;
   // `config` is unused by the statement and taken anyway, so that the claim's signature does not
   // have to change when a future limit (a per-space worker, say) becomes a predicate here.
   void config;
@@ -500,7 +536,7 @@ export async function claimNextJob(config: WorkerConfig): Promise<ClaimedJob | n
  * the commit that **first** mirrored a version, so a `RESTORE` that re-writes the same bytes into
  * a later commit does not rewrite the page's provenance to point at it.
  */
-async function finishJob(args: {
+export async function finishJob(args: {
   job: ClaimedJob;
   state: GitJobState;
   /** Milliseconds to push `nextAttemptAt` out by. Zero for a terminal state. */
@@ -601,6 +637,15 @@ export type JobOutcome = {
  */
 const PERMANENT: ReadonlySet<GitErrorCode> = new Set<GitErrorCode>(["path-refused"]);
 
+/**
+ * The details that already explain an empty index, so {@link JobDetail} `already-applied` must not
+ * replace them. See the note at the end of {@link applyJob}.
+ */
+const NOTHING_TO_STAGE: ReadonlySet<JobDetail> = new Set<JobDetail>([
+  "move-source-absent",
+  "delete-target-absent",
+]);
+
 /** What one job's git work produced, before the database hears about it. */
 type Applied =
   | { ok: true; detail: JobDetail; sha: string | null }
@@ -611,6 +656,21 @@ type Applied =
  * any of this runs — the module's first rule.
  */
 async function applyJob(config: WorkerConfig, job: ClaimedJob): Promise<Applied> {
+  if (job.laterApplied) {
+    return {
+      ok: false,
+      detail: "failed",
+      message:
+        `A later job for this page has already been applied, so job ${job.id} is out of order and ` +
+        "applying it would move the mirror backwards — an older document written over a newer " +
+        "one, or a file restored to a path the page has left. This is reachable only when the " +
+        "transaction that enqueued this job committed after one that enqueued a later job; see " +
+        "`claimNextJob`. Nothing was written. The page's mirror is frozen here until someone " +
+        "decides what the tree should hold, which is what this failure exists to make visible.",
+      permanent: true,
+    };
+  }
+
   const git = config.git;
   const ref: MirrorRef = { spaceKey: job.spaceKey, path: job.path };
 
@@ -689,7 +749,14 @@ async function applyJob(config: WorkerConfig, job: ClaimedJob): Promise<Applied>
     // re-run of a job whose commit survived a crash, or a repeated MOVE/DELETE/RESTORE. Reported
     // as its own detail so "the drain applied something" stays a separate observation from "the
     // drain finished".
-    detail: committed.committed ? staged : "already-applied",
+    //
+    // **Unless the seam already said why nothing was staged.** A `MOVE` with no source and a
+    // `DELETE` with no target also reach a clean index, and `already-applied` would erase the
+    // more specific answer — turning "there was nothing at the old path" into "this had already
+    // been done", which are different facts about the tree and want different answers from an
+    // operator. Found by the test for the absent move source, which is exactly the
+    // discrimination this project keeps losing.
+    detail: committed.committed || NOTHING_TO_STAGE.has(staged) ? staged : "already-applied",
     sha: committed.sha,
   };
 }
