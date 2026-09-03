@@ -122,3 +122,15 @@ test("201 returns the session, and never the app token", async () => {
 function valid() {
   return { pageId: "p", filename: "a.png", mimeType: "image/png", sizeBytes: 10 };
 }
+
+test("an empty file says so, instead of the generic unreadable message", async () => {
+  vi.resetModules();
+  vi.doMock("@/lib/auth/viewer", () => ({ loadViewer: async () => ({ id: "u" }) }));
+  const { POST: handler } = await import("@/app/api/attachments/route");
+
+  const response = await handler(
+    request({ pageId: "p", filename: "empty.png", mimeType: "image/png", sizeBytes: 0 }),
+  );
+  expect(response.status).toBe(400);
+  expect((await response.json()).message).toBe("That file is empty.");
+});

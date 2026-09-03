@@ -3025,6 +3025,16 @@ export async function POST(request: Request) {
         { status: 415 },
       );
     }
+    // An empty file is its own rejection. `sizeBytes` is `.positive()`, so zero fails zod and
+    // would otherwise fall through to the generic "could not be read" — which tells someone
+    // who just dragged in an empty file nothing about why. Rare, but the generic message is
+    // actively misleading here.
+    if (raw?.sizeBytes === 0) {
+      return NextResponse.json(
+        { error: "empty", message: "That file is empty." },
+        { status: 400 },
+      );
+    }
     if (typeof raw?.sizeBytes === "number" && raw.sizeBytes > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
         {
