@@ -6,6 +6,13 @@ import { MAX_UPLOAD_BYTES } from "@/lib/attachments/schema";
  * Where the memory store's upload sessions point, and the only unauthenticated write in the
  * application. Treated with the same suspicion as the passwordless test login.
  *
+ * **The folder is `dev-upload`, NOT `_dev-upload`, and that is not cosmetic.** An underscore
+ * prefix makes a Next App Router folder *private* — excluded from the route tree entirely — so
+ * the underscored version compiled, passed every integration test that imports this module
+ * directly, and was absent from `routes-manifest.json`. It answered 307 to a real PUT and had
+ * never existed as an endpoint. `npm run smoke` is what caught it, which is the whole reason
+ * that script exists. Safety here comes from `devUploadEnabled()` below, never from the name.
+ *
  * It exists because uploads bypass the application: the browser PUTs bytes to whatever URL the
  * store hands it, so for `BLOB_STORE=memory` that URL must be something a test, a Playwright
  * browser and `scripts/smoke.sh` can actually PUT to. Without it the direct-upload path is not

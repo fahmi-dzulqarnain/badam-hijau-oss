@@ -179,7 +179,7 @@ a database — the convention the roadmap fixed in Phase 1.
 > **Added while writing the phase plan.** The memory implementation needs somewhere for the
 > browser to `PUT` to, or the direct-upload path cannot be exercised at all and the goal above
 > — that tests and `npm run smoke` run with no tenant credentials — is unreachable. So there
-> is a `PUT /api/attachments/_dev-upload/[...key]` route, registered under exactly the
+> is a `PUT /api/attachments/dev-upload/[...key]` route, registered under exactly the
 > `ALLOW_TEST_LOGIN` discipline: it refuses unless `BLOB_STORE=memory`, and a test asserts it
 > 404s otherwise. Treat it with the same suspicion as the passwordless login — it is an
 > unauthenticated write, and the only thing making that acceptable is that it cannot exist in

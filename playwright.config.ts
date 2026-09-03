@@ -31,12 +31,19 @@ export default defineConfig({
     // that flag only accepts "uploads are lost on restart", which is correct for a test
     // harness. ALLOW_DEV_UPLOAD is the separate flag that opens the unauthenticated upload
     // endpoint; both are deliberately explicit, and neither alone is sufficient.
+    //
+    // AUTH_URL is set here for a reason unrelated to auth: `MemoryBlobStore` mints its upload
+    // session URLs against `process.env.AUTH_URL`, defaulting to `.env`'s own
+    // `http://localhost:3000` when unset — not this port. Left out, every upload session this
+    // suite mints points at a server nothing is listening on, and the spec's direct `PUT` to it
+    // fails to connect rather than exercising anything.
     env: {
       ALLOW_TEST_LOGIN: "1",
       GIT_SHA: "df0ef11abc",
       BLOB_STORE: "memory",
       BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
       ALLOW_DEV_UPLOAD: "1",
+      AUTH_URL: "http://localhost:3100",
     },
   },
 });

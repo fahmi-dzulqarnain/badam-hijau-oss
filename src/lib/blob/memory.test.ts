@@ -12,7 +12,7 @@ async function read(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 test("a session's uploadUrl points at the dev upload route for that key", async () => {
   const session = await store.beginUpload("ab/abc.png", 5, "image/png");
-  expect(session.uploadUrl).toBe("http://localhost:3000/api/attachments/_dev-upload/ab/abc.png");
+  expect(session.uploadUrl).toBe("http://localhost:3000/api/attachments/dev-upload/ab/abc.png");
   expect(session.expiresAt.getTime()).toBeGreaterThan(Date.now());
 });
 

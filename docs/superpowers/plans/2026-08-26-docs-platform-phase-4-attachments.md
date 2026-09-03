@@ -71,7 +71,7 @@ memory store cannot exercise the direct-upload path at all, and the spec's goal 
 development, the integration suite and `npm run smoke` all run with no tenant credentials"
 is unreachable.
 
-So there is a `PUT /api/attachments/_dev-upload/[...key]` route, **registered under exactly the
+So there is a `PUT /api/attachments/dev-upload/[...key]` route, **registered under exactly the
 `ALLOW_TEST_LOGIN` discipline**: it refuses unless `BLOB_STORE=memory`, and a test asserts it
 404s otherwise. Task 7. Treat it with the same suspicion as the passwordless login.
 
@@ -201,7 +201,7 @@ Three later tasks in this phase will hit it, so expect it rather than rediscover
 | `src/app/api/attachments/route.ts` | `POST` — begin an upload. |
 | `src/app/api/attachments/[id]/commit/route.ts` | `POST` — two-phase commit. |
 | `src/app/api/attachments/[id]/route.ts` | `GET`/`HEAD` proxy, `DELETE` soft-delete. |
-| `src/app/api/attachments/_dev-upload/[...key]/route.ts` | `PUT`, memory store only. |
+| `src/app/api/attachments/dev-upload/[...key]/route.ts` | `PUT`, memory store only. |
 | `src/lib/editor/upload.ts` | Client transport: session, chunking, resume. |
 | `src/components/AttachmentDrop.tsx` | Paste/drag/pick, progress, reference insertion. |
 | `scripts/sweep-attachments.mjs` | Retention and orphan reconciliation. |
@@ -1040,7 +1040,7 @@ async function read(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 test("a session's uploadUrl points at the dev upload route for that key", async () => {
   const session = await store.beginUpload("ab/abc.png", 5, "image/png");
-  expect(session.uploadUrl).toBe("http://localhost:3000/api/attachments/_dev-upload/ab/abc.png");
+  expect(session.uploadUrl).toBe("http://localhost:3000/api/attachments/dev-upload/ab/abc.png");
   expect(session.expiresAt.getTime()).toBeGreaterThan(Date.now());
 });
 
@@ -1186,7 +1186,7 @@ import type { BlobBody, BlobRange, BlobStat, BlobStore, UploadSession } from "./
 /**
  * In-memory store for tests, local development and `npm run smoke`.
  *
- * `beginUpload` returns a URL pointing at `/api/attachments/_dev-upload/<key>`, because the
+ * `beginUpload` returns a URL pointing at `/api/attachments/dev-upload/<key>`, because the
  * direct-upload path is only exercisable if the browser has somewhere real to PUT. That route
  * is registered ONLY when `BLOB_STORE=memory`, under the same discipline as the passwordless
  * test login — see `src/lib/blob/select.ts`.
@@ -1208,7 +1208,7 @@ export class MemoryBlobStore implements BlobStore {
    */
   async beginUpload(key: string, sizeBytes: number, mimeType: string): Promise<UploadSession> {
     return {
-      uploadUrl: `${this.origin}/api/attachments/_dev-upload/${key}`,
+      uploadUrl: `${this.origin}/api/attachments/dev-upload/${key}`,
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     };
   }
@@ -1290,7 +1290,7 @@ git commit -m "Add the BlobStore interface and its in-memory implementation"
 
 **Files:**
 - Create: `src/lib/blob/select.ts`
-- Create: `src/app/api/attachments/_dev-upload/[...key]/route.ts`
+- Create: `src/app/api/attachments/dev-upload/[...key]/route.ts`
 - Test: `src/lib/blob/select.test.ts`
 - Test: `tests/integration/dev-upload-route.test.ts`
 
@@ -1537,7 +1537,7 @@ async function put(
   body: string,
   headers: Record<string, string> = {},
 ): Promise<number> {
-  const { PUT } = await import("@/app/api/attachments/_dev-upload/[...key]/route");
+  const { PUT } = await import("@/app/api/attachments/dev-upload/[...key]/route");
   const request = new Request("http://localhost/x", { method: "PUT", body, headers });
   const response = await PUT(request, {
     params: Promise.resolve({ key: Array.isArray(key) ? key : key.split("/") }),
@@ -1572,7 +1572,7 @@ test("every other method 404s too, so OPTIONS cannot confirm the route is in the
   vi.resetModules();
   mockGate(false);
 
-  const mod = await import("@/app/api/attachments/_dev-upload/[...key]/route");
+  const mod = await import("@/app/api/attachments/dev-upload/[...key]/route");
   for (const method of ["GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const) {
     const response = await mod[method]();
     expect(response.status, method).toBe(404);
@@ -1629,7 +1629,7 @@ test("a missing Content-Length is 411 and an oversized one is 413, before the bo
   mockGate(true, store);
 
   const { MAX_UPLOAD_BYTES } = await import("@/lib/attachments/schema");
-  const { PUT } = await import("@/app/api/attachments/_dev-upload/[...key]/route");
+  const { PUT } = await import("@/app/api/attachments/dev-upload/[...key]/route");
 
   const bare = new Request("http://localhost/x", { method: "PUT", body: "x" });
   bare.headers.delete("content-length");
@@ -1647,7 +1647,7 @@ test("a missing Content-Length is 411 and an oversized one is 413, before the bo
 
 - [ ] **Step 5: Implement the route**
 
-Create `src/app/api/attachments/_dev-upload/[...key]/route.ts`:
+Create `src/app/api/attachments/dev-upload/[...key]/route.ts`:
 
 ```ts
 import { NextResponse } from "next/server";
@@ -1657,6 +1657,13 @@ import { MAX_UPLOAD_BYTES } from "@/lib/attachments/schema";
 /**
  * Where the memory store's upload sessions point, and the only unauthenticated write in the
  * application. Treated with the same suspicion as the passwordless test login.
+ *
+ * **The folder is `dev-upload`, NOT `_dev-upload`, and that is not cosmetic.** An underscore
+ * prefix makes a Next App Router folder *private* — excluded from the route tree entirely — so
+ * the underscored version compiled, passed every integration test that imports this module
+ * directly, and was absent from `routes-manifest.json`. It answered 307 to a real PUT and had
+ * never existed as an endpoint. `npm run smoke` is what caught it, which is the whole reason
+ * that script exists. Safety here comes from `devUploadEnabled()` below, never from the name.
  *
  * It exists because uploads bypass the application: the browser PUTs bytes to whatever URL the
  * store hands it, so for `BLOB_STORE=memory` that URL must be something a test, a Playwright
@@ -1758,7 +1765,7 @@ first; the ordering here is presentation, not dependency.
 
 ```bash
 git add src/lib/blob/select.ts src/lib/blob/select.test.ts \
-  src/app/api/attachments/_dev-upload src/lib/blob/memory.ts \
+  src/app/api/attachments/dev-upload src/lib/blob/memory.ts \
   tests/integration/dev-upload-route.test.ts
 git commit -m "Select the blob store explicitly, and gate the dev upload route on it"
 ```

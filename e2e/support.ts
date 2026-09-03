@@ -82,6 +82,7 @@ export type Counts = {
   audit: number;
   redirects: number;
   relations: number;
+  attachments: number;
   softDeleted: number;
 };
 
@@ -97,6 +98,11 @@ export async function snapshotCounts(): Promise<Counts> {
     // count is how a leak announces itself: `PageRelation` cascades from both ends, so a
     // non-zero difference here means a fixture page survived the sweep.
     relations: await db.pageRelation.count(),
+    // Phase 4. `Attachment.pageId` cascades from `Page` same as `PageVersion` does, so this is
+    // a whole-table count for the same reason `relations` is: it catches a row that survived
+    // because the cascade it depends on was ever relaxed, not just the ordinary case sweep
+    // already handles explicitly below.
+    attachments: await db.attachment.count(),
     softDeleted: await db.page.count({ where: { deletedAt: { not: null } } }),
   };
 }
@@ -105,7 +111,8 @@ export function formatCounts(counts: Counts): string {
   return (
     `${counts.spaces} spaces / ${counts.pages} pages / ${counts.versions} versions / ` +
     `${counts.drafts} drafts / ${counts.audit} audit / ${counts.redirects} redirects / ` +
-    `${counts.relations} relations / ${counts.softDeleted} soft-deleted`
+    `${counts.relations} relations / ${counts.attachments} attachments / ` +
+    `${counts.softDeleted} soft-deleted`
   );
 }
 
@@ -125,6 +132,12 @@ export function formatCounts(counts: Counts): string {
  * It runs `beforeEach` as well as `afterAll`: a fixture left behind by a crashed run would
  * otherwise make the next run's `createPage` fail with `path-occupied`, which reads as a
  * product bug and is not one.
+ *
+ * Phase 4: `Attachment` is swept explicitly by `pageId`, even though `onDelete: Cascade` would
+ * remove it anyway once the page goes. Same reasoning as `PageRelation` above and as
+ * `scripts/smoke.sh`'s own sweep argues it: a schema decision two files away could be relaxed
+ * without this suite noticing, and the row this suite is responsible for cleaning up should be
+ * readable in the cleanup that is responsible for it.
  */
 export async function sweep(): Promise<void> {
   const where = { slug: { startsWith: E2E_SLUG_PREFIX } };
@@ -132,6 +145,7 @@ export async function sweep(): Promise<void> {
   await db.page.updateMany({ where, data: { publishedVersionId: null } });
   const ids = (await db.page.findMany({ where, select: { id: true } })).map((row) => row.id);
 
+  await db.attachment.deleteMany({ where: { pageId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { OR: [{ pageId: { in: ids } }, { createdAt: { gte: RUN_START } }] },
   });

@@ -12,7 +12,10 @@
 # every dependency bump. Phase 2 added the authoring pass — create, save, publish, read, move,
 # follow, delete, 404 — over plain HTTP. Phase 3 added the lifecycle pass: publish an ADR,
 # supersede it, and confirm the first is retired, still readable, and listed beside its
-# replacement in the generated index. Deliberately no browser: Playwright owns those.
+# replacement in the generated index. Phase 4 added the attachment pass: begin an upload, PUT
+# bytes directly to the session URL — never through this application, same as a real browser —
+# commit, and read them back through the permission-checked proxy, with a Range request proving
+# the 206 path. Deliberately no browser: Playwright owns those.
 #
 # The EXIT CODE is the contract. `npm run smoke | tail` reports tail's status, not this
 # script's; check `${PIPESTATUS[0]}` or do not pipe.
@@ -29,6 +32,9 @@ LOG="$(mktemp)"
 # only the status that did not match.
 OUT="$(mktemp)"
 FORM="$(mktemp)"
+# The bytes PUT straight to the upload session URL — a real, decodable 1x1 PNG, so the
+# `content-type: image/png` assertion below means something.
+PNG_FILE="$(mktemp)"
 SERVER=""
 FAILURES=0
 
@@ -58,7 +64,7 @@ ADR_LIVE_MARKER="This decision replaced one, in a cold-start smoke test."
 
 cleanup() {
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null || true
-  rm -f "$JAR" "$LOG" "$OUT" "$FORM"
+  rm -f "$JAR" "$LOG" "$OUT" "$FORM" "$PNG_FILE"
 }
 trap cleanup EXIT
 
@@ -253,13 +259,14 @@ author_page() { # slug title docType markdown-as-a-json-string
 # `DATABASE_URL` is deliberately not reused as the connection string; libpq refuses its
 # `?schema=public` parameter outright.
 #
-# This is the guard that covers `PageRelation`, and the reason it has to be a whole-table count
-# rather than another clause in `sweep`'s `raise exception` block is in that block's comment.
+# This is the guard that covers `PageRelation` and, since Phase 4, `Attachment` — and the reason
+# it has to be a whole-table count rather than another clause in `sweep`'s `raise exception`
+# block is in that block's comment.
 counts() {
   psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX -v ON_ERROR_STOP=1 -c "
     select format(
       '%s spaces / %s pages / %s versions / %s drafts / %s audit / %s redirects / '
-      || '%s relations / %s bug reports / %s soft-deleted',
+      || '%s relations / %s attachments / %s bug reports / %s soft-deleted',
       (select count(*) from \"Space\"),
       (select count(*) from \"Page\"),
       (select count(*) from \"PageVersion\"),
@@ -267,6 +274,7 @@ counts() {
       (select count(*) from \"AuditLog\"),
       (select count(*) from \"Redirect\"),
       (select count(*) from \"PageRelation\"),
+      (select count(*) from \"Attachment\"),
       (select count(*) from \"BugReport\"),
       (select count(*) from \"Page\" where \"deletedAt\" is not null))" 2>/dev/null \
     || echo "counts unavailable"
@@ -306,6 +314,13 @@ counts() {
 # recognise. What can fail is a whole-table count: `counts()` above is read before the passes and
 # again after this sweep, and Teardown compares them. That catches a leaked relation whatever its
 # ends are, along with every other row this script did not mean to leave.
+#
+# `Attachment` DOES get its own clause, ahead of the `Page` delete, for the same reason
+# `AuditLog` and `PageRelation` do above it: the only handle on which rows belong to this run is
+# the page id, and that has to be read before the page carrying it is gone. `onDelete: Cascade`
+# would remove it anyway, and the explicit statement is here so the cleanup this script is
+# responsible for is readable in the sweep that is responsible for it, same argument as
+# `PageRelation`'s comment above.
 sweep() {
   npx --no prisma db execute --stdin --schema prisma/schema.prisma > /dev/null 2>&1 <<'SQL'
 update "Page" set "publishedVersionId" = null where slug like 'smoke-%';
@@ -313,6 +328,7 @@ delete from "AuditLog" where "pageId" in (select id from "Page" where slug like 
 delete from "PageRelation"
  where "fromId" in (select id from "Page" where slug like 'smoke-%')
     or "toId"   in (select id from "Page" where slug like 'smoke-%');
+delete from "Attachment" where "pageId" in (select id from "Page" where slug like 'smoke-%');
 delete from "Redirect" where "fromPath" like 'smoke-%';
 delete from "Page" where slug like 'smoke-%';
 delete from "BugReport" where summary = 'smoke test';
@@ -344,10 +360,17 @@ step "Serve"
 # its own data down. ALLOW_DEV_UPLOAD is the SEPARATE flag opening the unauthenticated upload
 # endpoint the memory store's session URLs point at — two flags because they answer two
 # different questions, and neither alone is sufficient.
+#
+# AUTH_URL is set here for a reason that has nothing to do with auth: `MemoryBlobStore` mints
+# its upload session URLs against `process.env.AUTH_URL`, defaulting to `http://localhost:3000`
+# — which is `.env`'s own value, and not this port. Left unset, every upload session this run
+# mints would point at a server that is not listening, and the PUT below would fail to connect
+# rather than exercise anything.
 ALLOW_TEST_LOGIN=1 \
   BLOB_STORE=memory \
   BLOB_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 \
   ALLOW_DEV_UPLOAD=1 \
+  AUTH_URL="$BASE" \
   npx next start --port "$PORT" > "$LOG" 2>&1 &
 SERVER=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/" && break; sleep 1; done
@@ -515,6 +538,76 @@ else
   fail "doc lifecycle pass skipped: both ADRs are needed and one was not created"
 fi
 
+step "Attachment"
+# Phase 4, Task 19. The first pass in this script to exercise the two-phase upload for real:
+# begin a session, PUT bytes straight to it — never through this application, exactly what the
+# browser does — commit, and read the bytes back through the permission-checked proxy. Only
+# runnable at all because `BLOB_STORE=memory` above points the session URL at the unauthenticated
+# dev-upload route rather than at SharePoint, which is the only reason this runs without tenant
+# credentials.
+#
+# Attached to `$LIVE_ID`, the ADR the lifecycle pass just published and does not delete — the
+# authoring pass's own page is gone by now, deleted at the end of that pass, so it is not a page
+# this run can still attach to.
+sign_in "aisyah@example.com"
+
+if [ -n "${LIVE_ID:-}" ]; then
+  # A 1x1 PNG, as bytes — small enough to decode inline and a real image, so the
+  # `content-type: image/png` assertion below is a claim about what was actually served, not
+  # about a string the route happened to echo back.
+  echo -n "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==" \
+    | openssl base64 -d -A > "$PNG_FILE"
+  PNG_SIZE=$(wc -c < "$PNG_FILE" | tr -d ' ')
+
+  api POST "/api/attachments" \
+    "{\"pageId\":\"$LIVE_ID\",\"filename\":\"smoke.png\",\"mimeType\":\"image/png\",\"sizeBytes\":$PNG_SIZE}" \
+    201 "upload session begun"
+  ATTACHMENT_ID=$(sed -n 's/.*"attachmentId":"\([^"]*\)".*/\1/p' "$OUT")
+  UPLOAD_URL=$(sed -n 's/.*"uploadUrl":"\([^"]*\)".*/\1/p' "$OUT")
+
+  if [ -n "$ATTACHMENT_ID" ] && [ -n "$UPLOAD_URL" ]; then
+    # Straight PUT to the session URL — no cookie jar, no `$BASE`, because the whole point of
+    # this URL is that it is not a route on this application. A real browser reaches it the
+    # same way: it has never seen this application's session.
+    PUT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$UPLOAD_URL" \
+      --data-binary "@$PNG_FILE")
+    [ "$PUT_CODE" = "201" ] && ok "bytes PUT directly to the upload session URL" \
+      || fail "the PUT to the upload session URL returned $PUT_CODE, wanted 201"
+
+    api POST "/api/attachments/$ATTACHMENT_ID/commit" "" 200 "upload committed"
+
+    HEADERS=$(curl -s -b "$JAR" -D - -o "$OUT" "$BASE/api/attachments/$ATTACHMENT_ID")
+    echo "$HEADERS" | head -1 | grep -q " 200 " \
+      && ok "the committed attachment reads back" \
+      || fail "reading the attachment back gave: $(echo "$HEADERS" | head -1 | tr -d '\r')"
+    echo "$HEADERS" | grep -qi "^content-type: *image/png" \
+      && ok "and its content-type is image/png" \
+      || fail "content-type was: $(echo "$HEADERS" | grep -i '^content-type:' | tr -d '\r')"
+    echo "$HEADERS" | grep -qi "^cache-control:.*private" \
+      && ok "and its cache-control says private" \
+      || fail "cache-control was: $(echo "$HEADERS" | grep -i '^cache-control:' | tr -d '\r')"
+
+    # `stranger@example.com` is a member of nothing — the seeded identity that demonstrates
+    # 404-not-403. One answer for absent, soft-deleted and unreadable-space alike; a
+    # distinguishable 403 would confirm the file exists, which is the leak §8 closes.
+    sign_in "stranger@example.com"
+    expect_status "/api/attachments/$ATTACHMENT_ID" 404 \
+      "a non-member cannot read the attachment (404, not 403)"
+
+    # Back as the owner for the Range check — a 404 answers the same regardless of the header,
+    # so this has to be an identity that can actually reach the bytes.
+    sign_in "aisyah@example.com"
+    RANGE_CODE=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" \
+      -H "Range: bytes=0-9" "$BASE/api/attachments/$ATTACHMENT_ID")
+    [ "$RANGE_CODE" = "206" ] && ok "a Range request returns 206" \
+      || fail "a Range request returned $RANGE_CODE, wanted 206"
+  else
+    fail "attachment pass skipped: no attachmentId/uploadUrl in the begin-upload response"
+  fi
+else
+  fail "attachment pass skipped: no live ADR id to attach to"
+fi
+
 step "Bug reporting"
 sign_in "aisyah@example.com"
 code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/bugs" \
@@ -527,16 +620,17 @@ step "Teardown"
 # Phase 2's authoring pass — a page, a version, a redirect from the move and four `AuditLog`
 # rows, one for each of create, publish, move and delete. Phase 3's lifecycle pass adds two more
 # pages, their versions, a `PageRelation`, and the `page.cascade` audit row the cascade writes on
-# the page it retired. `sweep` removes all of it and then asserts it is gone, so this run leaves
-# `badam` at exactly the counts it found. Scoped to the markers this script writes rather than a
-# TRUNCATE, so a developer's own rows survive.
+# the page it retired. Phase 4's attachment pass adds one more `Attachment` row, on the lifecycle
+# pass's own `$LIVE_ID` page rather than a fixture of its own. `sweep` removes all of it and then
+# asserts it is gone, so this run leaves `badam` at exactly the counts it found. Scoped to the
+# markers this script writes rather than a TRUNCATE, so a developer's own rows survive.
 sweep && ok "removed everything this run created" \
   || fail "could not clean up after the run — check for smoke- pages and 'smoke test' bugs"
 
 # The cleanup contract, stated as a number rather than as a marker — and the only guard that can
-# see a `PageRelation`, which has no marker to be scoped to. It is also stricter than the sweep:
-# the sweep asserts that everything it knows how to delete is gone, and this asserts that nothing
-# else appeared either.
+# see a `PageRelation` or an `Attachment`, neither of which has a marker of its own to be scoped
+# to. It is also stricter than the sweep: the sweep asserts that everything it knows how to
+# delete is gone, and this asserts that nothing else appeared either.
 AFTER="$(counts)"
 [ "$AFTER" = "$BEFORE" ] \
   && ok "dev database after the run:  $AFTER" \

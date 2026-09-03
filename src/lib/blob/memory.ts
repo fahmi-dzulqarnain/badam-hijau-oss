@@ -3,7 +3,7 @@ import type { BlobBody, BlobRange, BlobStat, BlobStore, UploadSession } from "./
 /**
  * In-memory store for tests, local development and `npm run smoke`.
  *
- * `beginUpload` returns a URL pointing at `/api/attachments/_dev-upload/<key>`, because the
+ * `beginUpload` returns a URL pointing at `/api/attachments/dev-upload/<key>`, because the
  * direct-upload path is only exercisable if the browser has somewhere real to PUT. That route
  * is registered ONLY when `BLOB_STORE=memory`, under the same discipline as the passwordless
  * test login — see `src/lib/blob/select.ts`.
@@ -25,7 +25,7 @@ export class MemoryBlobStore implements BlobStore {
    */
   async beginUpload(key: string, sizeBytes: number, mimeType: string): Promise<UploadSession> {
     return {
-      uploadUrl: `${this.origin}/api/attachments/_dev-upload/${key}`,
+      uploadUrl: `${this.origin}/api/attachments/dev-upload/${key}`,
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     };
   }
