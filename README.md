@@ -3,9 +3,11 @@
 An internal documentation platform. Markdown authoring in the browser, drafts in Postgres,
 per-space permissions behind SSO.
 
-**Status: alpha.** Two of six planned phases are complete — staff can read published docs, and
-editors can create, draft, preview, publish, move and delete them. The version string and an
-`alpha` badge are visible in the app, and there is a Report bug button in the nav rail.
+**Status: alpha.** Four of seven planned phases are complete — staff read published docs;
+editors create, draft, preview, publish, move and delete them; ADRs, RFCs and runbooks carry a
+real lifecycle; and editors attach files, stored in a company-owned SharePoint library. The
+version string and an `alpha` badge are visible in the app, and there is a Report bug button in
+the nav rail.
 
 ## Running it
 
@@ -36,9 +38,9 @@ Phase 4 avoids by authenticating to Graph as the application.
 ## Checks
 
 ```bash
-npm test              # 520 unit and integration tests against a real Postgres
-npm run test:e2e      # 21 Playwright specs against a production build
-npm run smoke         # 37 checks from a cold start: provision, migrate, seed, build, serve, tear down
+npm test              # 961 unit and integration tests against a real Postgres
+npm run test:e2e      # 32 Playwright specs against a production build
+npm run smoke         # 73 checks from a cold start: provision, migrate, seed, build, serve, tear down
 npm run typecheck && npm run build
 npm run plan:check    # reports plan documents whose code fences no longer match the code
 ```
@@ -57,6 +59,8 @@ Reading the docs first will save time — the design decisions and the traps are
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | The roadmap and a plan per phase, with the code fences kept in step with the code |
 | [`docs/superpowers/plans/PROGRESS.md`](docs/superpowers/plans/PROGRESS.md) | Current state, and **"Decisions that should not be relitigated"** |
 | `src/lib/` | Pure logic and data access. Permission checks compile to SQL here, never filter after fetching |
+| `src/lib/blob/` | The `BlobStore` seam: a SharePoint/Graph implementation and an in-memory one. Tests and `npm run smoke` run on the second, with no tenant credentials |
+| `src/lib/attachments/` | Attachment permission rules, serving policy, and the retention sweep |
 | `src/app/` | Routes. `(reader)` for reading, `(editor)` for authoring, `api/` for mutations |
 
 **Read `PROGRESS.md` before changing anything in `src/lib/pages/`.** Several things in there

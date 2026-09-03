@@ -1,13 +1,22 @@
 # Execution status
 
-**Phases 1, 2 and 3 are complete.**
+**Phases 1, 2, 3 and 4 are complete.**
 
-Branch: `main` · **827 vitest + 27 Playwright tests passing**, 62-check cold-start smoke ·
+Branch: `claude/onedrive-microsoft-sso-7ac97b` · **961 vitest tests passing**, 73-check
 cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
+
+**Playwright is UNVERIFIED for Phase 4.** `e2e/attachments.spec.ts` is written but has never
+been run: this machine has no Chromium in `~/Library/Caches/ms-playwright`, and the 178MB
+download does not complete on this network. That means the 27 pre-existing specs are unrun
+here too, so the previously recorded "27 Playwright tests passing" was measured elsewhere.
+Anyone with a working browser install should run `npm run test:e2e` before trusting Phase 4's
+end-to-end claims — everything else in the phase is verified, including the full upload →
+commit → read cycle over real HTTP, which the smoke test covers.
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
 [phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
+[phase 4](2026-08-26-docs-platform-phase-4-attachments.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
@@ -300,6 +309,57 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 `update: {}` leaves existing `Page` rows alone.
 
 ## Decisions that should not be relitigated
+
+### Phase 4 — attachments and the Entra cutover
+
+- **`editableSpace` must short-circuit on `isSuperAdmin`, exactly as `can()` does.** The naïve
+  composition `readableSpace(v, { memberships: { some: … } })` returns `{ AND: [{}, …] }` for a
+  super admin — the membership filter standing alone — so it silently denies them.
+- **Merging the two space predicates is a directional bypass.** Two literal `space:` keys in one
+  object is a TS1117 compile error and therefore safe; what tsc and Prisma cannot see is
+  `{ ...editableSpace(v), ...readableSpace(v) }`, which keeps only the last `AND` and drops the
+  edit requirement. Measured returning a members-only page to a VIEWER. They go in **separate
+  varargs**.
+- **Attachment readability nests `visiblePage`, so page delete and restore govern it.** That is
+  emergent from the nesting, not written anywhere, and has its own test for exactly that reason.
+- **The sanitiser is NOT widened for `<video>`.** `remarkRehype` runs with
+  `allowDangerousHtml: false`, so raw HTML never reaches the sanitiser and widening it is inert.
+  The element is built *after* sanitisation from a regex-captured id, so an off-origin `src` is
+  impossible by construction rather than by allowlist.
+- **`BLOB_STORE` has no default, in either direction**, and `memory` is gated on an
+  **allowlist** of dev `NODE_ENV` values — not on `!== "production"`. Next only *defaults*
+  `NODE_ENV`, so `NODE_ENV=staging next start` slipped past the inverted form.
+- **The dev upload route has its own positive flag.** `ALLOW_DEV_UPLOAD=1` **and** the memory
+  store, mirroring `ALLOW_TEST_LOGIN`'s polarity. Gating it on the store alone made an
+  unauthenticated write endpoint on-by-default wherever `NODE_ENV` was not exactly `production`.
+- **Never prefix an App Router folder with `_` and expect it to route.** `_dev-upload` was a
+  *private folder*: it compiled, passed every test that imported the module directly, and was
+  absent from `routes-manifest.json`. A real PUT answered 307. `npm run smoke` caught it.
+- **`Cache-Control: private` on the attachment proxy is a permission boundary**, not a hint.
+  `public` lets a shared proxy serve a members-only screenshot to a non-member.
+- **The proxy reports what the store DID, not what it was asked.** A ranged request is not
+  obliged to get a partial answer — Graph redirects `/content` to a CDN that may return 200 with
+  the whole object — so `BlobBody.partial` carries it, and `Content-Length` is declared only
+  when the store declared one.
+- **Non-inline types are served as `application/octet-stream`.** `nosniff` does not protect
+  `text/html`: it stops a browser guessing a *different* type, and that one is genuinely
+  executable.
+- **Shard a drive key on a HASH, never a slice of a cuid.** `id.slice(0, 2)` is `"c"` plus the
+  top base-36 digit of a millisecond timestamp, which turns over about every two and a half
+  years. Measured: one distinct bucket across twelve consecutive ids.
+- **The orphan sweep walks the 256 shard folders.** One `list("")` call worked against the
+  in-memory fake, whose `list` is a `startsWith` over a flat Map, and could never work against
+  `GraphBlobStore`, which is one folder deep — it would have reported no orphans forever while
+  passing its tests.
+- **`MemoryBlobStore` mints session URLs from `AUTH_URL`**, so any harness serving on another
+  port must set it or the direct PUT reaches nothing.
+
+**Open, to decide deliberately rather than discover:** `readableAttachment` audits every read,
+so a super admin scrubbing a video in a MEMBERS space emits one `space.access` row per range
+request. Auditing too much is the safe direction and the choke point is correct, but the volume
+wants a de-dup window. And the memory store's session URL still accepts any key from anyone
+rather than minting a one-key token, so it does not honour `UploadSession`'s documented
+contract — acceptable while the route is off unless a harness enables it.
 
 - **`readableSpace(viewer, ...and)` returns the complete Prisma `where` and must never be
   spread**, at any nesting depth. The spread form silently drops the permission predicate;

@@ -11,9 +11,10 @@ codebase that does not exist yet produces a plan that gets rewritten.
 | **1. Foundations & reader** | Signed-in staff read seeded published docs: space nav, breadcrumbs, TOC, page info card. Forbidden spaces 404. | §5.1–5.2, §8, §11 (read routes), §12 | — |
 | **2. Authoring** (plan: [phase-2](2026-08-23-docs-platform-phase-2-authoring.md)) | Editors create, draft, preview and publish pages in the browser. Conflict detection on concurrent drafts. Move and delete with redirects. | §5.3, §9, §14 | 1 |
 | **3. Doc types & lifecycle** (plan: [phase-3](2026-08-24-docs-platform-phase-3-doc-types.md)) | ADR/RFC/runbook templates with validated frontmatter. Status vocabularies, typed relations, publish cascades, retired-document banner, generated indexes. | §6, §5.2 (`PageRelation`) | 2 |
-| **4. Search & diagrams** | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
-| **5. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
-| **6. Systems, attachments, admin** | Systems catalogue and facet filters. S3 attachments via presigned URLs. Space/member/system administration. Due-for-review workflow. | §7, §17, §12 (review) | 3 |
+| **4. Attachments & Entra ID** (plan: [phase-4](2026-08-26-docs-platform-phase-4-attachments.md)) | Editors attach files — screenshots, documents, screen recordings — stored in a company-owned SharePoint library over Microsoft Graph. Uploads bypass the app; downloads proxy through it, permission-checked. Identity moves to Entra ID. | [Phase 4 spec](../specs/2026-08-26-attachments-sharepoint-entra-design.md) | 2 |
+| **5. Search & diagrams** | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
+| **6. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
+| **7. Systems & admin** | Systems catalogue and facet filters. Space/member/system administration. Due-for-review workflow. | §7, §12 (review) | 3 |
 
 **Phase 1 ends with a cold-start smoke test** (`npm run smoke`), not with the last feature.
 It provisions, migrates, seeds, builds, serves and exercises the running app over HTTP —
@@ -27,13 +28,20 @@ before a deploy and after every dependency bump.
 - **Phase 1 is a walking skeleton, not a stub.** It carries the real schema, the real
   permission module and the real Markdown pipeline. Later phases add surface, not
   foundations.
-- **Phase 5 is deliberately late.** The spec makes git a mirror that is never on the
+- **The git mirror is deliberately late.** The spec makes git a mirror that is never on the
   critical path, so publishing works without it. Building it after authoring proves that
   property instead of asserting it.
-- **Phase 3 before 4** because search filters by doc type and status, which phase 3
+- **Phase 3 before search** because search filters by doc type and status, which phase 3
   defines. Building search first means building it twice.
-- **Phase 6 last** because the systems facet is only useful once there are documents to
-  tag, and attachments are only useful once there is an editor to attach from.
+- **Systems & admin last** because the systems facet is only useful once there are documents
+  to tag.
+- **Attachments moved from 6 to 4, and the store changed with them.** They were roadmapped
+  last on the reasoning that attachments are only useful once there is an editor to attach
+  from — true, and that condition was met at the end of Phase 2. The trigger was a media
+  upload need that could not be deferred; the company runs Microsoft 365 and has no object
+  storage provisioned, so **D12's S3 backend became a SharePoint document library** and
+  "S3 attachments via presigned URLs" left what is now Phase 7. See the
+  [Phase 4 spec](../specs/2026-08-26-attachments-sharepoint-entra-design.md).
 
 ## Phase 4 constraint: Mermaid hydration decodes what the sanitiser escaped
 

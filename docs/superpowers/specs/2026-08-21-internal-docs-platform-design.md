@@ -53,8 +53,20 @@ All are additive later. None is required for the system to be useful.
 | D9 | Systems are a facet, not a folder | A single ADR can legitimately affect Hub, kiosk and POS |
 | D10 | One draft per page with optimistic concurrency | Conflict detection is sufficient; co-editing is not worth the complexity in v1 |
 | D11 | Postgres full-text search | Adequate to a few thousand pages; no second datastore to operate |
-| D12 | S3-compatible object storage for attachments from day one | Keeps the container stateless; a mounted volume breaks the moment there is more than one replica |
+| D12 | ~~S3-compatible object storage for attachments from day one~~ — **superseded**, see below | Keeps the container stateless; a mounted volume breaks the moment there is more than one replica |
 | D13 | Ship as an alpha, with in-product bug reporting from day one | Early users will hit rough edges; the cost of a bug going unreported is higher than the cost of the button |
+
+> **D12 superseded by the [Phase 4 spec](2026-08-26-attachments-sharepoint-entra-design.md).**
+> The backend is a SharePoint document library reached over Microsoft Graph, not S3: the
+> company runs Microsoft 365 and has no object storage provisioned. **D12's rationale still
+> holds and is still satisfied** — a SharePoint library is remote state, not container state,
+> so the container stays stateless and horizontal scaling does not break uploads. The
+> `BlobStore` interface D12 argued for survives intact; only its implementation changed, which
+> is reasonable evidence the seam was drawn in the right place. What did change is the
+> direction of travel: uploads bypass the application via a Graph upload session rather than a
+> presigned PUT, and downloads **proxy through** it rather than being fetched directly, because
+> Graph's pre-authenticated URLs are bearer capabilities that cannot express this application's
+> per-space permissions.
 
 ## 5. Domain model
 
@@ -473,18 +485,27 @@ data-access layer; each `lib` module exposes a small interface and is testable a
 A single Docker image, Postgres, and S3-compatible object storage. Migrations run on
 deploy.
 
-**Attachments go to object storage from day one** — no mounted volume, so the application
-container stays stateless and horizontal scaling does not break uploads. Access is behind
-a `BlobStore` interface with an S3 implementation (AWS S3, or MinIO where the company
-self-hosts). Uploads and downloads use presigned URLs so file bytes never pass through the
-application; the bucket itself stays private. `Attachment.blobKey` is the object key, and
-delete-on-page-delete is a queued job rather than a synchronous call, on the same
-"never block the user on a remote store" principle as the git mirror.
+**Attachments go to remote storage from day one** — no mounted volume, so the application
+container stays stateless and horizontal scaling does not break uploads. That still holds;
+the backend does not.
+
+> **Superseded by the [Phase 4 spec](2026-08-26-attachments-sharepoint-entra-design.md) §5, §7
+> and §9.** The store is a SharePoint document library reached over Microsoft Graph with an
+> app-only token, still behind the `BlobStore` interface this paragraph argued for. Two things
+> this paragraph got wrong for that backend: **downloads do NOT bypass the application** — they
+> proxy through it, because Graph's pre-authenticated URLs are bearer capabilities that cannot
+> express per-space permissions, and the read path is exactly where those must apply. And
+> **delete-on-page-delete is not a queued job**: there is no job runner in Phase 4, so
+> retention is `scripts/sweep-attachments.mjs`. Security does not depend on it — readability is
+> governed by the row's `deletedAt` and `state` in SQL, so lingering bytes are a retention
+> matter, not a hole. Uploads *do* bypass the application, via a Graph resumable upload session.
+> `Attachment.drivePath` is the object key, sharded on a hash of the id.
 
 Configuration by environment variable: database URL, OIDC issuer / client id / client
-secret, session secret, git remote URL and credentials, git author fallback, S3 endpoint /
-region / bucket / access key / secret key, presigned URL lifetime, maximum upload size,
-review interval in months, `GIT_SHA` build argument, and optional `BUG_WEBHOOK_URL`.
+secret, session secret, git remote URL and credentials, git author fallback, **Graph tenant /
+client id / client secret / drive id, `BLOB_STORE` (which has no default, in either
+direction)**, maximum upload size, attachment retention days, review interval in months,
+`GIT_SHA` build argument, and optional `BUG_WEBHOOK_URL`. See the Phase 4 spec §9.
 
 The git working tree remains local to the container and is re-cloned on start, so it is
 also not durable state.
