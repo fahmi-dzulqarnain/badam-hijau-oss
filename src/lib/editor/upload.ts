@@ -63,6 +63,18 @@ export async function uploadAttachment(
     uploadUrl: string;
   };
 
+  /**
+   * Consecutive attempts that moved the offset nowhere.
+   *
+   * Necessary because `resumed === offset` is treated as a retry rather than a stall — the
+   * ordinary outcome when a chunk simply was not accepted. Without a bound, a session that
+   * keeps reporting the same `nextExpectedRanges` spins forever, in a browser, behind a
+   * progress bar that never moves. Bounded rather than removed: the retry is the whole point
+   * of asking the session where it got to, and one transient 500 must not lose a 400MB upload.
+   */
+  let stalled = 0;
+  const MAX_STALLED = 5;
+
   let offset = 0;
   while (offset < file.size) {
     if (signal?.aborted) return { ok: false, message: "Upload cancelled." };
@@ -80,6 +92,7 @@ export async function uploadAttachment(
 
     if (response.ok) {
       offset = end;
+      stalled = 0;
       onProgress?.(offset / file.size);
       continue;
     }
@@ -93,6 +106,14 @@ export async function uploadAttachment(
     // which would mean the store lost bytes it had previously confirmed — is unrecoverable.
     if (resumed === null || resumed < offset) {
       return { ok: false, message: "The upload was interrupted. Try again." };
+    }
+    if (resumed === offset) {
+      stalled += 1;
+      if (stalled >= MAX_STALLED) {
+        return { ok: false, message: "The upload stopped making progress. Try again." };
+      }
+    } else {
+      stalled = 0;
     }
     offset = resumed;
     onProgress?.(offset / file.size);

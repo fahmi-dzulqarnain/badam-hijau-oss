@@ -129,3 +129,34 @@ test("an abort signal stops the upload without committing", async () => {
   );
   expect(result.ok).toBe(false);
 });
+
+test("a session that never advances gives up instead of spinning forever", async () => {
+  // The consequence of treating `resumed === offset` as a retry rather than a stall: without
+  // a bound, a store that keeps reporting the same nextExpectedRanges loops forever in a
+  // browser behind a progress bar that never moves. One transient failure must still recover
+  // — that is the test above — so this is bounded, not removed.
+  let puts = 0;
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/attachments") {
+      return json({ attachmentId: "a1", uploadUrl: "https://up/1", expiresAt: "z" });
+    }
+    if (String(input) === "https://up/1") {
+      if (init?.method === "GET") return json({ nextExpectedRanges: ["0-"] });
+      puts += 1;
+      return new Response(null, { status: 500 });
+    }
+    return json({ id: "a1", url: "/api/attachments/a1", filename: "s.png", kind: "image" });
+  });
+
+  const result = await uploadAttachment(
+    { pageId: "p", file: file(CHUNK_BYTES * 2) },
+    { fetchImpl: fetchImpl as unknown as typeof fetch },
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    message: "The upload stopped making progress. Try again.",
+  });
+  // Bounded, and the bound is small enough that a person is not left waiting.
+  expect(puts).toBeLessThanOrEqual(5);
+});

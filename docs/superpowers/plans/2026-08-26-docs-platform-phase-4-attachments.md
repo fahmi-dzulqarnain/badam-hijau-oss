@@ -4067,7 +4067,7 @@ test("a small file still goes through a resumable session", async () => {
     { pageId: "p", file: file(10) }, { fetchImpl: fetchImpl as unknown as typeof fetch },
   );
   expect(result.ok).toBe(true);
-  expect(fetchImpl.mock.calls[1][0]).toBe("https://up/1");
+  expect(fetchImpl.mock.calls[1]![0]).toBe("https://up/1");
 });
 
 test("a large file is chunked, with correct inclusive Content-Range on each part", async () => {
@@ -4168,6 +4168,37 @@ test("an abort signal stops the upload without committing", async () => {
   );
   expect(result.ok).toBe(false);
 });
+
+test("a session that never advances gives up instead of spinning forever", async () => {
+  // The consequence of treating `resumed === offset` as a retry rather than a stall: without
+  // a bound, a store that keeps reporting the same nextExpectedRanges loops forever in a
+  // browser behind a progress bar that never moves. One transient failure must still recover
+  // — that is the test above — so this is bounded, not removed.
+  let puts = 0;
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/attachments") {
+      return json({ attachmentId: "a1", uploadUrl: "https://up/1", expiresAt: "z" });
+    }
+    if (String(input) === "https://up/1") {
+      if (init?.method === "GET") return json({ nextExpectedRanges: ["0-"] });
+      puts += 1;
+      return new Response(null, { status: 500 });
+    }
+    return json({ id: "a1", url: "/api/attachments/a1", filename: "s.png", kind: "image" });
+  });
+
+  const result = await uploadAttachment(
+    { pageId: "p", file: file(CHUNK_BYTES * 2) },
+    { fetchImpl: fetchImpl as unknown as typeof fetch },
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    message: "The upload stopped making progress. Try again.",
+  });
+  // Bounded, and the bound is small enough that a person is not left waiting.
+  expect(puts).toBeLessThanOrEqual(5);
+});
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -4245,6 +4276,18 @@ export async function uploadAttachment(
     uploadUrl: string;
   };
 
+  /**
+   * Consecutive attempts that moved the offset nowhere.
+   *
+   * Necessary because `resumed === offset` is treated as a retry rather than a stall — the
+   * ordinary outcome when a chunk simply was not accepted. Without a bound, a session that
+   * keeps reporting the same `nextExpectedRanges` spins forever, in a browser, behind a
+   * progress bar that never moves. Bounded rather than removed: the retry is the whole point
+   * of asking the session where it got to, and one transient 500 must not lose a 400MB upload.
+   */
+  let stalled = 0;
+  const MAX_STALLED = 5;
+
   let offset = 0;
   while (offset < file.size) {
     if (signal?.aborted) return { ok: false, message: "Upload cancelled." };
@@ -4262,6 +4305,7 @@ export async function uploadAttachment(
 
     if (response.ok) {
       offset = end;
+      stalled = 0;
       onProgress?.(offset / file.size);
       continue;
     }
@@ -4269,8 +4313,20 @@ export async function uploadAttachment(
     // Ask the session where it actually got to rather than assuming this chunk was lost.
     // Restarting a large upload from zero is the failure this whole branch exists to avoid.
     const resumed = await resumeOffset(fetchImpl, uploadUrl, signal);
-    if (resumed === null || resumed <= offset) {
+    // `resumed === offset` is the ORDINARY case, not a stall: the chunk that just 500'd was
+    // never accepted, so the session still wants exactly what it wanted before. Retrying from
+    // the same offset is a retry; only a session that regressed BEHIND where we already are —
+    // which would mean the store lost bytes it had previously confirmed — is unrecoverable.
+    if (resumed === null || resumed < offset) {
       return { ok: false, message: "The upload was interrupted. Try again." };
+    }
+    if (resumed === offset) {
+      stalled += 1;
+      if (stalled >= MAX_STALLED) {
+        return { ok: false, message: "The upload stopped making progress. Try again." };
+      }
+    } else {
+      stalled = 0;
     }
     offset = resumed;
     onProgress?.(offset / file.size);
@@ -4418,7 +4474,12 @@ import { useCallback, useRef, useState } from "react";
 import { uploadAttachment } from "@/lib/editor/upload";
 import { referenceFor } from "@/lib/editor/reference";
 
-type Job = { name: string; progress: number; error?: string };
+/**
+ * `id` rather than `name` as the key: two files dropped together with the same name (two
+ * screenshots both called `image.png`, saved from different apps) are legitimate, and keying
+ * on the name would collide them into one row and one abort controller.
+ */
+type Job = { id: number; name: string; progress: number; error?: string };
 
 /**
  * Paste, drag or pick a file; upload it; hand back the Markdown reference.
@@ -4437,7 +4498,8 @@ export function AttachmentDrop({
 }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [dragging, setDragging] = useState(false);
-  const aborts = useRef(new Map<string, AbortController>());
+  const aborts = useRef(new Map<number, AbortController>());
+  const nextJobId = useRef(0);
 
   const run = useCallback(
     async (files: File[]) => {
@@ -4445,9 +4507,10 @@ export function AttachmentDrop({
       // progress bar stalls together; one at a time is slower in aggregate and far more
       // legible to the person watching it.
       for (const file of files) {
+        const id = ++nextJobId.current;
         const controller = new AbortController();
-        aborts.current.set(file.name, controller);
-        setJobs((current) => [...current, { name: file.name, progress: 0 }]);
+        aborts.current.set(id, controller);
+        setJobs((current) => [...current, { id, name: file.name, progress: 0 }]);
 
         const result = await uploadAttachment(
           { pageId, file },
@@ -4455,25 +4518,21 @@ export function AttachmentDrop({
             signal: controller.signal,
             onProgress: (fraction) =>
               setJobs((current) =>
-                current.map((job) =>
-                  job.name === file.name ? { ...job, progress: fraction } : job,
-                ),
+                current.map((job) => (job.id === id ? { ...job, progress: fraction } : job)),
               ),
           },
         );
-        aborts.current.delete(file.name);
+        aborts.current.delete(id);
 
         if (result.ok) {
           // A trailing newline, so the next paste does not concatenate onto this reference.
           onInsert(`${referenceFor(result.attachment)}\n`);
-          setJobs((current) => current.filter((job) => job.name !== file.name));
+          setJobs((current) => current.filter((job) => job.id !== id));
         } else {
           // The server's wording, verbatim — it knows the cap and the allowlist. And the
           // loop continues: one refused file must not abandon the rest.
           setJobs((current) =>
-            current.map((job) =>
-              job.name === file.name ? { ...job, error: result.message } : job,
-            ),
+            current.map((job) => (job.id === id ? { ...job, error: result.message } : job)),
           );
         }
       }
@@ -4483,7 +4542,7 @@ export function AttachmentDrop({
 
   return (
     <div
-      className={dragging ? "attach-drop attach-drop--over" : "attach-drop"}
+      className={dragging ? "ed-attach-drop ed-attach-drop--over" : "ed-attach-drop"}
       onPaste={(event) => {
         const files = Array.from(event.clipboardData.files);
         // Files win over text. A screenshot pasted from the clipboard also carries an empty
@@ -4508,7 +4567,7 @@ export function AttachmentDrop({
     >
       {children}
 
-      <label className="attach-pick">
+      <label className="ed-attach-pick">
         Attach a file
         <input
           type="file"
@@ -4524,21 +4583,27 @@ export function AttachmentDrop({
       </label>
 
       {jobs.length > 0 && (
-        <ul className="attach-jobs">
+        <ul className="ed-attach-jobs">
           {jobs.map((job) => (
-            <li key={job.name} className={job.error ? "attach-job attach-job--error" : "attach-job"}>
-              <span className="attach-job__name">{job.name}</span>
+            <li
+              key={job.id}
+              className={job.error ? "ed-attach-job ed-attach-job--error" : "ed-attach-job"}
+            >
+              <span className="ed-attach-job__name">{job.name}</span>
               {job.error ? (
                 <>
                   <span role="alert">{job.error}</span>
-                  <button type="button" onClick={() => setJobs((c) => c.filter((j) => j !== job))}>
+                  <button
+                    type="button"
+                    onClick={() => setJobs((current) => current.filter((j) => j.id !== job.id))}
+                  >
                     Dismiss
                   </button>
                 </>
               ) : (
                 <>
                   <progress value={job.progress} max={1} aria-label={`Uploading ${job.name}`} />
-                  <button type="button" onClick={() => aborts.current.get(job.name)?.abort()}>
+                  <button type="button" onClick={() => aborts.current.get(job.id)?.abort()}>
                     Cancel
                   </button>
                 </>
