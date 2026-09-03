@@ -559,26 +559,139 @@ the worker's one-connection lock client (called `holder`) was invisible to it; t
 been registered *by accident* because it also makes ordinary `db.` calls. The sweep now names
 `new PrismaClient` as well, which closes the category and pulls `src/lib/db.ts` into the registry.
 
-## Task 7: The sha on the page
+## Task 7: The sha on the page ✅
 
 **Files:** `src/components/` page info, a version history route + tests.
 
-- [ ] **Step 1: Surface the content sha, distinctly from the build sha**
+- [x] **Step 1: Surface the content sha, distinctly from the build sha**
 
 §10: the reader shows the published commit sha "so provenance is visible and a broken mirror is
 noticed". The footer already shows a build string. Two shas on one page that mean different things
 is a UI problem, not a data problem — label them.
 
-- [ ] **Step 2: `gitSha = null` is a normal state and must read as one**
+- [x] **Step 2: `gitSha = null` is a normal state and must read as one**
 
 An unmirrored version is the expected state for every version published before this phase, and for
 any publish whose push is still queued. It says "not mirrored yet", not "error", and it must not
 be a gap where a value should be.
 
-- [ ] **Step 3: Link to version history**
+- [x] **Step 3: Link to version history**
 
 §10 says the reader links to it. A list of a page's versions with author, date, status and sha.
 Permission is the page's own — `visiblePage`, stated here and not inherited.
+
+**Step 1 was half done and Step 2's wording turned out to be the thing that was wrong.** The
+reader route already painted the content sha — `<span className="k">Commit</span>
+{version.gitSha ?? "not mirrored yet"}` — so what this task actually did was fix two words. The
+label `Commit` is a perfectly good name for `buildInfo().label`, which the nav rail's foot paints
+on the same page, so the one thing the landmine asked for ("name them apart") was not satisfied by
+a label that only one of the two values happened to be wearing. Both are now named after their
+repository — `Content commit` and `Build` — and the pair lives in `src/lib/version/labels.ts`,
+because *distinctness is a property of the pair* and cannot be asserted where each half is a
+literal at its use site. The measured proof that this matters: with the constant reverted to
+`"Commit"`, the rendered-markup test that puts both surfaces in one string **stays green** (it
+asserts the constant, not the word) and only `labels.test.ts` fails. Two tests, two different
+mutants — a label missing from a surface, and a label that is the wrong word.
+
+**"not mirrored yet" was the plan's own wording and it is now false**, which is Task 6's fault
+rather than Step 2's: a job that reaches `FAILED` blocks its own page's queue for ever, so `yet`
+promises something that is not coming. The `yet` is gone; everything else about Step 2 was already
+satisfied and was left alone.
+
+**The reader is told about a `FAILED` job, and the decision was where rather than whether.** Not
+on the reader route: that is the hottest path in the product and it would mean a `GitJob` query on
+every page view to report a state that is normally empty. And not per version either, which is
+the part the plan could not have known — a `MOVE`, `DELETE` or `RESTORE` job carries
+`versionId: null` by design, so a page can be wedged by a failure belonging to no version at all,
+with the newest version's own job sitting `PENDING` behind the barrier. "Queued" and "failed"
+are then both half-true of that row. So the queue is counted **per page**, with one `groupBy`, on
+the history page — a surface someone opened deliberately — and said once: stuck, or queued, never
+both. `GitJob.lastError` is git's stderr and stays on Task 8's page; a reader gets the state,
+which is what lets them tell somebody. §10's "a broken mirror is noticed" is satisfied by a
+reader who can see the mirror is stuck without being shown a remote URL.
+
+**The route is `/{space}/-/history/{path}`, and the two alternatives were both worse.**
+`/{space}/{path}/-/history` is unrepresentable — a catch-all must be the last segment of a route.
+A top-level `/history/{pageId}` would be a static segment at the same depth as `[space]`, so it
+would shadow any space whose key is `history`; space keys are created by people, where `-/` is
+reserved by `validateSlug` with its own error code and its own test, upstream of both
+`createPage` and `movePage`. (`/search` already carries the top-level shape and shadows a space
+keyed `search` — existing debt, not a pattern to extend.) The collision with `[space]/[...path]`
+was **measured, not assumed**: `next build`'s `routes-manifest.json` orders
+`^/([^/]+?)/\-/history/(.+?)(?:/)?$` before `^/([^/]+?)/(.+?)(?:/)?$`, and a real `next start`
+driven against the test database answered `/probe/-/history/a/b` with `<h1>Version history</h1>`
+at 200 while `/probe/-/history/no/such` answered 404 — which is what a catch-all match would have
+given for both, since no page path can begin with `-`. The same probe is what confirmed the
+queued and stuck notices and that stderr does not reach the page.
+
+**A version list is the seventh shape of the overflow class, and the sha is the one shape
+`overflow-wrap` cannot rescue.** A 40-character git object name has no break opportunity in it, so
+`overflow-wrap: anywhere` still demands ~300px of one line at 12.5px monospace. The display is ten
+characters with the full value in a `title`, which costs no width at any viewport — and `.sha`
+keeps the wrap rule anyway, as a guard against a longer display form rather than as a live need.
+Ten and not the build's seven for a reason that is not uniqueness: two seven-character hex strings
+on one page look like the same kind of thing even when labelled, so the differing length is a
+second, redundant signal. The labels are the mechanism.
+
+**`renderToStaticMarkup` is available under vitest, and this task is the first to use it.** With
+Playwright's browsers absent from the machine, an e2e-only assertion would have left the one
+decision this task is mostly about — words — with no executable evidence at all. A route cannot be
+rendered that way (async, reads the database), which is why the list is a component taking a
+`PageHistory` rather than markup inside the route: a 300-character title, a null sha and a wedged
+mirror are all assertable without a browser. One caveat, measured: static markup carries no
+hydration markers, where the shipped HTML is `Build<!-- --> <!-- -->0.1.0+df0ef11`, so an
+adjacency assertion in vitest is about the element tree and not about the bytes. `textContent`
+ignores the comments, so the e2e assertions are written against visible text.
+
+**The permission predicate is stated once and mutation-verified four ways.** `visiblePage()` owns
+the top level of the one page query and `readableSpace(viewer, { key })` is its `space` relation
+filter; the version read and the `GitJob` aggregate are keyed on the id that query authorised and
+carry no second copy, because a copy there could be deleted with the whole suite green — the
+`resolveRedirect` shape. Mutants and their failures:
+
+- `space: { key }` (permission dropped, shape kept) → *a viewer reads the history of a page they
+  can read, and not one they cannot*: `expected { ok: true, history: { …(5) } } to deeply equal
+  { ok: false, reason: 'not-found' }`
+- `space: readableSpace(viewer)` (shape dropped, permission kept) → *a path is resolved inside the
+  space the URL names*: `expected 'Handbook copy' to be 'Engineering copy'`
+- `visiblePage({…})` → a bare object → *a soft-deleted page has no history* **and** *a super
+  admin's reach is not also a soft-delete bypass*, both with the same message as the first
+- `where: {}` on the version read → *…and not one they cannot*: `expected [ { …(7) }, { …(7) } ]
+  to have a length of 1 but got 2`; on the `GitJob` aggregate → *another page's failure is not
+  this page's problem*: `expected { queued: +0, failed: 1 } to deeply equal { queued: +0,
+  failed: +0 }`
+
+**An unpublished page gets an empty history rather than a 404, which is deliberately a different
+answer from the reader route's.** They are two different questions: "show me the published text"
+has no answer, and "show me the version history" has the answer *none yet*. Nothing leaks by
+saying so — `listSpacePages` already puts every unpublished page's title in the nav rail of anyone
+who can read the space.
+
+**Two corrections to the brief this task was given.** `pageVersion.findMany` was *not* absent from
+`src/lib/` — `src/lib/search/reindex.ts` has one, and it is registered in the soft-delete guard
+already. And the history route deliberately does **not** follow a `Redirect` for a moved page,
+where the reader route does; `pageHistoryHref` states the trade rather than leaving it to be
+discovered.
+
+**No audit row, and the argument is that it would say nothing new.** §8's audit is about a super
+admin reaching into a `MEMBERS` space, and `getReadableSpaceByKey` writes it once per request at
+the space boundary — which this route crosses through the layout on the way in. A second row for
+the same person and the same space on the same request makes the trail longer without making it
+say anything.
+
+**What the reader route gained, and what it deliberately did not.** The history link is in
+`.meta`, not in `PageInfoCard`, for the reason the Edit link is: `doc.css` hides `.rail-r` below
+1180px, so the rail is where an affordance ceases to exist on a laptop in a split window. The
+rail's "Versions" count was left as a count rather than becoming a second copy of the same link —
+an affordance that appears and disappears with the viewport is how a reader learns a feature
+exists and then cannot find it.
+
+**Written but not executed: `e2e/history.spec.ts`, eight tests.** Playwright's browser binaries
+are absent on this machine, so every spec in that directory fails at launch and
+`npx playwright install` is a ~95 MB download and the user's call. `npx playwright test --list`
+loads the file and reports **49 tests in 6 files**. What is uncovered by its not running: the
+horizontal-overflow *measurement* at four viewports, which needs a layout engine. Everything the
+spec says about markup is asserted and executed by the two component tests.
 
 ---
 
