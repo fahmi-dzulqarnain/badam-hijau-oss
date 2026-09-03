@@ -57,8 +57,19 @@ const ROOT = join(SRC, "..");
  * `(`-terminated, while `$queryRaw` is a **tagged template** and is followed by a backtick or a
  * type argument. Requiring `(` after both — the first version of this pattern — matched no raw
  * statement in the codebase, and the test below is why that lasted one run instead of a phase.
+ *
+ * **`new PrismaClient` is the sixth widening**, and Phase 5 Task 6 is what needed it. Both
+ * alternatives above are anchored on the *names* `db` and `tx`, so a module that constructs its
+ * own client and calls it anything else is invisible to them — and `src/lib/git/worker.ts` does
+ * exactly that: its working-tree advisory lock has to live on a pinned connection, so it makes a
+ * one-connection client called `holder` and runs `pg_advisory_lock` on it. That module happens to
+ * make ordinary `db.` calls too and so would have been registered **by accident**, which is the
+ * shape this guard has now been caught in five times. Naming the client construction closes the
+ * category instead of the instance. It also pulls `src/lib/db.ts` into the registry, which is
+ * right: the module that owns the connection is the one place a reader looks for it.
  */
-const PRISMA_QUERY = /\b(?:db|tx)\.(?:[a-z]\w*\.[a-z]\w*\(|\$(?:query|execute)Raw(?:Unsafe)?\b)/;
+const PRISMA_QUERY =
+  /\b(?:db|tx)\.(?:[a-z]\w*\.[a-z]\w*\(|\$(?:query|execute)Raw(?:Unsafe)?\b)|\bnew PrismaClient\b/;
 
 function sweepForPrismaQueries(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -405,6 +416,44 @@ const MODULES: Record<string, Registration> = {
       "row, which is not a read: it returns no column and applies no predicate, and the row it " +
       "names is the row the caller has already authorised and written.",
   },
+  "src/lib/git/worker.ts": {
+    load: () => import("@/lib/git/worker"),
+    // Soft-delete tests: tests/integration/git-worker.test.ts —
+    //   Registered as `covered` rather than `reachesPage: false` because it does reach a `Page`
+    //   row: `loadVersion` selects `page: { select: { docType: true } }` through a relation, the
+    //   shape this guard was too narrow to see the fourth time it was widened. And it reaches it
+    //   with **no soft-delete filter, deliberately** — so what is pinned here is the *absence*,
+    //   the same way `createPage`'s collision check is, and for a stronger reason: adding the
+    //   filter would break a test rather than merely be redundant.
+    //
+    //   "a page soft-deleted before the drain still has its publish mirrored, then removed" is
+    //   that test. A page can be published and deleted before the worker ever runs; the `PUBLISH`
+    //   job's version then belongs to a page whose `deletedAt` is set, and a filtered read would
+    //   fail it — leaving the `DELETE` job behind it removing a file that was never written and
+    //   the version permanently unmirrored. `restorePage`, `listDeletedPages` and `findDeleted`
+    //   each carry a deliberately blind query for the same family of reason; this is the fourth.
+    //   The write side has the same blindness and the same test: the sha is recorded for a
+    //   version whose page is soft-deleted, and "a restore puts the file back" walks the whole
+    //   delete-then-restore sequence.
+    //
+    //   The other exported functions are the drain's own pieces, each with its own test in that
+    //   file: the claim (a second worker cannot take a claimed job), the reclaim (an abandoned
+    //   job becomes claimable; one past its attempts is FAILED), the finish (a reclaimed job's
+    //   worker writes nothing), and the tree lock (a second worker blocks, and reports `busy`
+    //   when it will not wait). None of them names a `Page` row, but they are listed rather than
+    //   exempted because they are the same module's exports and an `exempt` list that grows is an
+    //   `exempt` list nobody re-reads.
+    covered: [
+      "drainMirrorJobs",
+      "claimNextJob",
+      "reclaimAbandonedJobs",
+      "finishJob",
+      "withMirrorLock",
+    ],
+    // Pure: configuration read from a literal environment, and the retry curve. Neither queries
+    // anything.
+    exempt: ["workerConfigFromEnv", "backoffMs"],
+  },
   "src/lib/audit/log.ts": {
     reachesPage: false,
     why:
@@ -414,6 +463,14 @@ const MODULES: Record<string, Registration> = {
       "would have nothing to filter — and it must NOT acquire one: `page.delete` and " +
       "`page.restore` audit rows are about pages that are soft-deleted at the moment they are " +
       "written, so a filter here would drop exactly the rows the trail exists for.",
+  },
+  "src/lib/db.ts": {
+    reachesPage: false,
+    why:
+      "constructs the Prisma client and makes no query at all. It is here because the sweep now " +
+      "names `new PrismaClient` as well as `db.`/`tx.` calls — a module that owns a connection is " +
+      "a module a reader should find in this list, and the alternative that catches it is what " +
+      "catches a client under any other variable name.",
   },
   "src/lib/auth/config.ts": { reachesPage: false, why: "queries User only, to resolve a sign-in" },
   "src/lib/users/upsert.ts": { reachesPage: false, why: "upserts User from an OIDC profile" },
@@ -476,13 +533,18 @@ test.each(PAGE_MODULES)(
  * file that makes a raw call also makes a delegate call, so the first alternative would match it
  * either way. Both halves are exercised here against literal source lines.
  */
-test("the sweep pattern can see both a delegate call and a raw statement", () => {
+test("the sweep pattern can see a delegate call, a raw statement and a constructed client", () => {
   expect(PRISMA_QUERY.test('await tx.page.updateMany({ where: visiblePage() })')).toBe(true);
   expect(PRISMA_QUERY.test("const rows = await tx.$queryRaw<Row[]>`SELECT 1`")).toBe(true);
   expect(PRISMA_QUERY.test("await db.$executeRaw`UPDATE \"Page\" SET x = 1`")).toBe(true);
+  // The client-construction alternative, which is the only one that can see a module whose
+  // client is not called `db` or `tx` — the shape `src/lib/git/worker.ts` needs for its
+  // session-scoped advisory lock.
+  expect(PRISMA_QUERY.test("const holder = new PrismaClient({ datasourceUrl: url })")).toBe(true);
   // Not a database call: the guard must not start demanding registration for every method on
   // anything named `db` or `tx`.
   expect(PRISMA_QUERY.test("await tx.$disconnect()")).toBe(false);
+  expect(PRISMA_QUERY.test("import { PrismaClient } from \"@prisma/client\"")).toBe(false);
 });
 
 test("visiblePage excludes soft-deleted rows and nests its extra conditions", () => {
