@@ -3511,6 +3511,19 @@ function commonHeaders(attachment: ReadableAttachment, eTag: string | null): Hea
  * rejecting it would break a client that sent a range unit we do not implement. Only a
  * well-formed range that cannot be satisfied is a 416. `bytes=2-` is the form a video player
  * actually sends when seeking, so the open end resolves against the stored size.
+ *
+ * Two conforming choices this makes implicitly, stated so they read as decisions:
+ *
+ * - **A multi-range header is ignored, not partially served.** `bytes=1-2, 4-4` fails this
+ *   regex and falls through to a full 200. RFC 9110 §14.2 does not require multipart/byteranges
+ *   support, and answering the whole representation is explicitly permitted. Serving only the
+ *   first sub-range would also conform and is strictly more surprising.
+ * - **An over-long range clamps to a 206, not a 200.** `bytes=0-99` on a 5-byte object answers
+ *   `206` with `Content-Range: bytes 0-4/5`, even though the clamped range is the whole object.
+ *   Also permitted, and it keeps every satisfiable range on one code path.
+ *
+ * Measured, and the reason `bytes=-0` is separated out: a suffix length of zero is unsatisfiable
+ * by definition, while `bytes=0-0` is an ordinary one-byte request. They must not collapse.
  */
 function parseRange(
   header: string | null,
