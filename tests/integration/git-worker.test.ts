@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { db, resetDb } from "../setup/reset";
@@ -199,7 +200,10 @@ async function jobs() {
 }
 
 /** Stage-and-release helper: the waits stage an interleaving and nothing is asserted about them. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+const settle = () => new Promise((done) => setTimeout(done, 200));
+
+/** This checkout, so the script runs from the project rather than from a temporary tree. */
+const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 
 // ── The happy path, so every absence assertion below has something to be absent from ──────────
 
@@ -1094,3 +1098,87 @@ test("a worker whose job was reclaimed writes nothing when it finishes", async (
       .gitSha,
   ).toBeNull();
 });
+
+// ── Step 5: the exit code an operator puts in a cron ──────────────────────────────────────────
+
+/**
+ * The script, run as a real subprocess, because the exit code **is** the product surface here and
+ * nothing else in the suite can see it. A function that returns a number is not a check that
+ * `npm run git:worker` answers with one — that is the class of gap this project keeps finding, and
+ * the smoke script's own docstring already carries the version of it where a pipeline reported
+ * `tail`'s status instead of the command's.
+ *
+ * Status is read from the spawn, never through a pipe. Three bugs in this project came from a
+ * pipeline reporting its last command's status, and one of them was measured in this very phase.
+ */
+async function runWorkerScript(
+  env: Record<string, string>,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return await new Promise((settle) => {
+    const child = spawn("npx", ["--no", "tsx", "scripts/git-worker.ts"], {
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (c: string) => (stdout += c));
+    child.stderr.on("data", (c: string) => (stderr += c));
+    child.on("close", (code) => settle({ code, stdout, stderr }));
+  });
+}
+
+test("npm run git:worker exits 0 with nothing to do", async () => {
+  const root = await scratch("cli-idle");
+  const run = await runWorkerScript({ GIT_MIRROR_ROOT: root });
+
+  expect(run.code).toBe(0);
+  expect(run.stdout).toContain("0 done, 0 retrying, 0 failed");
+}, 60_000);
+
+test("npm run git:worker exits 0 when it drained, and 1 when a job ended FAILED", async () => {
+  const { viewer, page } = await fixture();
+  const root = await scratch("cli-drain");
+  const target = await page(null, "topic-registry", "Topic registry");
+  await publish(viewer, target.id, "The body.\n");
+
+  const drained = await runWorkerScript({ GIT_MIRROR_ROOT: root });
+  expect(drained.code).toBe(0);
+  expect(drained.stdout).toContain("1 done, 0 retrying, 0 failed");
+
+  // A second page whose address the mirror refuses, with one attempt allowed: it ends FAILED, and
+  // a cron has to hear about that.
+  const doomed = await page(null, "handbook", "Handbook");
+  await publish(viewer, doomed.id, "The handbook.\n", "Handbook");
+  await db.gitJob.updateMany({
+    where: { pageId: doomed.id },
+    data: { spaceKey: "engineering/nested" },
+  });
+
+  const failed = await runWorkerScript({ GIT_MIRROR_ROOT: root, GIT_WORKER_MAX_ATTEMPTS: "1" });
+  expect(failed.code).toBe(1);
+  expect(failed.stdout).toContain("0 done, 0 retrying, 1 failed");
+}, 120_000);
+
+/**
+ * A run that could not start at all is a **2**, not a 1: "one page is stuck" and "the mirror has
+ * not run since Tuesday" need different people, and a cron whose mail cannot tell them apart is a
+ * cron whose mail stops being read.
+ *
+ * The unreachable database is the cheapest way to reach it and touches nothing — the working tree
+ * is never even looked at, because the advisory lock comes first.
+ */
+test("npm run git:worker exits 2 when the run itself cannot start", async () => {
+  const root = await scratch("cli-fatal");
+  const run = await runWorkerScript({
+    GIT_MIRROR_ROOT: root,
+    DATABASE_URL: "postgresql://badam:badam@127.0.0.1:1/nowhere",
+  });
+
+  expect(run.code).toBe(2);
+  expect(run.stderr).toContain("could not run");
+  // Nothing was written: a worker that cannot reach its queue must not have made a repository.
+  expect(await exists({ git: { root } } as WorkerConfig, ".git")).toBe(false);
+}, 60_000);
