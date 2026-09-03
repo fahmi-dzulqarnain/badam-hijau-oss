@@ -280,10 +280,38 @@ export function backoffMs(config: WorkerConfig, attempts: number): number {
 // ── The tree lock ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The namespace half of the two-argument advisory lock key. A constant, not a hash: the
- * two-argument form (`classid`, `objid`) occupies a different key space from the single-argument
- * form `pg_advisory_xact_lock(hashtext(spaceId))` that `createPage`, `movePage` and `deletePage`
- * take, so the mirror's lock cannot collide with a space's however the hashes fall.
+ * The advisory lock key, in **two** parts, and both halves of that are decisions.
+ *
+ * ## Two arguments, because one would share a key space with the page locks
+ *
+ * `createPage`, `movePage` and `deletePage` all take `pg_advisory_xact_lock(hashtext(spaceId))` —
+ * the **one-argument** form. A one-argument mirror lock would live in the same key space, and
+ * `hashtext` over an arbitrary working-tree path colliding with `hashtext` over an arbitrary space
+ * id is a 1-in-2^32 accident that would present as a move deadlocking against a mirror drain, with
+ * nothing in either statement to suggest why.
+ *
+ * The two-argument form removes the possibility rather than making it unlikely, and that is
+ * measured rather than argued from the documentation: Postgres records the one-argument form with
+ * `objsubid = 1` and the two-argument form with `objsubid = 2`, so the two never name the same
+ * lock. Taken together in one session, `pg_locks` shows
+ * `(classid 4294967295, objid 3251558737, objsubid 1)` for `pg_advisory_lock(hashtext('engineering'))`
+ * and `(classid 20260826, objid 3364510785, objsubid 2)` for the mirror's — two rows, not one.
+ *
+ * What each argument classifies: **`classid` is the *kind* of thing being locked** (this constant,
+ * meaning "a git mirror working tree" — it is a namespace, not a hash of anything) and **`objid` is
+ * *which* one** (`hashtext` of the resolved working-tree root). Two deployments sharing a database
+ * and mirroring into different trees therefore do not block each other, and two workers pointed at
+ * the same tree do.
+ *
+ * ## The casts are load-bearing
+ *
+ * Postgres offers `pg_advisory_lock(int8)` and `pg_advisory_lock(int4, int4)` and nothing in
+ * between. Prisma binds a JS number as `bigint`, so the natural spelling asks for
+ * `pg_advisory_lock(bigint, integer)` and fails at runtime with `42883 — function … does not
+ * exist`, having type-checked, built and passed every test that does not take the lock. Both
+ * arguments are therefore cast in the SQL: `::int4` on the namespace, and `hashtext` already
+ * returns `int4`. Written out so the two-argument overload is chosen by this file rather than by
+ * whatever Prisma infers next.
  */
 const MIRROR_LOCK_CLASS = 20260826;
 
@@ -322,7 +350,7 @@ export async function withMirrorLock<T>(
     await holder.$executeRawUnsafe(`SET lock_timeout = ${waitMs}`);
 
     try {
-      await holder.$executeRaw`SELECT pg_advisory_lock(${MIRROR_LOCK_CLASS}, hashtext(${root}))`;
+      await holder.$executeRaw`SELECT pg_advisory_lock(${MIRROR_LOCK_CLASS}::int4, hashtext(${root}))`;
     } catch (error) {
       if (String(error).includes(LOCK_NOT_AVAILABLE)) return { held: false };
       throw error;
@@ -332,7 +360,7 @@ export async function withMirrorLock<T>(
       return { held: true, value: await fn() };
     } finally {
       await holder
-        .$executeRaw`SELECT pg_advisory_unlock(${MIRROR_LOCK_CLASS}, hashtext(${root}))`
+        .$executeRaw`SELECT pg_advisory_unlock(${MIRROR_LOCK_CLASS}::int4, hashtext(${root}))`
         .catch(() => {
           // The disconnect below releases it regardless. Swallowed rather than surfaced because
           // a failure here cannot leave the lock held and must not mask the drain's own error.
