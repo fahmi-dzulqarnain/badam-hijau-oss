@@ -324,17 +324,32 @@ test("a second worker cannot claim a job another worker has already claimed", as
     { timeout: 20_000, maxWait: 20_000 },
   );
 
+  // The claim is raced against the settle window rather than simply awaited, and that is not
+  // impatience: the read-then-write mutant **blocks**, so a bare `await` makes it a five-second
+  // suite timeout — a diagnosis of "something hung" instead of "the claim queued behind a row
+  // another worker holds". This project has the same note about a `kill(pid)` mutant that hung a
+  // test rather than failing it. The claim is still awaited below, after the release, so the
+  // second assertion can say what the mutant actually did.
+  const claim = claimNextJob(config).then((job) => ({ returned: true as const, job }));
   try {
     await settle(); // the UPDATE above holds the row lock
 
-    const stolen = await claimNextJob(config);
-    expect(stolen).toBeNull();
+    const raced = await Promise.race([
+      claim,
+      settle().then(() => ({ returned: false as const, job: null })),
+    ]);
+    expect(
+      raced,
+      "the claim must step over a row another worker holds rather than queue behind it",
+    ).toEqual({ returned: true, job: null });
   } finally {
     release();
     await other;
+    await claim;
   }
 
-  // One claim happened, not two. Under the read-then-write mutant this is 2.
+  // One claim happened, not two. Under the read-then-write mutant this is 2, which is two workers
+  // holding one job.
   expect((await jobs()).map((j) => [j.state, j.attempts])).toEqual([["RUNNING", 1]]);
 });
 
