@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "smoke": "./scripts/smoke.sh",
     "plan:check": "node scripts/check-plan-fences.mjs",
+    "git:worker": "tsx scripts/git-worker.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:reindex": "tsx prisma/reindex.ts"
   },
