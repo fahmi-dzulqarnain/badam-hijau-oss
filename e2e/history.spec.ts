@@ -261,12 +261,18 @@ test("hostile text does not widen the version history, at any width", async ({ p
     title: HOSTILE,
     markdown: `# ${HOSTILE}\n\nOne paragraph.`,
   });
-  // A second version under a different title, so `.ver-renamed` is painted at all — it is only
-  // rendered when a version's title differs from the page's current one.
-  await republishPage(fixture, { markdown: "# Renamed\n\nSecond publish." });
+  await republishPage(fixture, { markdown: "# Second\n\nSecond publish." });
+  // `.ver-renamed` is only painted when a version's title differs from the page's *current*
+  // title, and `republishPage` republishes under the same one — so without this the selector
+  // would not exist and the probe below would throw rather than measure. Written on the
+  // versions and not on the page, so `.ver-page` keeps the 300-character title that the
+  // whole-page measurement above is about.
   await db.pageVersion.updateMany({
     where: { pageId: fixture.id },
-    data: { gitSha: "9f2c1ab4d5e6f70819a2b3c4d5e6f7089a1b2c3d" },
+    data: {
+      title: "An earlier title",
+      gitSha: "9f2c1ab4d5e6f70819a2b3c4d5e6f7089a1b2c3d",
+    },
   });
 
   await signIn(page, "aisyah@example.com");
