@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { removeScratchDirs, scratch } from "../../../tests/setup/scratch";
 import {
   ALLOWED_ENV,
   DEFAULT_LOCAL_TIMEOUT_MS,
@@ -37,23 +37,10 @@ import {
  * literal NUL in `publish.ts` once made `rg` classify a whole module as binary and skip it.
  */
 
-const PROJECT_ROOT = resolve(import.meta.dirname, "../../..");
-const made: string[] = [];
-
-afterEach(async () => {
-  for (const dir of made.splice(0)) await rm(dir, { recursive: true, force: true });
-});
-
-/** A temporary directory, registered for removal, and proved not to be inside this checkout. */
-async function scratch(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `badam-git-${prefix}-`));
-  const real = resolve(dir);
-  if (real === PROJECT_ROOT || real.startsWith(PROJECT_ROOT + "/")) {
-    throw new Error(`Refusing to run git tests inside the project checkout: ${real}`);
-  }
-  made.push(dir);
-  return real;
-}
+// `scratch` moved to `tests/setup/scratch.ts` when Task 6 needed the identical guarantee from
+// `tests/integration/git-worker.test.ts`. Shared rather than copied: a rule implemented in two
+// places is not yet a convention, and this one is "never run git inside the project checkout".
+afterEach(removeScratchDirs);
 
 /** A config whose root is a fresh temporary directory. Timeouts are short so a bug is not a hang. */
 async function config(overrides: Partial<GitConfig> = {}): Promise<GitConfig> {
@@ -371,7 +358,7 @@ test("a space key that is pathspec magic is treated as a filename", async () => 
   const written = await stageWrite(cfg, { spaceKey: ":odd", path: "welcome" }, "x\n");
   expect(written).toEqual({ ok: true, repoPath: ":odd/welcome.md" });
   const staged = await runGit(cfg, ["diff", "--cached", "--name-only", "-z"]);
-  expect(staged.stdout).toBe(":odd/welcome.md ");
+  expect(staged.stdout).toBe(":odd/welcome.md\u0000");
 });
 
 test("a move renames the tracked file, and running it twice is not a failure", async () => {
