@@ -1,7 +1,7 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is under way — Tasks 1–5 of 9 done.**
+is under way — Tasks 1–6 of 9 done.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
 **951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
@@ -52,8 +52,8 @@ Landmines carried in, measured while planning:
 | 3. `GitJob` | ✅ |
 | 4. Enqueue, inside the transactions that already exist | ✅ |
 | 5. The git seam | ✅ |
-| **6. The worker** | **next** |
-| 7. The sha on the page | — |
+| 6. The worker | ✅ |
+| **7. The sha on the page** | **next** |
 | 8. Failures a super admin can see | — |
 | 9. End-to-end and the smoke test | — |
 
@@ -327,6 +327,12 @@ control characters as escapes, never as literals.** A literal NUL is invisible i
 turns one file into a blind spot for the tool you switched to in order to be safe.
 
 When a search must be trustworthy, read the file with Python and count.
+
+**A literal NUL was found in a third file, and this one had been hiding from `rg` for a whole
+task.** `src/lib/git/repo.test.ts` was written with `":odd/welcome.md\0"` as an actual byte, so `rg`
+silently classified that file as binary and skipped it — in a file whose own docstring says control
+characters are escapes here. Third occurrence on this project. **`rg` reporting nothing about a
+file is not evidence the file lacks the thing**; check for the byte itself with Python or Perl.
 
 **`timeout` and `gtimeout` are not installed on this machine**, and a missing wrapper reports its
 own absence as the command's status: three probes in Phase 5 Task 5 returned `exit=127 elapsed=0s`,

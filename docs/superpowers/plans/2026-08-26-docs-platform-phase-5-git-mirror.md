@@ -427,7 +427,7 @@ prevent.
 
 ---
 
-## Task 6: The worker
+## Task 6: The worker ✅
 
 **Files:** `src/lib/git/worker.ts`, `scripts/git-worker.ts`, `package.json` + tests.
 
