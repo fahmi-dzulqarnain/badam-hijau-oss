@@ -6,6 +6,7 @@ import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { Annotation, EditorState as CodeMirrorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { AttachmentDrop } from "@/components/AttachmentDrop";
 import { createSaveScheduler, type SaveScheduler } from "@/lib/editor/scheduler";
 import { saveOutcome, shouldRetry } from "@/lib/editor/save";
 import {
@@ -584,6 +585,28 @@ export function Editor({ page }: { page: EditorPage }) {
     view.dispatch({ changes: change });
   };
 
+  /**
+   * Splices an upload's Markdown reference in at the cursor — or over the current selection,
+   * the same replacement a typed character would make.
+   *
+   * No `FromServer` annotation, unlike `loadTheirs`. This IS an edit the author made, just one
+   * that arrived from a drop or a paste instead of a keystroke, so the update listener has to
+   * treat it as one: it arms `schedulerRef` and `previewRef` exactly as typing does, which is
+   * what lets the *existing* autosave scheduler pick this up. Wiring a second save path in here
+   * instead would leave the two disagreeing about what "dirty" means.
+   */
+  const insertAttachment = (markdown: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+      changes: { from, to, insert: markdown },
+      selection: { anchor: from + markdown.length },
+      scrollIntoView: true,
+    });
+    view.focus();
+  };
+
   const publish = async () => {
     if (publishing.pending) return;
     setPublishing({ pending: true, outcome: null });
@@ -854,10 +877,17 @@ export function Editor({ page }: { page: EditorPage }) {
             </label>
           </div>
           {/*
-            CodeMirror owns everything inside this element. React must never render children
-            into it — the two would fight over the same DOM nodes on the first re-render.
+            Paste, drag or pick a file anywhere over the editing surface. `AttachmentDrop`
+            knows nothing about CodeMirror — `insertAttachment` is the one integration point,
+            and it splices through the view exactly like a keystroke would.
           */}
-          <div className="ed-surface" id="ed-doc" ref={hostRef} />
+          <AttachmentDrop pageId={page.id} onInsert={insertAttachment}>
+            {/*
+              CodeMirror owns everything inside this element. React must never render children
+              into it — the two would fight over the same DOM nodes on the first re-render.
+            */}
+            <div className="ed-surface" id="ed-doc" ref={hostRef} />
+          </AttachmentDrop>
         </section>
 
         <section className="ed-pane" aria-label="Preview">
