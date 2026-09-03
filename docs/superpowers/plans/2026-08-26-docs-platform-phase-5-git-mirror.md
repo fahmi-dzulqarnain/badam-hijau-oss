@@ -431,37 +431,133 @@ prevent.
 
 **Files:** `src/lib/git/worker.ts`, `scripts/git-worker.ts`, `package.json` + tests.
 
-- [ ] **Step 1: Claim a job without two workers taking it**
+- [x] **Step 1: Claim a job without two workers taking it**
 
 `FOR UPDATE SKIP LOCKED`, or a conditional state transition — and whichever it is, the test has to
 **block**: a concurrency test that never blocks is not testing a write predicate. Take the
 advisory lock on the repository too, and prove the second worker waits rather than corrupting the
 tree.
 
-- [ ] **Step 2: Order per page**
+- [x] **Step 2: Order per page**
 
 Two publishes drained out of order leave the mirror older than the sha recorded on the version.
 Assert the ordering property directly, with two queued jobs whose correct outcome is
 distinguishable — the same trap Phase 4's ranking check had to avoid, where the assertion passes
 in either order.
 
-- [ ] **Step 3: Commit, then push, then record**
+- [x] **Step 3: Commit, then push, then record**
 
 Write the sha as soon as the commit exists, so a failed push is retried as a push and not as a
 second commit. Prove it: fail the push, re-run, and assert **one** commit and one sha.
 
-- [ ] **Step 4: Backoff, and a terminal state**
+- [x] **Step 4: Backoff, and a terminal state**
 
 Attempts increment, next attempt moves out, and after the configured ceiling the job is `FAILED`
-rather than retried forever. `DONE` is terminal too. Assert the publish stood throughout — the
+rather than retried for ever. `DONE` is terminal too. Assert the publish stood throughout — the
 spec's central claim is that documentation does not go down because a git host does.
 
-- [ ] **Step 5: `npm run git:worker`**
+- [x] **Step 5: `npm run git:worker`**
 
 Claims, drains, exits, with an exit code an operator can put in a cron. Nonzero when a job ended
 `FAILED`, zero when there was nothing to do.
 
----
+**Step 3 as written is incompatible with this phase's own exit criteria, and the exit criteria
+win.** "Record the sha as soon as the commit exists" and "a publish with the remote unreachable
+leaves `gitSha` null while the job retries" cannot both hold if the sha is written between the
+commit and the push. The plan's sentence turns out to be *unnecessary* rather than merely
+outvoted: nothing needs recording to make the retry idempotent, because Task 5 already built that
+— a retry rewrites byte-identical content, so `git add` stages nothing and `commit()` returns
+`committed: false` with **`sha` = HEAD**, which its docstring says exists for exactly this. So the
+sha is written after the push reports success, including the no-remote case (§19), where the local
+repository *is* the mirror. Recording early would also defeat the property it was meant to
+protect: a sha painted on a page for a commit that exists on one server's disk and on no remote is
+a broken mirror that is **not** noticed, which is the failure §10 is about.
+
+**The claim's observable is a skip, not a block, and the blocking half is the tree lock.** With
+`FOR UPDATE SKIP LOCKED` the correct behaviour when another worker holds the row is to return
+immediately, so "the test must block" cannot be a property of the claim. Two tests, and they kill
+different mutants: the claim test stages the row lock and races the claim against the settle
+window — the read-then-write mutant (`SELECT` the id, then `UPDATE … WHERE id = $1`) *blocks*, and
+without the race it turned into a five-second suite timeout rather than a named failure, the same
+shape as the `kill(pid)` mutant that hung a Task 5 test. Dropping `SKIP LOCKED` alone is an
+**equivalent** mutant for correctness and is reported rather than tested for: the second worker
+blocks, then re-evaluates `state = 'PENDING'` against the committed row version and matches
+nothing. The genuinely blocking test is the working tree, which is the exit criterion that needed
+one: a competing session holds the advisory lock, the drain is started, and the mid-flight
+assertions say **nothing** has happened — not even a `.git` directory — until the release lets it
+finish.
+
+**The tree lock needs its own client, and the reason is the rule against holding a transaction
+open.** A session advisory lock belongs to a connection and Prisma pins one only inside an
+interactive transaction — which is precisely what may not span a sixty-second push. So the lock
+lives on a `PrismaClient` with `connection_limit=1`; measured, two statements on such a client
+report the same `pg_backend_pid()`. The consequence is the good half: a session lock dies with its
+session, so **a worker that is killed cannot leave the tree locked** — no lease, no stale lock
+file. And two arguments rather than one, because the page mutations already take
+`pg_advisory_xact_lock(hashtext(spaceId))`: measured, Postgres records the one-argument form with
+`objsubid = 1` and the two-argument form with `objsubid = 2`, so the two key spaces cannot
+collide. Both arguments are cast in the SQL — Prisma binds a JS number as `bigint`, and
+`pg_advisory_lock(bigint, integer)` is not an overload Postgres has; it type-checked, built and
+passed every test that never took the lock, then answered `42883` the first time the script ran.
+
+**`@@index([pageId, id])` does not close the whole ordering hazard, and the correction matters.**
+The barrier is a `NOT EXISTS` evaluated in the claim's own snapshot, and the inversion Task 3
+measured is exactly a row that **is not yet committed** — invisible, so the clause is trivially
+true and the later job is claimed anyway. What the barrier does close is every case where both
+rows are visible, which is the common one: a job backing off while a later job for the same page
+is due now would otherwise be drained first by `ORDER BY "nextAttemptAt"`. Closing the rest needs a
+visibility fence (claiming only rows older than `pg_snapshot_xmin(pg_current_snapshot())`), whose
+cost is that any long transaction anywhere stalls the whole mirror — a worse failure than the one
+it prevents. So the residual is made **noticed** instead: the claim also reports whether a job with
+a higher id for the same page has already reached `DONE`, and such a job is failed with a message
+saying so rather than applied. In normal draining it is always false.
+
+**A `FAILED` job blocks its own page and no other.** "Unfinished" in the barrier is `state <>
+'DONE'`, so `FAILED` blocks too. Stepping over it applies job 3 without job 2 — an orphan file at
+an old path beside a fresh one at the new, with every job reporting success — which is the silent
+wrong tree §10 exists to prevent. The cost is that one bad job freezes that page until someone
+intervenes, which is what Task 8 is for. Both halves are asserted in one test, because from a
+single-page fixture "blocked the page" and "wedged the worker" are indistinguishable.
+
+**A `MOVE` whose source is not in the tree is a success that did nothing.** Reachable by the
+ordinary route rather than an exotic one: every version published before this phase has no
+mirrored file (the plan's own "backfilling history" non-goal), so the first move of any such page
+renames a path the tree has never held. Failing it would fill Task 8's page with jobs no operator
+can clear, because a `MOVE` carries `versionId: null` by design and there are no bytes to write.
+Repairing it would need those bytes from a `PageVersion` **joined at drain time**, which is the
+join Task 4's capture rule forbids by name — and which would mirror whatever the page's *current*
+published version is, not the version the job is about. The no-op converges instead: the address
+is captured per job, so the page's next `PUBLISH` writes at the path it holds by then, and the
+test asserts that convergence rather than only the absence.
+
+**Stale `RUNNING` is a reclaim keyed on `updatedAt`, and the lease is the second line of the
+argument rather than the first.** The reclaim runs under the tree lock, and nothing claims without
+holding it — so a `RUNNING` row seen from inside the lock belongs to a worker that no longer holds
+a *session* lock, which means a process that no longer exists. The lease (ten minutes) covers only
+the residue: a live worker whose lock session dropped under it. If that happens the job runs twice,
+both runs write the same bytes, the second finds a clean index, and the visible cost is a duplicate
+push that git answers `Everything up-to-date`. The abandoned worker's late finish writes **nothing**,
+because the finish predicate is `state = 'RUNNING' AND attempts = <this claim's value>` — `attempts`
+is the fencing token. And the reclaim applies the **attempt ceiling** itself, which closes a loop the
+plan did not name: a job that kills the worker every time never reaches the code that writes
+`FAILED`, so a reclaim that only ever wrote `PENDING` would re-run it for ever while `attempts`
+climbed past the ceiling unwatched.
+
+**`MOVE`, `DELETE` and `RESTORE` are committed by the service, not by the last publisher.** Only a
+`PUBLISH` names the row whose author published those bytes; a `GitJob` captures no actor for the
+other three, and `AuditLog` is what records who moved or deleted a page. Attributing a move to
+whoever last published it would be a false statement about a named person in a permanent record —
+and Task 5 measured why that is not cosmetic: the author email is the field a git host matches to
+an account. Capturing the actor would be a column on `GitJob`, which is Task 4's file.
+
+**Two smaller findings from writing the tests.** `already-applied` was overwriting the seam's more
+specific reason for an empty index: a `MOVE` with no source and a `DELETE` with no target also
+reach a clean index, and those are different facts about the tree from "this had already been
+done", wanting different answers from an operator. And `src/lib/pages/visible.test.ts`'s sweep was
+too narrow for the **sixth** time — both alternatives are anchored on the names `db` and `tx`, so
+the worker's one-connection lock client (called `holder`) was invisible to it; the module would have
+been registered *by accident* because it also makes ordinary `db.` calls. The sweep now names
+`new PrismaClient` as well, which closes the category and pulls `src/lib/db.ts` into the registry.
 
 ## Task 7: The sha on the page
 
