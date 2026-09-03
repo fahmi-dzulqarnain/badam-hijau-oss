@@ -19,6 +19,14 @@ import { BUILD_LABEL, CONTENT_COMMIT_LABEL, NOT_MIRRORED } from "@/lib/version/l
  *
  * `e2e/history.spec.ts` carries the same assertions against a real page, for when the browsers
  * are there.
+ *
+ * **One caveat, measured rather than assumed.** `renderToStaticMarkup` emits no hydration
+ * markers, where a real Next render inserts `<!-- -->` between adjacent text children — the
+ * shipped HTML for the rail foot is `Build<!-- --> <!-- -->0.1.0+df0ef11`. So an adjacency
+ * assertion here is about the element tree and not about the byte sequence a browser receives;
+ * `textContent` (and therefore Playwright's `toContainText`) ignores the comments, which is why
+ * the e2e assertions are written against visible text. Verified by driving a real `next start`
+ * against the test database — see the task record.
  */
 
 const SHA = "9f2c1ab4d5e6f70819a2b3c4d5e6f7089a1b2c3d";

@@ -30,12 +30,16 @@ import { VersionHistory } from "@/components/VersionHistory";
  * this codebase have relied on that since Phase 2 — `-/deleted`, `-/adrs` and `-/rfcs` — and the
  * only thing new here is that the reserved segment is followed by a catch-all of its own.
  *
- * Checked rather than assumed, because the assumption is the interesting half: the build's route
- * manifest was read for the two regexes, and a real `next start` was driven at both URLs. The
- * measurement is in the task record. Two things make it safe by construction rather than by
- * luck: no page path can begin with `-`, so nothing a person creates can even reach the
- * ambiguity; and if precedence ever inverted, the catch-all route would answer with a 404 rather
- * than with someone else's page, because there is no page at the path `-/history/…` to find.
+ * Checked rather than assumed, because the assumption is the interesting half. `next build`'s
+ * `routes-manifest.json` lists `^/([^/]+?)/\-/history/(.+?)(?:/)?$` **before**
+ * `^/([^/]+?)/(.+?)(?:/)?$`, and a real `next start` driven against the test database answered
+ * `/probe/-/history/a/b` with this page (200, `<h1>Version history</h1>`) while
+ * `/probe/-/history/no/such` answered 404 — which is what a catch-all match would have given for
+ * both, since no page has a path beginning `-/`.
+ *
+ * Two things make it safe by construction rather than by luck: no page path can begin with `-`,
+ * so nothing a person creates can even reach the ambiguity; and if precedence ever inverted, the
+ * catch-all would answer with a 404 rather than with someone else's page, for the same reason.
  *
  * ## No `resolveRedirect`
  *
