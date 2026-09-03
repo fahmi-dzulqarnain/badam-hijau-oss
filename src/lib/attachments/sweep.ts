@@ -135,6 +135,13 @@ async function sweepExpired(
   return rows.length;
 }
 
+/**
+ * Every shard `driveKeyFor` can produce: `00` through `ff`. Written out rather than derived at
+ * each call, and kept beside the pass that walks it so the coupling to `policy.ts`'s two-hex
+ * shard is visible from here.
+ */
+const SHARDS = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+
 async function sweepOrphans(
   store: BlobStore,
   deleteOrphans: boolean,
@@ -148,24 +155,26 @@ async function sweepOrphans(
     (await db.attachment.findMany({ select: { drivePath: true } })).map((row) => row.drivePath),
   );
 
-  // `store.list("")` — ONE call with an empty prefix — rather than iterating the 256 shard
-  // prefixes `driveKeyFor` (policy.ts) hashes ids into. That scheme is deliberately not
-  // load-bearing here: it exists purely to keep a SharePoint folder under its view-count
-  // threshold, not to promise this sweep that every drive item lives under a two-hex-digit
-  // folder. `attachment-sweep.test.ts` proves the point by writing its orphan fixture to
-  // "zz/nosuchrow.png" — outside that range on purpose — and a sweep that only checked
-  // "00".."ff" would silently miss it.
+  // Iterated over the 256 shard folders `driveKeyFor` hashes ids into, rather than one call
+  // with an empty prefix.
   //
-  // This is honest about what it does NOT yet handle for the real Graph store:
-  // `GraphBlobStore#list` is "one folder deep" (its own comment), so a call with an empty
-  // prefix lists the DRIVE ROOT's children — which, given the shard layout, are the shard
-  // folders themselves, not the files inside them. Recursing into each shard folder against a
-  // real tenant is follow-up work this task does not implement or test; nothing in the given
-  // suite exercises `GraphBlobStore`, and guessing at untested recursion here would be worse
-  // than leaving the gap visible. See this task's report for the same note.
+  // The empty-prefix form worked against `MemoryBlobStore`, whose `list` is a `startsWith`
+  // over a flat Map, and could never have worked against the real one: `GraphBlobStore#list`
+  // is one folder deep by its own comment, so an empty prefix lists the drive root's
+  // children — which, under this layout, are the shard folders themselves and not a single
+  // file. The orphan pass would have reported nothing, forever, against a real tenant, while
+  // passing its tests.
+  //
+  // Enumerating the shards is safe precisely because the key space is OURS: every key this
+  // system writes comes from `driveKeyFor`, which is `{2 lowercase hex}/{id}.{ext}`, and the
+  // dev upload route validates against that same shape. A file outside that range was not put
+  // there by this application, and deleting it is not this sweep's business. 256 listings per
+  // run is nothing for a job that runs on a cron.
   const orphans: string[] = [];
-  for await (const { key } of store.list("")) {
-    if (!known.has(key)) orphans.push(key);
+  for (const shard of SHARDS) {
+    for await (const { key } of store.list(`${shard}/`)) {
+      if (!known.has(key)) orphans.push(key);
+    }
   }
 
   if (deleteOrphans && !dryRun) {

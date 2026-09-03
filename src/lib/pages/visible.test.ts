@@ -86,6 +86,16 @@ type Registration =
   | { reachesPage: false; why: string };
 
 const MODULES: Record<string, Registration> = {
+  "src/lib/attachments/sweep.ts": {
+    reachesPage: false,
+    why:
+      "Queries `Attachment` alone, by its own `state`, `deletedAt` and `createdAt`. No `Page` " +
+      "row is read, selected or filtered — not through a delegate and not through a relation " +
+      "filter, which is the shape this guard was widened for the fourth time. Its deletes are " +
+      "never conditioned on page visibility, deliberately: retention is not a permission " +
+      "question, and `readableAttachment` in repo.ts is what is registered for the read path " +
+      "that IS one.",
+  },
   "src/lib/attachments/repo.ts": {
     load: () => import("@/lib/attachments/repo"),
     // Soft-delete tests: tests/integration/attachments-repo.test.ts —

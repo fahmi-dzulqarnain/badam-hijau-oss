@@ -59,19 +59,24 @@ test("a COMMITTED, undeleted row is NEVER touched, whatever its age", async () =
 test("an orphaned drive item is REPORTED and not deleted by default", async () => {
   // A sweep bug that reports is a nuisance; one that deletes is data loss. The default has
   // to be the recoverable one.
+  //
+  // The key sits in a REAL shard (`a3`), not a made-up one. An earlier version used `zz` to
+  // prove the pass was prefix-agnostic — but prefix-agnostic is exactly what cannot work
+  // against Graph, whose `list` is one folder deep, so that fixture pinned a behaviour that
+  // would have reported nothing forever against a real tenant.
   await cast({ visibility: "MEMBERS", published: true });
-  await memoryStore().put("zz/nosuchrow.png", new Uint8Array(1));
+  await memoryStore().put("a3/nosuchrow.png", new Uint8Array(1));
 
-  expect((await sweep()).orphans).toEqual(["zz/nosuchrow.png"]);
-  expect(await memoryStore().stat("zz/nosuchrow.png")).not.toBeNull();
+  expect((await sweep()).orphans).toEqual(["a3/nosuchrow.png"]);
+  expect(await memoryStore().stat("a3/nosuchrow.png")).not.toBeNull();
 });
 
 test("orphans are deleted only when explicitly asked", async () => {
   await cast({ visibility: "MEMBERS", published: true });
-  await memoryStore().put("zz/nosuchrow.png", new Uint8Array(1));
+  await memoryStore().put("a3/nosuchrow.png", new Uint8Array(1));
 
   await sweep({ deleteOrphans: true });
-  expect(await memoryStore().stat("zz/nosuchrow.png")).toBeNull();
+  expect(await memoryStore().stat("a3/nosuchrow.png")).toBeNull();
 });
 
 test("an item belonging to a live row is not an orphan", async () => {
