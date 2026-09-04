@@ -130,6 +130,17 @@ async function snapshot(pageId: string) {
       select: { id: true, toId: true, type: true, createdAt: true },
       orderBy: [{ type: "asc" }, { toId: "asc" }],
     }),
+    // Phase 7 Task 2. Widened here rather than only asserted in the new tests, for the reason
+    // the count contract has now been too narrow eight times on this project: every atomicity
+    // assertion in this file compares a whole snapshot precisely so that a half-commit fails in
+    // whichever half nobody looked at, and until this line existed a `PageSystem` row written by
+    // a publish that then rolled back was in exactly that blind spot. The system **key**, not
+    // the id, so a failure message names the system rather than a cuid.
+    systems: await db.pageSystem.findMany({
+      where: { pageId },
+      select: { system: { select: { key: true } } },
+      orderBy: { systemId: "asc" },
+    }),
   };
 }
 
@@ -195,6 +206,41 @@ async function redeclaring(viewer: Viewer, pageId: string, yaml: string | null):
   });
   if (!saved.ok) throw new Error(`expected a fresh draft, got ${JSON.stringify(saved)}`);
   return markdown;
+}
+
+/**
+ * Systems in the catalogue, for a page to declare — Phase 7 Task 2.
+ *
+ * `resetDb` truncates every table, `System` included, so a test that declares a system has to put
+ * it there. Named after the seven §7 systems `prisma/seed.ts` creates rather than inventing keys,
+ * so a fixture cannot pass on a key the product does not have — and `key` is the only column
+ * these tests bind to, which is the one column `prisma/seed.ts`'s `update: {}` can never leave
+ * stale.
+ */
+async function catalogue(
+  systems: readonly { key: string; isActive?: boolean }[],
+): Promise<void> {
+  for (const [index, system] of systems.entries()) {
+    await db.system.create({
+      data: {
+        key: system.key,
+        // Distinguishable from the key, so a resolution that read `name` where it meant `key`
+        // fails here rather than passing on a fixture whose fields all agree.
+        name: `System ${index + 1} (${system.key})`,
+        kind: "SERVICE",
+        isActive: system.isActive ?? true,
+      },
+    });
+  }
+}
+
+/** The `PageSystem` rows for a page, as system keys, sorted so the assertion is order-free. */
+async function systemsOf(pageId: string): Promise<string[]> {
+  const rows = await db.pageSystem.findMany({
+    where: { pageId },
+    select: { system: { select: { key: true } } },
+  });
+  return rows.map((row) => row.system.key).sort();
 }
 
 /** The relation rows leaving a page, as `type → target path` pairs. */
@@ -956,6 +1002,9 @@ test("two concurrent publishes produce exactly one version", async () => {
  */
 test("the version stores validated frontmatter, which is not what the draft held", async () => {
   const { space, page, aisyah, asAisyah, parent } = await fixture({ docType: "ADR" });
+  // Phase 7 Task 2 made an unresolvable `systems:` key a refusal, so this fixture's `order-hub`
+  // now has to be in the catalogue. The key is unchanged: it was already a real §7 system.
+  await catalogue([{ key: "order-hub" }]);
   const superseded = await otherPage({
     spaceId: space.id,
     createdById: aisyah.id,
@@ -2138,4 +2187,295 @@ test("a document with no frontmatter publishes, and its version records that", a
     relations: { SUPERSEDES: [], DECIDES: [], AMENDS: [], RELATES_TO: [] },
   });
   expect(await relationsOf(page.id)).toEqual([]);
+});
+
+/**
+ * ## `systems:` — spec §9 step 3's other half (Phase 7 Task 2)
+ *
+ * Phase 3 accepted the key and deferred validating it, recording the failure it was deferring:
+ * *"the author writes their systems, publish drops them, and the page ships with an empty facet."*
+ * These tests are that sentence's negation from both sides — the declaration reaches a row, and a
+ * key that reaches no row refuses the publish instead of vanishing.
+ *
+ * The corpus was measured before the rule was chosen (see `src/lib/systems/resolve.ts`): no
+ * seeded page and no dev-database version declares a system at all, so the strict rule migrates
+ * nothing. `resetDb` truncates `System` with everything else, so every test here states its own
+ * catalogue through `catalogue()` — which also means a test cannot pass on a key the product does
+ * not have.
+ */
+
+/**
+ * The non-vacuity companion for every refusal below, and the exit criterion in one assertion:
+ * a page's declared keys reach `PageSystem` rows.
+ *
+ * Kills the Phase 3 behaviour outright — with `replaceSystems` never called, the version still
+ * stores `systems: ["order-hub", "store-ios"]` and the join stays empty, which is precisely the
+ * "page ships with an empty facet" state, and it is invisible to any assertion that only reads
+ * the `frontmatter` column. So both are asserted: what validation accepted, and what the
+ * database now holds.
+ */
+test("a page's declared systems reach PageSystem rows", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }, { key: "store-ios" }, { key: "display-ios" }]);
+  await declaring(page.id, "systems: [order-hub, store-ios]");
+
+  const result = published(await publishPage(asAisyah, page.id));
+
+  expect(await systemsOf(page.id)).toEqual(["order-hub", "store-ios"]);
+  const version = await db.pageVersion.findUniqueOrThrow({ where: { id: result.versionId } });
+  expect(version.frontmatter).toMatchObject({ systems: ["order-hub", "store-ios"] });
+  // The third catalogue row is the discrimination: a resolution that ignored the declared list
+  // and wrote every system would satisfy the two assertions above on a one-system catalogue.
+  expect(await db.pageSystem.count()).toBe(2);
+});
+
+/**
+ * Re-resolution, not accumulation — the property Task 1 chose a composite primary key partly to
+ * serve, and the one a naive `createMany`-only implementation fails.
+ *
+ * Three publishes, because two are not enough to tell the mechanisms apart: the second one
+ * **swaps** a system (so a row must appear and a row must go), and the third declares nothing at
+ * all (so the `deleteMany` has to run with an empty insert behind it — the case an
+ * `if (systemIds.length > 0)` around the whole function would break, and the case that is every
+ * page with an untouched template `systems:`).
+ *
+ * Kills insert-only: after the second publish the page would hold three systems, and after the
+ * third it would still hold three.
+ */
+test("republishing re-resolves systems rather than accumulating them", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }, { key: "store-ios" }, { key: "backend" }]);
+
+  await declaring(page.id, "systems: [order-hub, store-ios]");
+  published(await publishPage(asAisyah, page.id));
+  expect(await systemsOf(page.id)).toEqual(["order-hub", "store-ios"]);
+
+  // `store-ios` goes, `backend` arrives, `order-hub` stays.
+  await redeclaring(asAisyah, page.id, "systems: [order-hub, backend]");
+  published(await publishPage(asAisyah, page.id));
+  expect(await systemsOf(page.id)).toEqual(["backend", "order-hub"]);
+
+  // And the empty case, which is where "declared nothing" has to mean "no rows" rather than
+  // "leave the rows alone".
+  await redeclaring(asAisyah, page.id, "systems:");
+  published(await publishPage(asAisyah, page.id));
+  expect(await systemsOf(page.id)).toEqual([]);
+  expect(await db.pageSystem.count()).toBe(0);
+});
+
+/**
+ * The refusal, and the whole snapshot with it.
+ *
+ * A test that only checked the message would pass against a transaction that inserted the version
+ * and then refused, which is why every refusal path in this file compares `snapshot()` — now
+ * widened to carry the `PageSystem` rows, so "nothing was written" includes the rows this task
+ * introduced.
+ *
+ * The refusal is placed on `markdown` with `key: "systems"`, which is what
+ * `src/lib/editor/publish.ts` turns into a control that scrolls to and selects the offending
+ * line — the mechanism Phase 3 shipped for the supersede-cycle refusal, reused rather than
+ * reinvented.
+ */
+test("an unknown system key refuses the publish, and nothing is written", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }, { key: "store-ios" }]);
+  await declaring(page.id, "systems: [hubcore]");
+  // After the draft is written, so the comparison is against the state the publish was asked to
+  // change and the draft's own text is not the difference.
+  const before = await snapshot(page.id);
+
+  const error = rejection(await publishPage(asAisyah, page.id));
+
+  expect(error.code).toBe("unknown-system");
+  expect(error.field).toBe("markdown");
+  // The key the editor's line finder looks for. `frontmatterKeyLine` searches for `^systems:`,
+  // so a refusal carrying `null` here — or carrying the offending *system* key instead of the
+  // *frontmatter* key — would land the author on no line at all.
+  expect(error.key).toBe("systems");
+  expect(error.message).toContain("`hubcore` is not a system in the catalogue");
+  // The catalogue is listed in the message, so the fix is available where the complaint is.
+  expect(error.message).toContain("order-hub, store-ios");
+  expect(error.message).toContain("refused rather than ignored");
+
+  expect(await snapshot(page.id)).toEqual(before);
+  expect(await db.pageSystem.count()).toBe(0);
+  expect(await db.auditLog.count()).toBe(0);
+  expect(await db.gitJob.count()).toBe(0);
+});
+
+/**
+ * Every unresolved key in one refusal, and the known ones are not quietly written.
+ *
+ * Two properties in one test because they are one behaviour: the author wrote one line and fixes
+ * it once, so a mixed list must not report `hubcore` and then make them publish again to hear
+ * about `mqtt-broker` — and it must not resolve `order-hub` into a row on the way past, which is
+ * the "partially applied" shape a `continue` instead of a refusal would produce.
+ */
+test("a mixed system list reports every unknown key at once, and writes none of them", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }]);
+  await declaring(page.id, "systems: [order-hub, hubcore, mqtt-broker]");
+
+  const result = await publishPage(asAisyah, page.id);
+  const error = rejection(result);
+
+  expect(error.message).toContain("`hubcore`");
+  expect(error.message).toContain("`mqtt-broker`");
+  expect(error.message).not.toContain("`order-hub`, `hubcore`");
+  // One error, not one per key: `systems:` is a single key with a single fix, so a 200-entry
+  // list cannot become 200 messages.
+  if (result.ok || result.reason !== "invalid") throw new Error("expected a field error");
+  expect(result.errors).toHaveLength(1);
+
+  expect(await db.pageSystem.count()).toBe(0);
+  expect(await db.pageVersion.count()).toBe(0);
+});
+
+/**
+ * Case is folded, and this is the decision's test rather than its documentation.
+ *
+ * Task 1's `systems_key_shape` CHECK makes `System.key` lowercase-only, so `Order-Hub` cannot
+ * match a row as typed — the alternative was refusing it, and folding was chosen because on a
+ * lowercase-only column `@unique` is folded uniqueness and there is nothing to disambiguate.
+ *
+ * Kills dropping the fold: the publish would be refused with "`Order-Hub` is not a system". Note
+ * that the message would quote the folded form, which is why the assertion below is on the row
+ * and not on a sentence.
+ */
+test("the author's system key is matched case-insensitively", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }]);
+  await declaring(page.id, "systems: [Order-Hub]");
+
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await systemsOf(page.id)).toEqual(["order-hub"]);
+});
+
+/**
+ * Duplicates are collapsed, in the two shapes that need different mechanisms.
+ *
+ * `[order-hub, order-hub]` is caught by any `Set`; `[Order-Hub, order-hub]` is caught only by a `Set`
+ * built **after** the fold, which is the ordering the module states and this pins. An author who
+ * lists a system twice is not making a mistake worth refusing.
+ *
+ * Kills removing the dedupe: `replaceSystems` deliberately passes no `skipDuplicates`, so the
+ * insert dies on `@@id([pageId, systemId])` and this test fails as a unique violation rather
+ * than passing on `ON CONFLICT DO NOTHING` — which is the difference between testing the dedupe
+ * and testing Postgres.
+ */
+test("a system declared twice is one row, whatever the case", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }, { key: "store-ios" }]);
+
+  await declaring(page.id, "systems: [order-hub, order-hub]");
+  published(await publishPage(asAisyah, page.id));
+  expect(await systemsOf(page.id)).toEqual(["order-hub"]);
+
+  await redeclaring(asAisyah, page.id, "systems: [Order-Hub, order-hub, store-ios]");
+  published(await publishPage(asAisyah, page.id));
+  expect(await systemsOf(page.id)).toEqual(["order-hub", "store-ios"]);
+  expect(await db.pageSystem.count()).toBe(2);
+});
+
+/**
+ * A sunsetting system may be declared, which is the decision `kiosk-bridge` exists in the
+ * seeded corpus to make reachable.
+ *
+ * The argument is in `src/lib/systems/resolve.ts`: `isActive` is a catalogue state (§7's "active
+ * or sunsetting") and not an authoring gate, and the documents that most need the facet are the
+ * ones written *about* a retirement — a decommissioning runbook would be the one page that could
+ * not be published. Filtering on it here would also mean an admin flipping one boolean silently
+ * makes pages in spaces they never looked at unpublishable, which is a permission-shaped
+ * consequence on a table §7 says carries no permissions.
+ *
+ * Kills adding `isActive: true` to the lookup: the publish is refused, and the message says the
+ * system is not in the catalogue — which would be a lie, since it is right there with a `false`.
+ * The active system beside it is the non-vacuity companion: both resolve, so a resolution that
+ * had stopped working altogether fails here too.
+ */
+test("a page may declare a sunsetting system", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }, { key: "kiosk-bridge", isActive: false }]);
+  await declaring(page.id, "systems: [kiosk-bridge, order-hub]");
+
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await systemsOf(page.id)).toEqual(["kiosk-bridge", "order-hub"]);
+});
+
+/**
+ * A page with no frontmatter writes no facet, and the catalogue is untouched.
+ *
+ * The companion to the empty-declaration case in the re-resolution test above, from the other
+ * direction: `ValidatedFrontmatter.systems` is `[]` for a document that never mentions the key,
+ * so the two inputs are the same value and neither can mean "leave the rows alone".
+ *
+ * It also pins that resolution does not *touch* `System`: a page publishing is not a reason for a
+ * catalogue row to appear, and Task 5 is the only thing that may write one.
+ */
+test("a document that declares no systems writes no facet rows", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }]);
+  await declaring(page.id, null);
+
+  published(await publishPage(asAisyah, page.id));
+
+  expect(await systemsOf(page.id)).toEqual([]);
+  expect(await db.system.count()).toBe(1);
+});
+
+/**
+ * A soft delete landing mid-publish takes the facet rows with it.
+ *
+ * `replaceSystems` carries no `visiblePage()` — argued in full there, and registered as
+ * `reachesPage: false` in `src/lib/pages/visible.test.ts` — so the only thing standing between a
+ * deleted page and a `PageSystem` row is the write predicate on the `Page` `updateMany` above the
+ * call. This is the assertion that the absence is safe rather than merely explained: the
+ * interleaving is staged with a held row lock, exactly as the sibling test for the version row
+ * does, because a filter (or its absence) on a write is invisible to any test that cannot arrange
+ * for the row to change underneath it.
+ *
+ * Kills moving `replaceSystems` outside the transaction, or onto `db`: the rows would survive a
+ * publish that rolled back, and the page's own text would then disagree with `/systems/[key]`
+ * permanently — the state Task 1 refused `onDelete: Cascade` for.
+ */
+test("a soft delete landing mid-publish rolls the facet rows back too", async () => {
+  const { page, asAisyah } = await fixture();
+  await catalogue([{ key: "order-hub" }]);
+  await declaring(page.id, "systems: [order-hub]");
+  const before = await snapshot(page.id);
+
+  let release = (): void => {};
+  const held = new Promise<void>((done) => {
+    release = done;
+  });
+
+  // The competing soft delete: it takes the page's row lock and holds it while the publish
+  // resolves everything against a snapshot in which the page is still live.
+  const deleting = db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`
+        UPDATE "Page"
+           SET "deletedAt" = now()
+         WHERE "id" = ${page.id}`;
+      await held;
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
+
+  await settle(); // the UPDATE holds the row lock
+  const racing = publishPage(asAisyah, page.id);
+  await settle();
+  await settle();
+
+  release();
+  await deleting;
+
+  expect(await racing).toEqual({ ok: false, reason: "not-found" });
+  expect(await snapshot(page.id)).toEqual(before);
+  expect(await db.pageSystem.count()).toBe(0);
+  // Nothing about this publish should have disturbed the catalogue, which is the only table here
+  // with no cascade back to `Page`.
+  expect(await db.system.count()).toBe(1);
 });

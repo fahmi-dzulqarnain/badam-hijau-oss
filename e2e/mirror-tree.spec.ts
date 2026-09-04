@@ -267,7 +267,13 @@ test("a publish is mirrored as a file that parses back to the version, and the r
   const fixture = await seedPublishedPage({
     slug: "e2e-tree-publish",
     title: "Mirrored topic registry",
-    markdown: "---\nsystems:\n  - mqtt-broker\n---\n\nThe body the mirror has to carry.\n",
+    // `order-hub`, one of the seven systems the seed creates. Phase 7 Task 2 made an
+    // unresolvable `systems:` key refuse the publish, so the invented `mqtt-broker` this
+    // fixture carried while nothing validated it would now fail `seedPublishedPage` outright.
+    // The dev database this suite runs against has the catalogue seeded, so no fixture row is
+    // needed — and the publish now also writes a `PageSystem` row, which `sweep()` removes by
+    // cascade from `Page`. That is what the `pageSystems` column in `snapshotCounts` is for.
+    markdown: "---\nsystems:\n  - order-hub\n---\n\nThe body the mirror has to carry.\n",
   });
 
   await drain({ root, remoteUrl: remote }, "1 done, 0 retrying, 0 failed");
@@ -292,7 +298,7 @@ test("a publish is mirrored as a file that parses back to the version, and the r
     publishedAt: version.createdAt.toISOString(),
     /*
      * **`declared` is the `frontmatter` column, and asserting it against a literal was wrong.**
-     * Written first as `{ systems: ["mqtt-broker"] }` — the document's own text — this failed with
+     * Written first as `{ systems: ["order-hub"] }` — the document's own text — this failed with
      * `relations: { AMENDS: [], DECIDES: [], RELATES_TO: [], SUPERSEDES: [] }` and `status: null`
      * beside it, because the column holds what **validation accepted**, normalised buckets and
      * all, which is the value this phase decided to mirror rather than the author's text. So the
@@ -302,7 +308,7 @@ test("a publish is mirrored as a file that parses back to the version, and the r
     declared: version.frontmatter,
   });
   // The non-vacuity companion for that line: an empty `declared` on both sides would satisfy it.
-  expect(parsed.frontmatter.declared).toMatchObject({ systems: ["mqtt-broker"] });
+  expect(parsed.frontmatter.declared).toMatchObject({ systems: ["order-hub"] });
   // The stored body, byte for byte — the author's own blank line after their frontmatter
   // included, which is the property `mirrorDocumentOf` gives up a separator line to keep.
   expect(parsed.body).toBe("\nThe body the mirror has to carry.\n");

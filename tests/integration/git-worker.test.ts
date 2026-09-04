@@ -211,10 +211,18 @@ test("a publish drains to one commit whose file parses back to the version row",
   const { viewer, page } = await fixture();
   const config = await workerConfig();
   const target = await page(null, "topic-registry", "Topic registry");
+  // Phase 7 Task 2 made an unresolvable `systems:` key refuse the publish, so the declaration
+  // this test mirrors has to name a system that exists. `resetDb` truncates `System` with
+  // everything else, so the row is created here — and the key is one of the seven §7 systems
+  // rather than the invented `mqtt-broker` this fixture used while nothing validated it, so it
+  // cannot pass on a key the product does not have.
+  await db.system.create({
+    data: { key: "order-hub", name: "Order hub", kind: "LIBRARY" },
+  });
   const versionId = await publish(
     viewer,
     target.id,
-    "---\nsystems:\n  - mqtt-broker\n---\n\nThe body.\n",
+    "---\nsystems:\n  - order-hub\n---\n\nThe body.\n",
   );
 
   const report = await drainMirrorJobs(config);
@@ -242,7 +250,7 @@ test("a publish drains to one commit whose file parses back to the version row",
     docType: "DOC",
     version: versionId,
     author: { name: "Aisyah R.", email: "aisyah@example.com" },
-    declared: { systems: ["mqtt-broker"] },
+    declared: { systems: ["order-hub"] },
   });
   expect(parsed.body).toBe("\nThe body.\n");
 

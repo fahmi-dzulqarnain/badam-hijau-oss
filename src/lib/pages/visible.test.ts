@@ -471,6 +471,26 @@ const MODULES: Record<string, Registration> = {
       "row, which is not a read: it returns no column and applies no predicate, and the row it " +
       "names is the row the caller has already authorised and written.",
   },
+  "src/lib/systems/resolve.ts": {
+    reachesPage: false,
+    why:
+      "reads System and writes PageSystem, and reaches no Page row — Phase 7 Task 2. Three " +
+      "statements: one `tx.system.findMany` on `key`, plus a `tx.system.findMany` for the " +
+      "catalogue listing on the refusal path, and `tx.pageSystem.deleteMany`/`createMany` keyed " +
+      "on the `pageId` its caller passes in. No `Page` row is read, selected or filtered — not " +
+      "through a delegate and not through a `page:` relation filter, which is the shape this " +
+      "guard was widened for the fourth time. The page id is never looked up: `publishPage` has " +
+      "already authorised that row under `visiblePage({ space: readableSpace(viewer) })` and " +
+      "locked it, and a `visiblePage()` restated on these writes would be the `resolveRedirect` " +
+      "mistake — a predicate stated twice with neither copy testable. That absence is also why " +
+      "a soft delete arriving mid-publish still rolls these rows back: the predicate lives on " +
+      "the `Page` `updateMany` above the call, whose zero row count throws. Same registration " +
+      "and same argument as `src/lib/git/enqueue.ts`, including the FK `KEY SHARE` locks the " +
+      "insert takes on the `Page` and `System` rows — which are not reads: they return no " +
+      "column and apply no predicate. `System` itself has no `deletedAt`, no `spaceId` and no " +
+      "`visibility` (spec §7: systems carry no permissions of their own), so there is no " +
+      "permission predicate to state either.",
+  },
   "src/lib/git/worker.ts": {
     load: () => import("@/lib/git/worker"),
     // Soft-delete tests: tests/integration/git-worker.test.ts —

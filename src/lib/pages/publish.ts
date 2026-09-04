@@ -18,6 +18,11 @@ import {
 } from "@/lib/lifecycle/schema";
 import { resolveRelations, type RelationRefusalCode } from "@/lib/lifecycle/resolve";
 import {
+  replaceSystems,
+  resolveSystems,
+  type SystemRefusalCode,
+} from "@/lib/systems/resolve";
+import {
   article,
   checkRelations,
   dormantCascade,
@@ -32,10 +37,10 @@ export type PublishField = "title" | "markdown" | "status";
 /**
  * Every reason a publish can be refused with a field error.
  *
- * The four unions are **imported, not restated**. Frontmatter validation, schema validation,
- * reference resolution and the relation guardrails each own their own codes and each has its
- * own module and tests; a copy of those names here would be a second list that agrees on the
- * day it is written. It also means a caller that switches on a code is switching on the same
+ * The five unions are **imported, not restated**. Frontmatter validation, schema validation,
+ * reference resolution, the relation guardrails and — Phase 7 Task 2 — systems resolution each
+ * own their own codes and each has its own module and tests; a copy of those names here would be
+ * a second list that agrees on the day it is written. It also means a caller that switches on a code is switching on the same
  * value the module that produced it exported — Task 11's editor surface, and Phase 4's search
  * indexer, both need that.
  */
@@ -87,7 +92,16 @@ export type PublishErrorCode =
   /** `src/lib/lifecycle/resolve.ts` — a relation names no page this viewer can relate to. */
   | RelationRefusalCode
   /** `src/lib/lifecycle/relations.ts` — the relation is legal to write and illegal to mean. */
-  | RelationGuardCode;
+  | RelationGuardCode
+  /**
+   * `src/lib/systems/resolve.ts` — a declared `systems:` key names nothing in the catalogue.
+   *
+   * The refusal, rather than an accept-and-report, is argued at length in that module: it is the
+   * same rule Task 1 chose when it made `PageSystem.systemId` `onDelete: Restrict`, and the
+   * corpus measurement that makes it affordable — no page in the seed or the dev database
+   * declares a system at all — is recorded there too.
+   */
+  | SystemRefusalCode;
 
 export type PublishFieldError = {
   field: PublishField;
@@ -1047,6 +1061,27 @@ export async function publishPage(
       });
       if (!checked.ok) return invalidAll(checked.errors);
 
+      // Spec §9 step 3's *decisions* — which catalogue rows the author's `systems:` keys name.
+      // Its write is further down, at the point in the sequence the spec puts it, next to the
+      // `Page` update.
+      //
+      // **Placed here, between the relation checks and the cascade locks, and both boundaries
+      // are deliberate.** Above the locks, so a `systems:` typo refuses before this transaction
+      // takes `FOR UPDATE` on another page's row — a refusal that has locked something is a
+      // refusal that made another publish wait. Below the relation modules, so a document with
+      // both a bad reference and a bad system key reports the reference first: that is the error
+      // with a cascade behind it, and each module returns all of *its* errors, so whichever runs
+      // first is the one the author sees.
+      //
+      // `tx`, not `db`. Phase 5 Task 4 established the pattern and measured the trap, and for
+      // publish specifically the `db` mistake does not commit silently — it **times out on a
+      // lock**, because this transaction is holding `FOR UPDATE` on the draft row and is about to
+      // update `Page` columns under a unique index. `resolveSystems` only reads `System`, which
+      // nothing here locks, so its own mutant is quiet; `replaceSystems` below is the one that
+      // hangs, which is why its test is shaped for that rather than for an assertion.
+      const systems = await resolveSystems(tx, { declared: frontmatter.systems });
+      if (!systems.ok) return invalidAll(systems.errors);
+
       // Spec §9 step 5's *decisions*, and the last thing that can refuse. Its writes are at the
       // point in the sequence the spec puts them, below the relation upsert.
       //
@@ -1162,8 +1197,15 @@ export async function publishPage(
         );
       }
 
-      // TODO(phase-7): spec §9 step 3 also replaces the page's `PageSystem` rows from the
-      // declared `systems:` frontmatter. Phase 7 adds the model.
+      // Spec §9 step 3's other half: the page's `PageSystem` rows become exactly the systems the
+      // frontmatter declares. Resolved above; this is the write, and it is a **re-resolve** and
+      // not an accumulation — a version that drops a system drops the row, argued in full at
+      // `replaceSystems`.
+      //
+      // Immediately after the `Page` update because that is where §9 puts step 3, and inside this
+      // transaction because a facet that outlived a rolled-back publish would put the system's
+      // page and the document's own text permanently at odds.
+      await replaceSystems(tx, { pageId: page.id, systemIds: systems.systemIds });
 
       // Deleting the draft is NOT one of spec §9's eight steps — the spec does not mention
       // it. It is this plan's decision, and its reason is that a draft identical to what is
@@ -1228,6 +1270,18 @@ export async function publishPage(
           // Task 8's audit decision, argued at `RelationDiff`: both directions, always present
           // even when both are empty, and edges rather than the references that produced them.
           relations: relationDiff,
+          // **And deliberately no `systems` diff beside it**, which is a decision rather than an
+          // omission, because the two halves of `RelationDiff`'s argument both fail here.
+          // "Reconstructible from the version chain" was too weak for relations because
+          // recovering an edge means re-resolving a *path* as it would have resolved then,
+          // through `Redirect` rows a later move may have replaced; a system key resolves
+          // through one lookup against a closed catalogue with no time-dependent hop, and
+          // `PageVersion.frontmatter` already stores the folded keys. And "removal has a
+          // consequence nothing else records" was the deciding half: dropping `supersedes:`
+          // leaves the target `SUPERSEDED` with nothing saying why, whereas dropping a system
+          // fires no cascade and changes no other row. What is left is that a `System.key`
+          // renamed by Task 5 would make an old version's stored keys unresolvable — and that
+          // rename is Task 5's own audited mutation, on the row that changed.
           // What this publish did to *other* pages, so the source's own history says a cascade
           // happened without having to be joined to the target's rows. The rows those cascades
           // wrote are the far side of the same event and carry the reverse pointer.
