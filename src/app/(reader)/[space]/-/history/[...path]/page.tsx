@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
 import { listPageVersions } from "@/lib/pages/history";
-import { pageHistoryHref } from "@/lib/pages/href";
+import { MIRROR_FAILURES_PATH, pageHistoryHref } from "@/lib/pages/href";
 import { VersionHistory } from "@/components/VersionHistory";
 
 /**
@@ -63,5 +63,21 @@ export default async function PageHistoryRoute({
   // Unreadable, soft-deleted and nonexistent are one answer, as everywhere (spec §8).
   if (!result.ok) notFound();
 
-  return <VersionHistory spaceKey={spaceKey} history={result.history} />;
+  return (
+    <VersionHistory
+      spaceKey={spaceKey}
+      history={result.history}
+      /*
+       * The one affordance that reaches `/-/mirror` (Phase 5 Task 8). Decided here because this
+       * is where the viewer is, and offered only to the reader who can act on it: that page is
+       * super-admin only and 404s for everyone else, so an unconditional link would be a dead end
+       * shown to precisely the people who cannot follow it. `VersionHistory` renders it inside the
+       * stuck notice and nowhere else — see its `failuresHref` prop.
+       *
+       * No query pays for it: `Viewer.isSuperAdmin` is already loaded, the same rule the space
+       * layout's `manageHref` and the reader route's Edit link both follow.
+       */
+      failuresHref={viewer.isSuperAdmin ? MIRROR_FAILURES_PATH : null}
+    />
+  );
 }

@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 import { dateTimeFormat } from "@/lib/format";
 import { pageHref } from "@/lib/pages/href";
@@ -32,9 +33,24 @@ import { Sha } from "./Provenance";
 export function VersionHistory({
   spaceKey,
   history,
+  failuresHref = null,
 }: {
   spaceKey: string;
   history: PageHistory;
+  /**
+   * `/-/mirror`, when the viewer may read it — Phase 5 Task 8's affordance.
+   *
+   * **The reason this is a prop and not a constant** is that the failures page is super-admin
+   * only and 404s for everybody else, so a link rendered unconditionally would be a dead end
+   * offered to exactly the readers who cannot use it. The route holds the viewer and decides;
+   * this component takes the answer. It costs no query — `Viewer.isSuperAdmin` is already loaded.
+   *
+   * It appears **only in the stuck notice**, which is the one state where there is anything to
+   * go and look at. Shipping a feature with nothing linking to it has happened twice on this
+   * project (`movePage`, then `/search`), and both times the affordance was the whole cost of
+   * the next task; this is the affordance, added in the task that builds the thing.
+   */
+  failuresHref?: Route | null;
 }) {
   const { page, rows, total, truncated, mirror } = history;
 
@@ -78,6 +94,15 @@ export function VersionHistory({
           permanently, and nothing published after it will be mirrored until an administrator
           clears it — so a version below with no {CONTENT_COMMIT_LABEL.toLowerCase()} may never
           get one. The page itself is unaffected: everything here is published and readable.
+          {failuresHref === null ? null : (
+            <>
+              {" "}
+              <Link className="ver-failures" href={failuresHref}>
+                What failed
+              </Link>
+              .
+            </>
+          )}
         </p>
       ) : mirror.queued > 0 ? (
         <p className="ver-queued">
