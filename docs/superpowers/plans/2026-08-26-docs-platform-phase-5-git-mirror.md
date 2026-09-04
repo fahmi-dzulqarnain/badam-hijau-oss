@@ -697,23 +697,158 @@ spec says about markup is asserted and executed by the two component tests.
 
 ## Task 8: Failures a super admin can see
 
-**Files:** a route under the reader's `-` convention or a new group + tests.
+**Files:** `src/lib/git/failures.ts`, `src/lib/git/redact.ts`, `src/components/MirrorFailures.tsx`,
+a route at `/-/mirror` + tests.
 
-- [ ] **Step 1: The list**
+- [x] **Step 1: The list**
 
 `FAILED` jobs with the page, the attempt count and the last error. Super admin only, and the
 refusal is the project's usual **not-found** rather than forbidden — a job list is not a way to
 learn which pages exist.
 
-- [ ] **Step 2: Say what it does not cover**
+- [x] **Step 2: Say what it does not cover**
 
 Versions published before this phase carry no sha and are not failures. A page claiming to show
 "the mirror's health" while silently omitting them would be worse than one that states the gap.
 
-- [ ] **Step 3: The refusal survives deleting the other guard**
+- [x] **Step 3: The refusal survives deleting the other guard**
 
 A refusal that survives deleting the guard it names is a test of some other guard. Mutation-verify
 this one.
+
+**The address is `/-/mirror`, and the honest version of the argument is narrower than it looks.**
+This surface is not space-scoped — a wedged mirror belongs to the mirror, and its failures belong
+to whichever spaces happen to have one — so `/{space}/-/mirror` would have to either filter to one
+space, hiding failures, or paint one space's heading over another space's pages. That leaves a
+top-level route, and Task 7 measured that a static segment at `[space]`'s depth shadows a space
+with that key. Nothing prevents that for **any** word: `Space.key` is a bare `String @unique` with
+no validation anywhere (`paths.ts` measured it; a fixture uses `"eng ops"`), and `/search` already
+shadows a space keyed `search`. So choosing `-` **does not remove the collision** — it makes the
+fix a rule the product already states, since `validateSlug` refuses a leading `-` with its own
+error code and its own test and is the function a Phase 6 space-key validator would reuse.
+Reserving one character costs that phase one rule; reserving `admin`, `mirror` and `search` costs
+it a list that grows with every route. `/admin` is Phase 6's and is not squatted on by one list.
+
+**Measured, not reasoned about, and the measurement went further than Task 7's had to.** Task 7's
+question was whether a static segment beats a catch-all; this one's is what happens when the
+shadowed thing is a **space** rather than a path no product surface can create. `next build`'s
+`routes-manifest.json` puts `^/\-/mirror(?:/)?$` in `staticRoutes`, which are matched ahead of
+every dynamic route, and a real `next start` against `badam_p5_test` — seeded with a space whose
+key is literally `-`, holding a published page at `welcome` **and one at `mirror`** — answered:
+
+```
+/-/mirror     200  h1=Mirror failures        (this route, not the space's page at `mirror`)
+/-/welcome    200  h1=Hyphen welcome         (the space is still readable)
+/-            200  h1=Hyphen                 ([space] matches one segment)
+```
+
+So the collision is real, it is exactly **one path deep**, and its whole cost is that a space
+keyed `-` cannot hold a page at `mirror`. That is the `/search` debt, sized.
+
+**`lastError` is git's stderr *and the argv this application built*, and the second half is the
+one that leaks.** `failedRun` quotes `JSON.stringify(run.argv)` into every message, and `push`'s
+argv is `["push", "--", config.remoteUrl, …]` — so with the credential in the remote URL, which
+Task 5 deliberately allows (§17: the credential belongs in the URL, an SSH key or a helper), *any*
+failed push writes a token into `GitJob.lastError` **with no help from git at all**. git then
+echoes the same URL back in `fatal: Authentication failed for '…'`. Three publications read that
+column: this page, `scripts/git-worker.ts`'s stdout (cron mail), and psql.
+
+`src/lib/git/redact.ts` replaces the **whole userinfo** of any `scheme://userinfo@host` URL,
+because the common credential form puts the secret in the *username* position (a PAT is
+`https://ghp_xxx@host/repo.git`, no colon) and nothing distinguishes `git` from `ghp_xxx` by
+looking. The host and path survive, which is the operationally useful half. scp-style
+`git@host:org/repo.git` is untouched — no `://`, and that syntax has no password field.
+
+**Applied at both ends, and that is not the "predicate stated twice" mistake.** That rule is about
+*permission* predicates, where the second copy can be deleted with the suite green because the
+first already refused the row. These are two transforms of two different values, and each mutant
+dies alone:
+
+- redaction removed from `failedRun` → *a failed push does not put the remote's credentials in the
+  error a job stores*: `expected 'Pushing to the content remote: git ex…' not to contain
+  'ghp_16C7e42F292c6912E7710c838347Ae178…'` — and `git-failures.test.ts` stayed **15 passed**.
+- redaction removed from `listMirrorFailures` → *a credential stored in lastError does not come out
+  of the query*: the same message, and `repo.test.ts` stayed **32 passed**.
+
+The display copy is not a defence against the seam copy being deleted. It is a defence against the
+**row**: an unbounded `text` column written by a worker on its fifth revision, where one value
+from an older build or a hand-run `UPDATE` is enough. Both have non-vacuity companions asserting
+the message still says what was attempted, what git said, and which host refused — a redactor that
+returned `""` would pass every absence assertion in this task.
+
+**The audit decision is *yes*, and it is the same act as a search.** The page paints a page title
+and a path — the two user-authored strings a search hit carries — for pages in every space,
+including `MEMBERS` spaces the super admin does not belong to. §8's row records what a super admin
+*learned*, not why they went looking, so "this is machinery rather than content" is an argument
+about the rows' meaning and not about their contents. One row per space that actually produced a
+failure, exactly as `search()` does and for its stated reason: auditing the enumeration would
+write rows for spaces the read touched nothing in. A refused read writes nothing, because the
+guard runs before the query.
+
+**Step 2 needed a fourth item the plan did not name, and it is the one that makes an empty list
+dangerous.** `worker.ts` treats `not-a-repository` as a **whole-run** condition rather than a
+job's — deliberately, so a mis-pointed `GIT_MIRROR_ROOT` is not a queue to repair by hand — which
+means a worker that cannot start fails *no* job and leaves this list empty while nothing at all is
+being mirrored. So the page says four things it does not cover: versions from before the mirror
+(never queued, so not failures — this is a queue, **not a reconciliation**); changes that will be
+retried (counted, with a number, because "nothing has given up" is true and misleading on a
+morning when the remote has refused every push for an hour); changes queued behind a failure
+(counted on the failure, not listed); and a run that never started. The empty state says *"No
+mirror job has given up"* and never that the mirror is healthy, and the gap section is the one
+unconditional note in this codebase — every other one explains something on the screen, and this
+one explains what is not.
+
+**The refusal, mutated three ways.** `isSuperAdmin` is the only permission predicate in the
+module, and both standing helpers are absent with the reason stated at the line: `readableSpace`
+answers `{}` for a super admin, so a copy of it here could never fail, and `visiblePage` would
+hide the failures of the one job kind whose page is soft-deleted **by definition**.
+
+- guard deleted → *a member of a space is refused, and reads not-found*: `expected { ok: true,
+  report: { …(3) } } to deeply equal { ok: false, reason: 'not-found' }`, plus the same message
+  from *a member's own space's failure is refused too*.
+- guard replaced by `page: { space: readableSpace(viewer) }` → the identical two failures, which
+  is the point of the second test: a per-space filter would hand an `engineering` editor
+  `engineering`'s git stderr.
+- `page: { deletedAt: null }` added → *a failed DELETE job for a soft-deleted page is listed*:
+  `expected [] to have a length of 1 but got +0`.
+- the audit loop removed → *…is audited once*: `expected [] to have a length of 1 but got +0`.
+
+And over HTTP, because the concern is that the *route's* other guard is doing the work: with the
+module guard deleted, rebuilt and served, `aisyah@example.com` got **200**, `h1 = Mirror failures`,
+another space's page title, and git's stderr. With it restored she gets **404** while
+`/engineering/architecture/mqtt-contracts` still answers 200 — a discrimination, not an absence.
+The signed-out visitor meets the *other* guard and is redirected to
+`/api/auth/signin?callbackUrl=%2F-%2Fmirror`.
+
+**The affordance ships with the thing.** `/-/mirror` is reachable from the version history page's
+"mirror is stuck" notice, and only for a viewer whose `isSuperAdmin` is true — the route decides,
+the component takes the answer, and no query pays for it. An unconditional link would be a 404
+offered to precisely the readers who cannot follow it. Shipping a feature with nothing linking to
+it has cost this project a whole extra task twice.
+
+**Three corrections to the brief and to earlier work.**
+
+1. The brief said `lastError` is git's stderr. It is git's stderr **plus the argv**, and the argv
+   is the certain leak — it needs no misbehaviour from git and no unusual remote, only a
+   credential in `GIT_REMOTE_URL`, which Task 5 explicitly permits.
+2. The blocked count is *every unfinished job for the page*, and the first wording said "later
+   changes". An e2e fixture produced a `PENDING` job **older** than the failure — because
+   `seedPublishedPage` publishes and a publish enqueues — which the worker could never produce but
+   a hand-edited row can, and the sentence would have been false about it. The count is the honest
+   one; the word "later" is gone.
+3. **Task 7's `e2e/history.spec.ts` had never been executed and one test did not pass.**
+   Playwright's browsers are present now, and *"a page whose mirror job has given up says so"*
+   failed as a strict-mode violation: the reader paints `Page.title` into `.doc > h1` and the
+   document's own `# History stuck` renders a second `h1`, so `getByRole("heading", …)` resolved
+   to two elements. Fixed to assert `.doc > h1`, which is the half that says the publish stood.
+
+**Written and executed: `e2e/mirror.spec.ts`, nine tests.** The browsers had appeared by the time
+this task finished, so the whole suite ran: **58 Playwright tests in 7 files, all passing.** What
+that file carries beyond the component test is the route resolving at its claimed URL, the two
+refusals over real HTTP, and the overflow measurement — this surface being the class's **eighth**
+shape, and a new one: git's stderr with a JSON argv in it is a single unbroken line of several
+hundred characters with no space anywhere, so `.mir-err` needs `overflow-wrap: anywhere` beside
+`white-space: pre-wrap` rather than `pre-wrap` alone.
 
 ---
 
