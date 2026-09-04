@@ -11,8 +11,8 @@ codebase that does not exist yet produces a plan that gets rewritten.
 | **1. Foundations & reader** | Signed-in staff read seeded published docs: space nav, breadcrumbs, TOC, page info card. Forbidden spaces 404. | §5.1–5.2, §8, §11 (read routes), §12 | — |
 | **2. Authoring** (plan: [phase-2](2026-08-23-docs-platform-phase-2-authoring.md)) | Editors create, draft, preview and publish pages in the browser. Conflict detection on concurrent drafts. Move and delete with redirects. | §5.3, §9, §14 | 1 |
 | **3. Doc types & lifecycle** (plan: [phase-3](2026-08-24-docs-platform-phase-3-doc-types.md)) | ADR/RFC/runbook templates with validated frontmatter. Status vocabularies, typed relations, publish cascades, retired-document banner, generated indexes. | §6, §5.2 (`PageRelation`) | 2 |
-| **4. Attachments & Entra ID** (plan: [phase-4](2026-08-26-docs-platform-phase-4-attachments.md)) | Editors attach files — screenshots, documents, screen recordings — stored in a company-owned SharePoint library over Microsoft Graph. Uploads bypass the app; downloads proxy through it, permission-checked. Identity moves to Entra ID. | [Phase 4 spec](../specs/2026-08-26-attachments-sharepoint-entra-design.md) | 2 |
-| **5. Search & diagrams** | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
+| **4. Search & diagrams** (plan: [phase-4](2026-08-25-docs-platform-phase-4-search-diagrams.md)) | Postgres full-text search with space/type/status filters and snippets. Mermaid and C4 rendering. | §13, §12 (Mermaid) | 3 |
+| **5. Attachments & Entra ID** (plan: [phase-5](2026-08-26-docs-platform-phase-5-attachments.md)) | Editors attach files — screenshots, documents, screen recordings — stored in a company-owned SharePoint library over Microsoft Graph. Uploads bypass the app; downloads proxy through it, permission-checked. Identity moves to Entra ID. | [Phase 5 spec](../specs/2026-08-26-attachments-sharepoint-entra-design.md) | 2 |
 | **6. Git mirror** | Publishing produces a real commit authored by the publisher. Retry queue, sha on the version, admin visibility of failures. | §10 | 2 (3 for frontmatter) |
 | **7. Systems & admin** | Systems catalogue and facet filters. Space/member/system administration. Due-for-review workflow. | §7, §12 (review) | 3 |
 
@@ -35,13 +35,18 @@ before a deploy and after every dependency bump.
   defines. Building search first means building it twice.
 - **Systems & admin last** because the systems facet is only useful once there are documents
   to tag.
-- **Attachments moved from 6 to 4, and the store changed with them.** They were roadmapped
+- **Attachments moved from 6 to 5, and the store changed with them.** They were roadmapped
   last on the reasoning that attachments are only useful once there is an editor to attach
   from — true, and that condition was met at the end of Phase 2. The trigger was a media
   upload need that could not be deferred; the company runs Microsoft 365 and has no object
   storage provisioned, so **D12's S3 backend became a SharePoint document library** and
   "S3 attachments via presigned URLs" left what is now Phase 7. See the
-  [Phase 4 spec](../specs/2026-08-26-attachments-sharepoint-entra-design.md).
+  [Phase 5 spec](../specs/2026-08-26-attachments-sharepoint-entra-design.md).
+
+  They were built as "Phase 4" in parallel with search, on a branch cut before search
+  landed, and renumbered to 5 on merge because search reached `main` first and its plan,
+  its commits and its closed exit criteria all say 4. Renumbering a shipped phase to
+  accommodate a later one is the wrong direction.
 
 ## Phase 4 constraint: Mermaid hydration decodes what the sanitiser escaped
 
@@ -57,9 +62,26 @@ Phase 4 hydrates these by reading `textContent`, which **decodes the escaping** 
 receives the literal `</div><script>alert(1)</script>` as diagram source. Whether that
 executes is then entirely Mermaid's decision, not ours.
 
-So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`, which sanitises
-labels and blocks click handlers — not the default `"loose"`), and must not use
-`innerHTML` to move the source around. Treat the escaping in the document as protecting
+So Phase 4 must set Mermaid's `securityLevel` explicitly (`"strict"`) and must not use
+`innerHTML` to move the source around.
+
+> **Correction, measured in Phase 4 Task 5 against `mermaid@11.17.2`.** Two claims in the
+> sentence above were wrong, and the second one would have produced a **vacuous security test**.
+>
+> **`"strict"` is already Mermaid's default** — it is in `defaultConfig`, not `"loose"`. Pinning
+> it explicitly is still exactly right, because a default is a dependency's decision and this one
+> is load-bearing; but it is a *pin*, not a correction of an unsafe default.
+>
+> **And `securityLevel` does not decide whether a label is sanitised.** `sanitizeText` runs
+> DOMPurify at every level, so a `<script>` in a diagram label is stripped under `"loose"` too —
+> verified: the obvious hostile-label test **stays green** with the setting mutated to `"loose"`.
+> What the levels actually disagree about is URL handling:
+> `if (getConfig().securityLevel !== "loose") return sanitizeUrl(url)`. So the assertion that
+> earns its keep is `click A href "javascript:…"`, not a script tag in a label.
+>
+> Nor is the click *handler* half of it: a listener is attached only by the `bindFunctions` that
+> `mermaid.render` returns, and the hydration deliberately never calls it — an independent
+> barrier, which therefore cannot die with this constant either. Treat the escaping in the document as protecting
 the *document*, not as having sanitised the *diagram source*.
 
 ## Phase 2 landmine, measured during Phase 1

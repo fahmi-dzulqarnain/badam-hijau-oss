@@ -1,10 +1,19 @@
 # Execution status
 
-**Phases 1, 2, 3 and 4 are complete.**
+**Phases 1 through 5 are complete.**
 
-Branch: `claude/onedrive-microsoft-sso-7ac97b` · **961 vitest + 32 Playwright tests
-passing**, 73-check cold-start smoke green · typecheck, build and `plan:check` clean ·
-working tree clean
+Phases 1–4 are in `main`. Phase 5 — attachments and the Entra ID cutover — is on
+`claude/onedrive-microsoft-sso-7ac97b` with an open PR.
+
+Branch: `claude/onedrive-microsoft-sso-7ac97b` · **1094 vitest + 46 Playwright
+tests passing**, 93-check cold-start smoke green · typecheck, build and `plan:check`
+clean · working tree clean
+
+**Phase 5 was built as "Phase 4" and renumbered on merge.** It was cut from `main` at
+`2706769`, in parallel with search and diagrams, and search reached `main` first — its plan,
+its commits and its closed exit criteria all say Phase 4. Renumbering a shipped phase to
+accommodate a later one is the wrong direction, so attachments took 5. Anything in this
+repository's history that calls attachments "Phase 4" predates that merge.
 
 Two of the five new Playwright specs failed on their first real run, and both had the same
 two causes. `fixture.path` is **space-relative** — every existing spec navigates to
@@ -17,8 +26,59 @@ the attachment reference was published. Both fixed; the publish now waits on its
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
 [phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
-[phase 4](2026-08-26-docs-platform-phase-4-attachments.md) ·
+[phase 4](2026-08-25-docs-platform-phase-4-search-diagrams.md) ·
+[phase 5](2026-08-26-docs-platform-phase-5-attachments.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
+
+## Phase 4 — search and diagrams
+
+Decision taken with the user: **the application strips, the trigger weights.** §13 asks for a
+`tsvector` derived from Markdown-stripped body text and maintained by a raw-SQL trigger — and a
+plpgsql trigger cannot run remark. So publish produces the plain text with the parser that
+already understands the document, and the trigger builds the weighted vector from stored columns,
+which keeps what a trigger is *for*: the vector cannot drift from its row when a write that is
+**not** a publish changes a searchable field.
+
+Two landmines carried in, both measured rather than guessed:
+
+- **Hydrating a Mermaid diagram decodes what the sanitiser escaped.** Reading `textContent` hands
+  Mermaid the literal `</div><script>alert(1)</script>`. `securityLevel: "strict"` is required,
+  explicitly, and the source must never move through `innerHTML`. The escaping protects the
+  *document*, not the diagram source.
+- **Mermaid is 84 MB unpacked**, so it must be a dynamic import absent from the bundle of any
+  route without a diagram — asserted against `next build`'s output, not claimed.
+
+| Task | State |
+|---|---|
+| 1. Plain text from Markdown | ✅ |
+| 2. The index, and the trigger that maintains it | ✅ |
+| 3. The query | ✅ |
+| 4. The search route | ✅ |
+| 5. Mermaid hydration | ✅ |
+| 6. End-to-end | ✅ |
+| 7. Extend the smoke test | ✅ |
+
+**All seven tasks done and every exit criterion verified** — see the end of the
+[phase-4 plan](2026-08-25-docs-platform-phase-4-search-diagrams.md).
+
+Three findings from this phase that generalise, all measured:
+
+- **A security test that cannot fail when the setting it is about is weakened is worse than no
+  test**, because it reads as coverage. `securityLevel: "strict"` is already Mermaid's default and
+  does **not** decide label sanitisation — DOMPurify runs at every level — so the obvious hostile
+  label test stays green with the setting mutated to `"loose"`. The assertion that discriminates is
+  `click A href "javascript:…"`.
+- **An absence assertion needs a viewer who can see *something*.** "A non-member finds nothing"
+  is near-vacuous when the viewer reads no space at all: the ids go into `spaceId = ANY(...)`, and
+  `ANY('{}')` is indistinguishable from a deleted clause. The test that has teeth is a
+  discrimination — the same word in two spaces, and a **count**.
+- **The same needle the test searches for is echoed back into the page**, in the input's `value`
+  and in the no-hits sentence, so over HTTP a body containing it is entirely consistent with zero
+  results. Assert the row, or the count sentence.
+
+The count contract was too narrow for the **seventh** time (`snapshotCounts` could not see the one
+`BugReport` a spec wrote), and a plan-fence guard was found matching **by accident** for the fifth
+time (`isSuperseded` was matching the word `SUPERSEDED` in a sentence about ADR statuses).
 
 Published (private): https://github.com/fahmi-dzulqarnain/badam-hijau — `main` carries both
 completed phases.
@@ -67,6 +127,11 @@ Findings worth carrying from Task 2:
 - **A cap has to bound the thing that costs something.** `MAX_FRONTMATTER_ENTRIES` cannot tell
   200 list items from 200 round trips, so relation targets get their own cap: each one costs a
   resolution query, a cycle walk and a row lock inside one transaction.
+- **A test for "X is excluded" is vacuous if X could not have been included anyway.** Task 1's
+  test that a *second* `---` block is not treated as frontmatter first put prose between the two
+  blocks — which pushes the second off offset 0, where `remark-frontmatter` cannot match it
+  either way. The mutant that re-enabled the plugin passed 33 of 33. Butting the blocks together
+  separates the implementations. Same family as the non-vacuity companion.
 - **Any assertion about a list, on a route that renders the reader shell, must bind to that
   list's own markup.** The nav rail names every page in the space on the same HTML, so a
   title-shaped needle passes for free — Task 13's smoke pass had a banner check that stayed green
@@ -236,6 +301,85 @@ turns one file into a blind spot for the tool you switched to in order to be saf
 
 When a search must be trustworthy, read the file with Python and count.
 
+**A pipeline hides the exit code of its first command**, and this project has now been bitten by
+that three times in three different places: `npm run smoke | tail` reporting tail's status (Phase
+2 Task 15, which is why the smoke script's docstring warns about it), a background runner
+reporting `exit code 0` over a failing `npm test 2>&1 | tail` (Phase 4 Task 1), and a `PIPESTATUS`
+read that came back empty because it was taken after the wrong command. Use `set -o pipefail`, or
+run the command bare and read `$?`. **A green exit code from a pipeline is not evidence.**
+
+**A security test that cannot fail when the setting it is about is weakened is worse than no
+test.** The roadmap said Mermaid's `securityLevel: "strict"` "sanitises labels", so the obvious
+assertion is a `<script>` in a diagram label. Measured in Phase 4 Task 5: DOMPurify runs at
+*every* level, so that test **stays green with the setting mutated to `"loose"`**. The levels
+disagree about URL handling — `if (securityLevel !== "loose") return sanitizeUrl(url)` — so
+`click A href "javascript:…"` is the assertion that earns its keep. (`"strict"` also turned out to
+be mermaid's *default*, so pinning it is a pin, not a correction of an unsafe default.)
+
+**A bundle-absence claim needs a presence gate beside it.** "Mermaid is in no route's eager
+bundle" passes identically when mermaid is not in the build at all, or when the manifest being
+read is the wrong one — under Turbopack, `build-manifest.json` carries only the root shell and
+`app-build-manifest.json` does not exist. The check asserts mermaid is *present*, and finds
+CodeMirror eager on the editor route as a control, before reporting a verdict.
+
+**Shipping a feature with nothing linking to it has now happened twice.** Phase 2's `movePage`
+went out as a library function with no caller and cost a whole extra task (14b) to reach; Phase 4's
+`/search` went out with no link. Both were caught late, by asking "can a person get to this?"
+rather than by any test. **Add the affordance in the task that builds the thing.**
+
+**Annotating a stale fence was decorative until `plan:check` was fixed.** A fence whose file gained
+an *import* has a different first line, so it was dismissed as `unmatched` **before** the
+supersession note could be seen — and the only signal was `in sync` falling by one while
+`unmatched` rose by one. Supersession now outranks the heuristic. Watch the counts, not just the
+drift line.
+
+**A filter applied after fetching hides the SQL filter it duplicates, and reads as care.** Phase 4
+Task 3's first version assembled hits through a `byId.get(row.spaceId)` lookup whose miss skipped
+the row — a second copy of the space filter, in TypeScript, after the query. **Deleting
+`spaceId = ANY(...)` from the SQL left all 24 tests green.** Fixed by joining `Space` for its
+columns, which is FK-guaranteed to drop no row, and deleting the lookup. The same trap then
+arrived by a second route: an `INNER JOIN` for the snippet would have excluded unpublished pages
+as a side effect, so deleting the published-version clause also passed — hence a `LEFT` join and a
+counterfactual mutant kept in the record.
+
+**A mutant that dies for the wrong reason has not proven the assertion you meant.** Same task:
+without a coalesce, the published-clause mutation died as a `TypeError` inside snippet parsing
+rather than as the assertion that names a draft in results.
+
+**Know which columns actually feed a derived value before writing a test about staleness.** The
+Phase 4 plan told Task 2 to prove the search vector *moves* when a cascade changes `status` or a
+move rewrites `path`. Neither is an input — the vector has three terms and those are a filter and
+an address — and both leave it **byte-identical**, measured. The write that really goes stale is a
+`title` or `publishedVersionId` change outside `publishPage`. A staleness test aimed at the wrong
+column passes for the wrong reason.
+
+**Prisma treats triggers and indexes oppositely, and the dangerous half looks safe.** Measured in
+Phase 4 Task 2: a trigger created **in a migration** survives every later `migrate dev`, because
+Prisma's diff cannot see it — and a trigger created **by hand** survives too, which is the trap,
+because it is equally invisible and therefore exists on the machine that ran it and on no fresh
+database ever provisioned. **A trigger that is not in a migration is not deployed.** The GIN index
+is the reverse: Prisma *does* model indexes, so one created only in SQL is diffed as an extra and
+the next unrelated `migrate dev` emits `DROP INDEX` — reproduced as the only statement of a no-op
+migration. Declare indexes in the schema; put triggers in the migration.
+
+**Two `npm test` runs cannot overlap.** They share the one `_test` database, and the loser reports
+scores of spurious failures that look like real breakage.
+
+**An absence assertion is vacuous when the mechanism under test would produce the same absence
+while broken.** Task 6's "a non-member gets nothing" is the case: `search()` binds the readable
+space ids into `= ANY(...)` with no early return, so an empty array is false for every row *by
+itself* — meaning a viewer with **no** readable space finds nothing whether the filter
+discriminates or not. The fix is a viewer with **one** readable space out of two (`handbook` is
+`ALL_STAFF`, `engineering` is `MEMBERS`), the same word seeded into both, and a **count**. Same
+family as the non-vacuity companion, arriving from the permission side.
+
+**The count contract has now been too narrow too — seventh time for a guard on this project.**
+`reader.spec.ts` was the one spec with no `snapshotCounts` guard, and the reason was assumed to be
+"it writes nothing". It writes a real `BugReport`, and `Counts` had no `bugReports` column — so
+adding the guard without widening `Counts` would have produced a check that passes over the only
+write the file makes. Widened, then **watched fail** by leaking the row on purpose. Bug reporting is
+also the one mutation in the product that writes no audit row, which is why nothing else caught it.
+
 ## Phase 1 — foundations and reader
 
 All 15 tasks approved and every exit criterion verified.
@@ -311,7 +455,7 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 
 ## Decisions that should not be relitigated
 
-### Phase 4 — attachments and the Entra cutover
+### Phase 5 — attachments and the Entra cutover
 
 - **`editableSpace` must short-circuit on `isSuperAdmin`, exactly as `can()` does.** The naïve
   composition `readableSpace(v, { memberships: { some: … } })` returns `{ AND: [{}, …] }` for a

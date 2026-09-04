@@ -4,7 +4,7 @@
 **Status:** Approved for planning
 **Supersedes:** D12 and the attachment half of the original Phase 6 in
 [the platform spec](2026-08-21-internal-docs-platform-design.md)
-**Becomes:** Phase 4 in [the roadmap](../plans/2026-08-21-docs-platform-roadmap.md)
+**Becomes:** Phase 5 in [the roadmap](../plans/2026-08-21-docs-platform-roadmap.md)
 
 ## 1. Summary
 
@@ -475,8 +475,12 @@ the remote store is never on the critical path for reading a document.
 
 ## 12. Roadmap consequences
 
-This becomes **Phase 4**. Search and diagrams, git mirror, and systems/admin shift to 5, 6
+This becomes **Phase 5**, after search and diagrams. Git mirror and systems/admin shift to 6
 and 7.
+
+Planned and built as Phase 4, in parallel with search on a branch cut before it landed, and
+renumbered on merge: search reached `main` first, and its plan, commits and closed exit criteria
+all say 4.
 
 Superseded rather than deleted, with the reason recorded in place:
 

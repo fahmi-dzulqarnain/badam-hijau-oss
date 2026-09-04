@@ -12,10 +12,12 @@
 # every dependency bump. Phase 2 added the authoring pass — create, save, publish, read, move,
 # follow, delete, 404 — over plain HTTP. Phase 3 added the lifecycle pass: publish an ADR,
 # supersede it, and confirm the first is retired, still readable, and listed beside its
-# replacement in the generated index. Phase 4 added the attachment pass: begin an upload, PUT
-# bytes directly to the session URL — never through this application, same as a real browser —
-# commit, and read them back through the permission-checked proxy, with a Range request proving
-# the 206 path. Deliberately no browser: Playwright owns those.
+# replacement in the generated index. Phase 4 added the search pass: a word unique to a published
+# page finds it, and once that page is retired it is still found and ranks below a live match.
+# Phase 5 added the attachment pass: begin an upload, PUT bytes directly to the session URL —
+# never through this application, same as a real browser — commit, and read them back through the
+# permission-checked proxy, with a Range request proving the 206 path.
+# Deliberately no browser: Playwright owns those.
 #
 # The EXIT CODE is the contract. `npm run smoke | tail` reports tail's status, not this
 # script's; check `${PIPESTATUS[0]}` or do not pipe.
@@ -61,6 +63,27 @@ ADR_LIVE_TITLE="Smoke ADR that supersedes it"
 # body gone, and a check on the banner alone would not know.
 ADR_RETIRED_MARKER="This decision was in force until the cold-start smoke test replaced it."
 ADR_LIVE_MARKER="This decision replaced one, in a cold-start smoke test."
+
+# The two pages the search pass ranks against each other — Phase 4, Task 7. Named for what
+# becomes of them, for the same reason the ADRs above are: every assertion in that pass is about
+# which of the two it is talking about. Both carry the `smoke-` slug prefix `sweep` keys on.
+SEARCH_LIVE="smoke-search-live"
+SEARCH_RETIRED="smoke-search-retired"
+SEARCH_LIVE_TITLE="Smoke page that stays in force"
+SEARCH_RETIRED_TITLE="Smoke page that gets retired"
+# The word searched for. It appears in no seeded page and nowhere else in this script, which is
+# asserted rather than assumed — the "only match" check below is what makes it a needle. One
+# unstemmed English word, so `english` reduces it to itself on both sides of the index (measured:
+# `to_tsvector('english', 'capybara')` is `'capybara':1`, and the seeded corpus matches it 0 times).
+NEEDLE="capybara"
+# **The same prose in both pages, and this is the one place in this script where two fixtures must
+# NOT carry distinct markers.** The needle sits in the body of both and in the title of neither, so
+# both match in the same weight band with the same term density — measured identical, 0.12158542
+# each before the demotion — and the only thing left that can order the two results is §6.4's
+# retired demotion. A needle in one title would match at band `A` and drown the effect; a longer
+# body on one side would measure density instead. Each row is identified by its **path** below, so
+# nothing here needs the bodies to differ.
+SEARCH_BODY="The $NEEDLE bridge retries on a fixed interval, so the kiosk sees a stale price."
 
 cleanup() {
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null || true
@@ -192,6 +215,62 @@ rel_row() { # label slug title
   printf 'rel-k">%s</span><a class="rel-title" href="/engineering/%s">%s<' "$1" "$2" "$3"
 }
 
+# One result row on `/search`, matched by the `<code class="q-path">` cell that carries the page's
+# path — `idx_row`'s reasoning, arriving on a route where it is sharper still.
+#
+# **`/search?q=capybara` paints the needle into the page whether or not anything matched.** The
+# term is the search input's `value`, and the no-hits sentence quotes it too — *No page matches
+# “capybara”* — so `grep capybara` on this response is satisfied by **zero results**. That is the
+# vacuous-assertion shape this phase has already been bitten by twice, and it is why nothing below
+# ever greps for the needle itself.
+#
+# The path cell is also the one string per row that is unique to that row: `.q-title`'s href
+# carries the slug too, and so does the RSC flight payload at the foot of the document in its own
+# JSON spelling (`\"className\":\"q-path\"`), which this needle deliberately does not match —
+# measured, one hit per row in the rendered markup.
+q_row() { # slug
+  printf 'q-path">%s<' "$1"
+}
+
+# The head of a retired result row: the status badge, and the title as a link to the page.
+#
+# Three things in one needle for `rel_row`'s reason — a badge on its own is satisfied by any row's
+# badge, and a title on its own is satisfied by the nav rail on any other route. `q-retired` is in
+# it because that class is `isRetired` having been derived at all; a row that lost the derivation
+# would still print the status name.
+q_retired_row() { # status slug title
+  printf 'q-status q-retired">%s</span><a class="q-title" href="/engineering/%s">%s<' "$1" "$2" "$3"
+}
+
+# Which of two result rows comes first in one response — the whole of "ranks below".
+#
+# **Grepping for both paths and finding both is not this assertion**: it passes in whichever order
+# the two rows are rendered, which is exactly the property under test. So this reads their
+# **positions** and compares them.
+#
+# `grep -bo` and not `grep -n`: the response is one enormous line of HTML, so every line number is
+# 1 and `grep -n` would report the same position for both rows. Byte offsets are the only positions
+# this markup has.
+#
+# `sed -n '1s/…//p'` and not `head -1`, and `|| :` on the pipeline: `head` closing the pipe early
+# leaves the pipeline reporting grep's SIGPIPE under `pipefail` — the flake `expect_body`
+# documents — and grep exits 1 when a row is absent, which is a named failure below rather than
+# `set -e` abandoning the run before Teardown can sweep. A missing row is reported as a missing
+# row: the offsets are printed either way, so a failure says where each row actually was.
+expect_ranked() { # url higher-slug lower-slug label
+  curl -s -b "$JAR" "$BASE$1" > "$OUT"
+  local higher lower
+  higher="$(grep -boF -- "$(q_row "$2")" "$OUT" | sed -n '1s/:.*//p' || :)"
+  lower="$(grep -boF -- "$(q_row "$3")" "$OUT" | sed -n '1s/:.*//p' || :)"
+  if [ -z "$higher" ] || [ -z "$lower" ]; then
+    fail "$4 (a row is missing at $1: $2 at ${higher:-none}, $3 at ${lower:-none})"
+  elif [ "$higher" -lt "$lower" ]; then
+    ok "$4 ($2 at byte $higher, $3 at byte $lower)"
+  else
+    fail "$4 ($2 is at byte $higher, which is not above $3 at byte $lower)"
+  fi
+}
+
 # Creates a page through `/new`, saves `markdown` into its draft, and leaves the new page's id in
 # `PAGE_ID` — empty if any step failed, so the caller branches on one variable.
 #
@@ -259,9 +338,24 @@ author_page() { # slug title docType markdown-as-a-json-string
 # `DATABASE_URL` is deliberately not reused as the connection string; libpq refuses its
 # `?schema=public` parameter outright.
 #
-# This is the guard that covers `PageRelation` and, since Phase 4, `Attachment` — and the reason
+# This is the guard that covers `PageRelation` and, since Phase 5, `Attachment` — and the reason
 # it has to be a whole-table count rather than another clause in `sweep`'s `raise exception`
 # block is in that block's comment.
+#
+# **Nine of the eleven tables in `prisma/schema.prisma`, and the two exceptions are stated rather
+# than left to be noticed.** `User` and `SpaceMembership` are not counted because nothing in this
+# script writes a row to either: every `sign_in` is an **upsert** of one of the three seeded
+# emails, and a membership exists only where the seed put one. Enumerated against the schema and
+# checked, not assumed — the e2e suite's own count contract was found missing a `BugReport` column
+# in Phase 4 Task 6 exactly because "it writes nothing" had been assumed there. Widen this the day
+# the script signs in as an address the seed does not create, or joins anybody to a space.
+#
+# **Phase 4 added no table**, checked the same way: `Page.searchVector` and
+# `PageVersion.searchText`/`searchHeadings` are columns on tables already counted here, and the
+# search index is a GIN index over one of those columns rather than a row anywhere.
+#
+# **Phase 5 did add one**, which is why `Attachment` appears above: the attachment pass writes a
+# real row, and without a column here the Teardown comparison could not see it leak.
 counts() {
   psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX -v ON_ERROR_STOP=1 -c "
     select format(
@@ -538,8 +632,91 @@ else
   fail "doc lifecycle pass skipped: both ADRs are needed and one was not created"
 fi
 
+step "Search"
+# Phase 4, Task 7. §13's search and §6.4's demotion, over plain HTTP against a production build:
+# a word unique to a published page finds that page, and once the page is retired it is still
+# found and ranks **below** a live match.
+#
+# **Searched as the editor and not as the super admin, and that is a cleanup decision** — the same
+# one the lifecycle pass takes about which page it retires. A super admin resolving a `MEMBERS`
+# space they hold no role in writes a `space.access` audit row, and that row carries a `spaceId`
+# and **no `pageId`**, so `sweep` — which keys audit rows on the page ids this script created —
+# could not take it back, and Teardown's count comparison would fail on a row the script meant to
+# write. `aisyah` is a member of `engineering`, so `needsAccessAudit` is false and search writes
+# nothing at all.
+sign_in "aisyah@example.com"
+
+# The affordance, over HTTP, because PROGRESS records this failure twice: `/search` shipped with
+# nothing linking to it, and Phase 2's `movePage` shipped as a library function with no caller and
+# cost a whole extra task to reach. A route nobody can get to passes every test written about the
+# route. The href is in the needle — a link with no destination is not a way in.
+expect_body "/engineering" 'topbar-search" href="/search"' "the reader offers a way into search"
+
+author_page "$SEARCH_RETIRED" "$SEARCH_RETIRED_TITLE" "ADR" \
+  "---\\nstatus: ACCEPTED\\n---\\n\\n$SEARCH_BODY\\n"
+SEARCH_RETIRED_ID="$PAGE_ID"
+
+if [ -n "$SEARCH_RETIRED_ID" ]; then
+  api POST "/api/pages/$SEARCH_RETIRED_ID/publish" "" 200 "the page that will be retired published"
+  # `ACCEPTED`, asked for by the document's own `status:` line — and it is the status a retirement
+  # has to come *from*: `ADR: ACCEPTED -> [ACCEPTED, SUPERSEDED, DEPRECATED]`, while `DRAFT`
+  # reaches neither terminal status.
+  body_has '"status":"ACCEPTED"' "at ACCEPTED, which is where a retirement has to start"
+
+  expect_body "/search?q=$NEEDLE" "$(q_row "$SEARCH_RETIRED")" \
+    "a word unique to the published page finds it"
+  # The count sentence, which is what makes the row above a *result* and not the term being echoed
+  # back — see `q_row`. It is also the non-vacuity companion for the ordering check further down:
+  # it says the needle matches exactly one page in the whole corpus before a second one exists, so
+  # "2 pages match" later is two pages this pass published and not one of them plus a seeded page.
+  expect_body "/search?q=$NEEDLE" 'q-count">One page matches' "and it is the only match"
+
+  author_page "$SEARCH_LIVE" "$SEARCH_LIVE_TITLE" "DOC" "$SEARCH_BODY\\n"
+  SEARCH_LIVE_ID="$PAGE_ID"
+fi
+
+if [ -n "$SEARCH_RETIRED_ID" ] && [ -n "${SEARCH_LIVE_ID:-}" ]; then
+  api POST "/api/pages/$SEARCH_LIVE_ID/publish" "" 200 "the page that stays in force published"
+  body_has '"status":"CURRENT"' "at CURRENT, so one of the two matches is live"
+
+  # **Retiring is a second publish, not a status write.** An ADR cannot go from `DRAFT` to a
+  # terminal status, and there is no route that writes a status — the editor's picker writes the
+  # document's own `status:` line and the next publish reads it, which is what these two calls are.
+  #
+  # `"seen":null`, and a **201** rather than a 200: the publish above deleted the draft, so there
+  # is no timestamp to echo back and `null` is the true claim that none exists — `decideSave`
+  # answers `create`, which the route reports as 201. That `null` is only true *because* the page
+  # was published first, and it is one of the four rows of `decideSave`'s table rather than three:
+  # measured, with that publish skipped, this same call answers **409 `conflict`**, because a
+  # `null` seen against a draft that does exist is a claim the repository refuses.
+  api PUT "/api/drafts/$SEARCH_RETIRED_ID" \
+    "{\"title\":\"$SEARCH_RETIRED_TITLE\",\"markdown\":\"---\\nstatus: SUPERSEDED\\n---\\n\\n$SEARCH_BODY\\n\",\"seen\":null}" \
+    201 "the retirement is saved as a new document"
+  api POST "/api/pages/$SEARCH_RETIRED_ID/publish" "" 200 "and published a second time"
+  body_has '"status":"SUPERSEDED"' "which retires the page"
+
+  # §6.4's first half, which is the one that is easy to lose: a retired document stays findable,
+  # with the status a person searching for a decision needs to see.
+  expect_body "/search?q=$NEEDLE" \
+    "$(q_retired_row SUPERSEDED "$SEARCH_RETIRED" "$SEARCH_RETIRED_TITLE")" \
+    "the retired page is still a result, carrying its status"
+  expect_body "/search?q=$NEEDLE" 'q-count">2 pages match' "and both pages match the word"
+  # §6.4's other half. **This cannot pass by accident, and the ordering of the two publishes above
+  # is what buys that.** The two `ts_rank`s are identical (measured: 0.12158542 each), so with the
+  # demotion removed the query falls through to its `publishedAt DESC` tiebreak — and the
+  # retirement is the *later* publish, so the retired page would come **first**. Take
+  # `RETIRED_RANK_FACTOR` out and this check fails; publish the live page last instead and it would
+  # pass either way. It discriminates in the other direction too, measured while proving these
+  # checks can fail: with the retirement skipped the page stays live and *later*, and this reports
+  # `smoke-search-live is at byte 4021, which is not above smoke-search-retired at byte 3477`.
+  expect_ranked "/search?q=$NEEDLE" "$SEARCH_LIVE" "$SEARCH_RETIRED" \
+    "the retired page ranks below the live one"
+else
+  fail "search pass skipped: both pages are needed and one was not created"
+fi
+
 step "Attachment"
-# Phase 4, Task 19. The first pass in this script to exercise the two-phase upload for real:
+# Phase 5, Task 19. The first pass in this script to exercise the two-phase upload for real:
 # begin a session, PUT bytes straight to it — never through this application, exactly what the
 # browser does — commit, and read the bytes back through the permission-checked proxy. Only
 # runnable at all because `BLOB_STORE=memory` above points the session URL at the unauthenticated
@@ -620,10 +797,13 @@ step "Teardown"
 # Phase 2's authoring pass — a page, a version, a redirect from the move and four `AuditLog`
 # rows, one for each of create, publish, move and delete. Phase 3's lifecycle pass adds two more
 # pages, their versions, a `PageRelation`, and the `page.cascade` audit row the cascade writes on
-# the page it retired. Phase 4's attachment pass adds one more `Attachment` row, on the lifecycle
-# pass's own `$LIVE_ID` page rather than a fixture of its own. `sweep` removes all of it and then
-# asserts it is gone, so this run leaves `badam` at exactly the counts it found. Scoped to the
-# markers this script writes rather than a TRUNCATE, so a developer's own rows survive.
+# the page it retired. Phase 4's search pass adds two more pages and **three** versions — the page
+# it retires is published twice — with no relation between them and no audit row beyond the create
+# and publish ones, because it searches as a member and not as a super admin. Phase 5's attachment
+# pass adds one `Attachment` row, on the lifecycle pass's own `$LIVE_ID` page rather than a fixture
+# of its own. `sweep` removes all of it and then asserts it is gone, so this run leaves `badam` at
+# exactly the counts it found. Scoped to the markers this script writes rather than a TRUNCATE, so
+# a developer's own rows survive.
 sweep && ok "removed everything this run created" \
   || fail "could not clean up after the run — check for smoke- pages and 'smoke test' bugs"
 

@@ -84,6 +84,7 @@ export type Counts = {
   relations: number;
   attachments: number;
   softDeleted: number;
+  bugReports: number;
 };
 
 export async function snapshotCounts(): Promise<Counts> {
@@ -98,12 +99,20 @@ export async function snapshotCounts(): Promise<Counts> {
     // count is how a leak announces itself: `PageRelation` cascades from both ends, so a
     // non-zero difference here means a fixture page survived the sweep.
     relations: await db.pageRelation.count(),
-    // Phase 4. `Attachment.pageId` cascades from `Page` same as `PageVersion` does, so this is
+    // Phase 5. `Attachment.pageId` cascades from `Page` same as `PageVersion` does, so this is
     // a whole-table count for the same reason `relations` is: it catches a row that survived
     // because the cascade it depends on was ever relaxed, not just the ordinary case sweep
     // already handles explicitly below.
     attachments: await db.attachment.count(),
     softDeleted: await db.page.count({ where: { deletedAt: { not: null } } }),
+    // Phase 4 Task 6. `BugReport` is the one table this suite writes that no fixture page can
+    // reach: `reader.spec.ts` posts a real report through the dialog and deletes it by summary in
+    // its own `afterAll`, and until this line existed the count contract could not see that write
+    // at all. So the guard that was supposed to cover the only spec that writes outside the page
+    // graph was blind to precisely that write — the "too narrow, and silent about it" shape this
+    // project has now met seven times. Nothing else here creates a report, so the four page-graph
+    // specs simply carry an extra invariant they were always meant to hold.
+    bugReports: await db.bugReport.count(),
   };
 }
 
@@ -112,7 +121,7 @@ export function formatCounts(counts: Counts): string {
     `${counts.spaces} spaces / ${counts.pages} pages / ${counts.versions} versions / ` +
     `${counts.drafts} drafts / ${counts.audit} audit / ${counts.redirects} redirects / ` +
     `${counts.relations} relations / ${counts.attachments} attachments / ` +
-    `${counts.softDeleted} soft-deleted`
+    `${counts.softDeleted} soft-deleted / ${counts.bugReports} bug reports`
   );
 }
 
@@ -133,11 +142,19 @@ export function formatCounts(counts: Counts): string {
  * otherwise make the next run's `createPage` fail with `path-occupied`, which reads as a
  * product bug and is not one.
  *
- * Phase 4: `Attachment` is swept explicitly by `pageId`, even though `onDelete: Cascade` would
+ * Phase 5: `Attachment` is swept explicitly by `pageId`, even though `onDelete: Cascade` would
  * remove it anyway once the page goes. Same reasoning as `PageRelation` above and as
  * `scripts/smoke.sh`'s own sweep argues it: a schema decision two files away could be relaxed
  * without this suite noticing, and the row this suite is responsible for cleaning up should be
  * readable in the cleanup that is responsible for it.
+ *
+ * **The marker is a slug and the sweep is space-agnostic, and Phase 4 Task 6 is the first thing
+ * to depend on that.** Nothing here filters on `spaceId`, so a fixture seeded into `handbook`
+ * rather than `engineering` is removed by the same three statements. Had it been scoped to a
+ * space — or to a path prefix that only exists in `engineering` — a cross-space fixture would
+ * leak and the count contract above would fail the run, which is the contract working. Recorded
+ * rather than left to be re-derived, because "the sweep is narrower than the thing it sweeps" is
+ * the failure this project has met most often.
  */
 export async function sweep(): Promise<void> {
   const where = { slug: { startsWith: E2E_SLUG_PREFIX } };
@@ -162,13 +179,27 @@ export async function sweep(): Promise<void> {
   await db.page.deleteMany({ where: { id: { in: ids } } });
 }
 
-/** The seeded space every authoring fixture is created in. */
-export async function engineeringId(): Promise<string> {
+/**
+ * The two seeded spaces, named as a type so a fixture cannot ask for a third by typo.
+ *
+ * They are not interchangeable and Phase 4 is the first thing to care: `engineering` is
+ * `MEMBERS` and `handbook` is `ALL_STAFF`, which is what lets one word be seeded into both and
+ * make a search a *discrimination* rather than an absence.
+ */
+export type SeededSpaceKey = "engineering" | "handbook";
+
+/** A seeded space's id, by key. */
+export async function spaceIdFor(key: SeededSpaceKey): Promise<string> {
   const space = await db.space.findUniqueOrThrow({
-    where: { key: "engineering" },
+    where: { key },
     select: { id: true },
   });
   return space.id;
+}
+
+/** The seeded space every authoring fixture is created in. */
+export async function engineeringId(): Promise<string> {
+  return spaceIdFor("engineering");
 }
 
 export async function viewerFor(email: string) {
@@ -208,7 +239,7 @@ export async function actorContext(browser: Browser, email: string) {
 export type Fixture = { id: string; path: string; title: string };
 
 /**
- * A published page in `engineering`, built through the product's own three steps.
+ * A published page, by default in `engineering`, built through the product's own three steps.
  *
  * `createPage` → `saveDraft` → `publishPage` rather than a hand-rolled `db.page.create`,
  * because the rows those three write are the rows the reader then has to cope with — a
@@ -217,12 +248,33 @@ export type Fixture = { id: string; path: string; title: string };
  *
  * The draft `createPage` leaves behind carries `markdown: ""`, and `publishPage` refuses an
  * empty draft, so the `saveDraft` in the middle is required rather than convenient.
+ *
+ * ## `spaceKey` and `actor` travel together, and that is not a convenience API
+ *
+ * `createPage` calls `can(viewer, space, "EDIT")` and `publishPage` calls `can(…, "PUBLISH")`,
+ * and **`ALL_STAFF` grants read, not edit** — so `aisyah@example.com`, an `EDITOR` of
+ * `engineering` and a member of nothing else, cannot author in `handbook` at all. Verified against
+ * the seed rather than assumed: `admin@example.com` is the only seeded identity that holds `EDIT`
+ * there, and it holds it through `can()`'s `if (viewer.isSuperAdmin) return true` short circuit
+ * and not through a membership row, because `handbook` has no memberships. So a fixture outside
+ * `engineering` has to name its actor, and a wrong pairing surfaces as `createPage: {"ok":false,
+ * "reason":"forbidden"}` naming both — not as a mystery.
  */
 export async function seedPublishedPage(opts: {
   slug: string;
   title: string;
   markdown: string;
   parentId?: string | null;
+  /**
+   * Which seeded space to create the page in. **Defaults to `engineering`**, which is every
+   * Phase 2 and Phase 3 fixture, so nothing that existed before this option changes behaviour.
+   */
+  spaceKey?: SeededSpaceKey;
+  /**
+   * Who creates, drafts and publishes it. Defaults to `aisyah@example.com`, the `engineering`
+   * editor. See the docstring above for why a `handbook` fixture must pass the super admin.
+   */
+  actor?: string;
   /** Defaults to `DOC`, which is every Phase 2 fixture. Phase 3 needs ADRs and RFCs. */
   docType?: DocType;
   /**
@@ -239,16 +291,22 @@ export async function seedPublishedPage(opts: {
   if (!opts.slug.startsWith(E2E_SLUG_PREFIX)) {
     throw new Error(`Fixture slug "${opts.slug}" must start with "${E2E_SLUG_PREFIX}".`);
   }
-  const viewer = await viewerFor("aisyah@example.com");
+  const spaceKey = opts.spaceKey ?? "engineering";
+  const actor = opts.actor ?? "aisyah@example.com";
+  const viewer = await viewerFor(actor);
 
   const created = await createPage(viewer, {
-    spaceId: await engineeringId(),
+    spaceId: await spaceIdFor(spaceKey),
     parentId: opts.parentId ?? null,
     slug: opts.slug,
     title: opts.title,
     docType: opts.docType ?? "DOC",
   });
-  if (!created.ok) throw new Error(`createPage: ${JSON.stringify(created)}`);
+  // Names the actor and the space, because the interesting failure here is a permission one and
+  // `{"ok":false,"reason":"forbidden"}` on its own does not say who was refused where.
+  if (!created.ok) {
+    throw new Error(`createPage as ${actor} in ${spaceKey}: ${JSON.stringify(created)}`);
+  }
 
   // `seen` is a `Date`, not an ISO string — that is the repository's contract, and the HTTP
   // layer is what serialises it.
@@ -286,6 +344,11 @@ export async function seedPublishedPage(opts: {
  * The status comes from the document's own `status:` line where a test has one to make, and from
  * `options.status` where it does not; both are legal and `seedPublishedPage` argues which is
  * which.
+ *
+ * **The actor is fixed at the `engineering` editor, deliberately.** Every caller republishes an
+ * `engineering` fixture, and an `actor` option nothing passes is an untested option. A `handbook`
+ * fixture republished through this would be refused by `can(…, "PUBLISH")` and say so; widen it
+ * when something actually needs it.
  */
 export async function republishPage(
   fixture: Fixture,
