@@ -86,6 +86,8 @@ export type Counts = {
   softDeleted: number;
   bugReports: number;
   gitJobs: number;
+  systems: number;
+  pageSystems: number;
 };
 
 export async function snapshotCounts(): Promise<Counts> {
@@ -122,6 +124,26 @@ export async function snapshotCounts(): Promise<Counts> {
     // the contract could see them. `GitJob` cascades from `Page`, so `sweep()` should take these
     // with the fixture pages and this line is what proves the cascade rather than assuming it.
     gitJobs: await db.gitJob.count(),
+    // Phase 7 Task 1, added with the tables rather than with the feature that writes to them —
+    // the same discipline `gitJobs` above was added under, and for the same reason: Task 2 makes
+    // every publish resolve `systems:` into `PageSystem` rows, so the window in which this
+    // contract could not see them would be exactly the tasks that introduce the write.
+    //
+    // The two columns catch different failures and neither substitutes for the other.
+    // `pageSystems` is the fixture leak: `PageSystem.pageId` cascades from `Page`, so `sweep()`
+    // needs no statement of its own and this number is what proves the cascade rather than
+    // assuming it — a `PageSystem` row carries no `e2e-` marker, it is two ids, exactly like
+    // `relations` above. `systems` is the opposite shape: nothing here should write a `System`
+    // row at all, because the catalogue is seeded and administered, so a non-zero difference is
+    // an admin spec that created one and did not remove it. That is a real risk from Task 5
+    // onward, and `System` has no marker either — a leaked catalogue entry would sit on
+    // `/systems` for every reader with nothing to notice it.
+    //
+    // `System` is also the one table here that `sweep()` must never touch by cascade:
+    // `PageSystem.systemId` is `Restrict`, so deleting a fixture page removes its facet rows and
+    // leaves the seeded catalogue alone. If that ever inverts, this number is what says so.
+    systems: await db.system.count(),
+    pageSystems: await db.pageSystem.count(),
   };
 }
 
@@ -131,7 +153,8 @@ export function formatCounts(counts: Counts): string {
     `${counts.drafts} drafts / ${counts.audit} audit / ${counts.redirects} redirects / ` +
     `${counts.relations} relations / ${counts.attachments} attachments / ` +
     `${counts.softDeleted} soft-deleted / ${counts.bugReports} bug reports / ` +
-    `${counts.gitJobs} git jobs`
+    `${counts.gitJobs} git jobs / ${counts.systems} systems / ` +
+    `${counts.pageSystems} page systems`
   );
 }
 

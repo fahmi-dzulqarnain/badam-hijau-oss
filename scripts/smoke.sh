@@ -410,8 +410,10 @@ author_page() { # slug title docType markdown-as-a-json-string
 # it has to be a whole-table count rather than another clause in `sweep`'s `raise exception`
 # block is in that block's comment.
 #
-# **Ten of the twelve tables in `prisma/schema.prisma`, and the two exceptions are stated rather
-# than left to be noticed.** `User` and `SpaceMembership` are not counted because nothing in this
+# **Twelve of the fourteen tables in `prisma/schema.prisma`, and the two exceptions are stated
+# rather than left to be noticed.** (Ten of twelve until Phase 7 Task 1 added `System` and
+# `PageSystem`; the numbers are corrected here rather than left to be trusted, which is a habit
+# this project earned the hard way.) `User` and `SpaceMembership` are not counted because nothing in this
 # script writes a row to either: every `sign_in` is an **upsert** of one of the three seeded
 # emails, and a membership exists only where the seed put one. Enumerated against the schema and
 # checked, not assumed — the e2e suite's own count contract was found missing a `BugReport` column
@@ -432,11 +434,26 @@ author_page() { # slug title docType markdown-as-a-json-string
 #
 # **Phase 6 added another**, which is why `Attachment` appears above too: the attachment pass
 # writes a real row, and without a column here the Teardown comparison could not see it leak.
+#
+# **Phase 7 Task 1 added two**, `System` and `PageSystem`, again from the task that creates the
+# tables rather than the tasks that write to them — Task 2 makes every publish resolve `systems:`
+# into `PageSystem` rows and Task 5 lets an admin create a `System`, so a column added later would
+# leave exactly those tasks unwatched. The count is now twelve of the fourteen tables in
+# `prisma/schema.prisma`, re-enumerated against it rather than assumed, and the two exceptions are
+# still `User` and `SpaceMembership` for the reasons above.
+#
+# They catch different failures. `PageSystem` cascades from `Page`, so `sweep()` below needs no
+# statement for it and this number is what proves that rather than assuming it. `System` is the
+# reverse: nothing in this script should ever create one — the catalogue is seeded — so any
+# difference is a leak from an admin check, and `PageSystem.systemId` is `Restrict`, which means a
+# seeded catalogue entry must survive every page delete this script makes. If that ever inverts,
+# these two numbers are what say so.
 counts() {
   psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX -v ON_ERROR_STOP=1 -c "
     select format(
       '%s spaces / %s pages / %s versions / %s drafts / %s audit / %s redirects / '
-      || '%s relations / %s attachments / %s bug reports / %s git jobs / %s soft-deleted',
+      || '%s relations / %s attachments / %s bug reports / %s git jobs / %s systems / '
+      || '%s page systems / %s soft-deleted',
       (select count(*) from \"Space\"),
       (select count(*) from \"Page\"),
       (select count(*) from \"PageVersion\"),
@@ -447,6 +464,8 @@ counts() {
       (select count(*) from \"Attachment\"),
       (select count(*) from \"BugReport\"),
       (select count(*) from \"GitJob\"),
+      (select count(*) from \"System\"),
+      (select count(*) from \"PageSystem\"),
       (select count(*) from \"Page\" where \"deletedAt\" is not null))" 2>/dev/null \
     || echo "counts unavailable"
 }
