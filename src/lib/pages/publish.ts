@@ -1073,12 +1073,28 @@ export async function publishPage(
       // with a cascade behind it, and each module returns all of *its* errors, so whichever runs
       // first is the one the author sees.
       //
-      // `tx`, not `db`. Phase 5 Task 4 established the pattern and measured the trap, and for
-      // publish specifically the `db` mistake does not commit silently — it **times out on a
-      // lock**, because this transaction is holding `FOR UPDATE` on the draft row and is about to
-      // update `Page` columns under a unique index. `resolveSystems` only reads `System`, which
-      // nothing here locks, so its own mutant is quiet; `replaceSystems` below is the one that
-      // hangs, which is why its test is shaped for that rather than for an assertion.
+      // `tx`, not `db` — and the two calls this task adds behave **oppositely** under that
+      // mistake, which is worth stating rather than leaving to be assumed.
+      //
+      // `resolveSystems(db, …)` is an **equivalent mutant**, measured: the whole publish suite
+      // passes 68 of 68 with it. It reads `System`, a table no statement in this transaction has
+      // written or locked, so the two snapshots cannot disagree — and the race it looks like it
+      // introduces (an admin deleting a system between the read and the insert) exists on `tx`
+      // too, because the foreign key is checked at insert time against committed data either way.
+      // `tx` is still what is passed, for the reason the module docstring gives and because the
+      // sweep in `src/lib/pages/visible.test.ts` looks for `tx.`; reported here rather than
+      // pinned by a test that would have to manufacture the difference.
+      //
+      // `replaceSystems(db, …)` below is the loud one, and it is loud in the shape Phase 5 Task 4
+      // predicted for publish: not a silent independent commit but a **lock timeout**. This
+      // transaction has just updated `Page.publishedVersionId`, which carries
+      // `Page_publishedVersionId_key`, so Postgres takes `FOR UPDATE` on the row rather than
+      // `FOR NO KEY UPDATE` — and the `PageSystem` insert's foreign key wants `FOR KEY SHARE` on
+      // that same row from another connection, which conflicts. Measured: the facet test does not
+      // fail, it hangs, and vitest reports `Test timed out in 5000ms` against the test's own line.
+      // That is why the test below carries a note saying so: the discrimination is a lock and
+      // cannot be turned into an assertion, so what is shaped deliberately is that the next
+      // reader is told what a timeout there means.
       const systems = await resolveSystems(tx, { declared: frontmatter.systems });
       if (!systems.ok) return invalidAll(systems.errors);
 

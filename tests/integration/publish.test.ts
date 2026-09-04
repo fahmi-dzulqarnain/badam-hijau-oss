@@ -2208,6 +2208,14 @@ test("a document with no frontmatter publishes, and its version records that", a
  * The non-vacuity companion for every refusal below, and the exit criterion in one assertion:
  * a page's declared keys reach `PageSystem` rows.
  *
+ * **If this test times out instead of failing, the write is on `db` rather than `tx`.** Measured:
+ * `replaceSystems(db, …)` inside the publish transaction blocks rather than committing
+ * independently — the `PageSystem` foreign key wants `FOR KEY SHARE` on a `Page` row this
+ * transaction holds `FOR UPDATE`, because `publishedVersionId` is under a unique index — and
+ * vitest reports it as `Test timed out in 5000ms` against the line below, which names nothing.
+ * The discrimination is a lock and cannot be made into an assertion, so this paragraph is the
+ * shaping: a timeout here is a diagnosis, not a slow test.
+ *
  * Kills the Phase 3 behaviour outright — with `replaceSystems` never called, the version still
  * stores `systems: ["order-hub", "store-ios"]` and the join stays empty, which is precisely the
  * "page ships with an empty facet" state, and it is invisible to any assertion that only reads
@@ -2239,8 +2247,15 @@ test("a page's declared systems reach PageSystem rows", async () => {
  * `if (systemIds.length > 0)` around the whole function would break, and the case that is every
  * page with an untouched template `systems:`).
  *
- * Kills insert-only: after the second publish the page would hold three systems, and after the
- * third it would still hold three.
+ * **Which mutant it kills, measured rather than claimed.** The weak implementation this is
+ * written against is the accumulating one — no `deleteMany`, `createMany({ skipDuplicates: true })`
+ * — and it dies here by *assertion*: `['backend', 'order-hub', 'store-ios']` where
+ * `['backend', 'order-hub']` was expected. That is the exit criterion in one line.
+ *
+ * Deleting the `deleteMany` **alone** also fails this test, and deliberately does not count: it
+ * dies on a `PageSystem` unique violation when the second publish re-declares `order-hub`, which
+ * is a crash rather than the removal this test names. A mutant that dies for the wrong reason has
+ * not proven the assertion you meant, so the accumulating form is the one the docstring claims.
  */
 test("republishing re-resolves systems rather than accumulating them", async () => {
   const { page, asAisyah } = await fixture();
@@ -2362,7 +2377,8 @@ test("the author's system key is matched case-insensitively", async () => {
  * Kills removing the dedupe: `replaceSystems` deliberately passes no `skipDuplicates`, so the
  * insert dies on `@@id([pageId, systemId])` and this test fails as a unique violation rather
  * than passing on `ON CONFLICT DO NOTHING` — which is the difference between testing the dedupe
- * and testing Postgres.
+ * and testing Postgres. **Measured, because that is the whole reason the flag is absent:** with
+ * `skipDuplicates: true` restored *and* the dedupe deleted, this file passes 68 of 68.
  */
 test("a system declared twice is one row, whatever the case", async () => {
   const { page, asAisyah } = await fixture();

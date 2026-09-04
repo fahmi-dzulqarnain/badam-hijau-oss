@@ -142,10 +142,18 @@ import type { Prisma } from "@prisma/client";
 /**
  * Whatever can read the catalogue and write the join. Structural, and the parameter is named
  * `tx` in every signature below for the two reasons `RelationClient` gives: the publish path
- * passes its **transaction** client — resolving against a different snapshot than the write
- * commits into is the bug Phase 5 Task 4 measured — and the sweep in
- * `src/lib/pages/visible.test.ts` matches `db.`/`tx.` delegate calls, so a parameter named
- * `client` would hide three statements from it.
+ * passes its **transaction** client, and the sweep in `src/lib/pages/visible.test.ts` matches
+ * `db.`/`tx.` delegate calls, so a parameter named `client` would hide four statements from it.
+ *
+ * **The two functions differ in what the `db` mistake costs, and it was measured rather than
+ * assumed.** `replaceSystems` on `db` inside the publish transaction does not commit
+ * independently: it blocks, because the `PageSystem` foreign key wants `FOR KEY SHARE` on a
+ * `Page` row the publish holds `FOR UPDATE` (`publishedVersionId` is under a unique index), and
+ * the suite reports it as a five-second vitest timeout. `resolveSystems` on `db` is an
+ * **equivalent mutant** — 68 of 68 green — because it reads a table this transaction never
+ * writes or locks, and the foreign key is checked against committed data at insert time either
+ * way. Both are called with `tx` regardless; the second is reported rather than pinned by a test
+ * that would have to manufacture the difference.
  */
 export type SystemClient = Pick<Prisma.TransactionClient, "system" | "pageSystem">;
 
