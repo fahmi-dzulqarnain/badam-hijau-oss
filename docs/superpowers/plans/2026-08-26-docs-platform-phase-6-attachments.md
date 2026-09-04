@@ -1,4 +1,4 @@
-# Phase 5 — Attachments on SharePoint, and the Entra ID cutover
+# Phase 6 — Attachments on SharePoint, and the Entra ID cutover
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
@@ -85,13 +85,15 @@ So there is a `PUT /api/attachments/dev-upload/[...key]` route, **registered und
 - **Upload bypasses the app, download proxies through it.** Video bandwidth stays off Next.js on
   the way in, while the read path stays governed by SQL predicates.
 - **Any file type, including video.** The expensive corner, chosen deliberately.
-- **This is Phase 5**; git mirror and systems/admin shift to 6 and 7. It was planned and built
-  as Phase 4, in parallel with search and diagrams on a branch cut before search landed, and
-  renumbered on merge because search reached `main` first — its plan, its commits and its closed
-  exit criteria all say 4, and renumbering a shipped phase to accommodate a later one is the
-  wrong direction.
+- **This is Phase 6**; systems/admin shifts to 7. It was renumbered twice, by one rule applied
+  twice: the phase that reaches `main` first keeps its number. Planned and built as Phase 4, in
+  parallel with search and diagrams on a branch cut before search landed; search merged first,
+  so this became 5. Then the git mirror merged as its own Phase 5, so this became 6. Renumbering
+  a phase whose plan, commits and closed exit criteria are already written is the wrong
+  direction, so the movement is always this way — and this branch's commit messages say
+  "Phase 5 Task N" as a result.
 
-## What Phase 5 does NOT do
+## What Phase 6 does NOT do
 
 - **Image resizing, thumbnails, transcoding, a media library UI, cross-page reuse.** Spec §3.
 - **Virus scanning, rate limiting.** Spec §3. Named so the absence is a decision.
@@ -100,7 +102,7 @@ So there is a `PUT /api/attachments/dev-upload/[...key]` route, **registered und
   requirements that do not exist yet.
 - **Delegated Graph tokens for anything, including profile photos.** Avatars go null after the
   cutover; spec §4.3 records why that is accepted rather than fixed.
-- **Search over attachment filenames.** Phase 5 owns search.
+- **Search over attachment filenames.** Phase 4 owns search.
 
 ## Landmines this phase introduces
 
@@ -289,7 +291,7 @@ is the expected intermediate state and not a misconfiguration.
 
 Under signing in, add: Entra ID sends no `picture` claim, so `avatarUrl` is null for accounts
 created after the cutover. This is accepted — fetching `/me/photo/$value` needs delegated Graph
-tokens, which is the machinery Phase 5 avoids by authenticating as the application.
+tokens, which is the machinery Phase 6 avoids by authenticating as the application.
 
 - [ ] **Step 5: Verify nothing broke**
 
@@ -5139,7 +5141,7 @@ enumerates what each phase adds, and an unlisted model is how the next person is
 
 - [ ] **Step 3: Update the header comment**
 
-`scripts/smoke.sh`'s header lists what each phase added. Add Phase 5's pass.
+`scripts/smoke.sh`'s header lists what each phase added. Add Phase 6's pass.
 
 - [ ] **Step 4: Run it**
 
@@ -5160,7 +5162,7 @@ git commit -m "Add the attachment pass to the smoke test (Phase 5 Task 19)"
 
 - [ ] **Step 1: Renumber the roadmap**
 
-In `docs/superpowers/plans/2026-08-21-docs-platform-roadmap.md`, insert Phase 5 (attachments
+In `docs/superpowers/plans/2026-08-21-docs-platform-roadmap.md`, insert Phase 6 (attachments
 and the Entra cutover) after search and diagrams, and shift git mirror and systems/admin to 6
 and 7. Remove "S3 attachments via presigned URLs" from what is now Phase 7 and note where it
 went, and record in the ordering notes why attachments is 5 rather than 4.
@@ -5168,7 +5170,7 @@ went, and record in the ordering notes why attachments is 5 rather than 4.
 - [ ] **Step 2: Amend the superseded spec entries**
 
 In `docs/superpowers/specs/2026-08-21-internal-docs-platform-design.md`: mark **D12** as
-superseded by the Phase 5 spec, keeping its rationale — a SharePoint library is remote state,
+superseded by the Phase 6 spec, keeping its rationale — a SharePoint library is remote state,
 not container state, so the stateless-container argument still holds and is still satisfied.
 Rewrite §17's configuration paragraph against §9 of the new spec.
 

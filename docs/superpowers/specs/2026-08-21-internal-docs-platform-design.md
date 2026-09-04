@@ -56,7 +56,7 @@ All are additive later. None is required for the system to be useful.
 | D12 | ~~S3-compatible object storage for attachments from day one~~ — **superseded**, see below | Keeps the container stateless; a mounted volume breaks the moment there is more than one replica |
 | D13 | Ship as an alpha, with in-product bug reporting from day one | Early users will hit rough edges; the cost of a bug going unreported is higher than the cost of the button |
 
-> **D12 superseded by the [Phase 5 spec](2026-08-26-attachments-sharepoint-entra-design.md).**
+> **D12 superseded by the [Phase 6 spec](2026-08-26-attachments-sharepoint-entra-design.md).**
 > The backend is a SharePoint document library reached over Microsoft Graph, not S3: the
 > company runs Microsoft 365 and has no object storage provisioned. **D12's rationale still
 > holds and is still satisfied** — a SharePoint library is remote state, not container state,
@@ -504,7 +504,7 @@ deploy.
 container stays stateless and horizontal scaling does not break uploads. That still holds;
 the backend does not.
 
-> **Superseded by the [Phase 5 spec](2026-08-26-attachments-sharepoint-entra-design.md) §5, §7
+> **Superseded by the [Phase 6 spec](2026-08-26-attachments-sharepoint-entra-design.md) §5, §7
 > and §9.** The store is a SharePoint document library reached over Microsoft Graph with an
 > app-only token, still behind the `BlobStore` interface this paragraph argued for. Two things
 > this paragraph got wrong for that backend: **downloads do NOT bypass the application** — they
@@ -520,7 +520,7 @@ Configuration by environment variable: database URL, OIDC issuer / client id / c
 secret, session secret, git remote URL and credentials, git author fallback, **Graph tenant /
 client id / client secret / drive id, `BLOB_STORE` (which has no default, in either
 direction)**, maximum upload size, attachment retention days, review interval in months,
-`GIT_SHA` build argument, and optional `BUG_WEBHOOK_URL`. See the Phase 5 spec §9.
+`GIT_SHA` build argument, and optional `BUG_WEBHOOK_URL`. See the Phase 6 spec §9.
 
 The git working tree remains local to the container and is re-cloned on start, so it is
 also not durable state.

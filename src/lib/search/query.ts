@@ -205,7 +205,7 @@ export type SearchQuery = {
    * isolates retired ADRs, asking for `CURRENT` excludes every retired page. Both fall out of an
    * exact match, so there is no separate retired switch.
    *
-   * §13 also lists a `system` filter. Phase 6 owns the systems catalogue, so there is nothing to
+   * §13 also lists a `system` filter. Phase 7 owns the systems catalogue, so there is nothing to
    * filter on; the absence is deliberate and this comment is where it is recorded.
    */
   status?: DocStatus;

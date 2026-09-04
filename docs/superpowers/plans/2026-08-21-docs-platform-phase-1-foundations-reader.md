@@ -4458,6 +4458,12 @@ export function BugReportButton({
 
 `src/components/RailFoot.tsx` loses its own state and becomes:
 
+> **Superseded snapshot.** Phase 5's Task 7 labels the build string — `Build 0.1.0+df0ef11 ·
+> alpha` — because the reader route now paints a *content-repository* commit on the same page,
+> and an unlabelled version-plus-sha beside a labelled one invites the reader to decide for
+> themselves which is which. Read `src/components/RailFoot.tsx` for the truth; do not apply
+> this fence.
+
 ```tsx
 import type { BuildInfo } from "@/lib/version/build";
 import { BugReportButton } from "./BugReportButton";
@@ -4611,6 +4617,12 @@ export function TopBar({ build }: { build: BuildInfo }) {
 ```
 
 - [ ] **Step 10: Replace `src/components/BugReportDialog.tsx`**
+
+> **Superseded snapshot.** Phase 5's Task 7 named the application build in the one sentence
+> this dialog shows it in — `Logged against build 0.1.0+…` — because it is the third place a
+> reader meets a sha and was the only other one that showed it unnamed. The label comes from
+> `src/lib/version/labels.ts`, which owns the pair. Read the file for the truth; do not apply
+> this fence.
 
 ```tsx
 "use client";

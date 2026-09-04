@@ -85,6 +85,7 @@ export type Counts = {
   attachments: number;
   softDeleted: number;
   bugReports: number;
+  gitJobs: number;
 };
 
 export async function snapshotCounts(): Promise<Counts> {
@@ -99,7 +100,7 @@ export async function snapshotCounts(): Promise<Counts> {
     // count is how a leak announces itself: `PageRelation` cascades from both ends, so a
     // non-zero difference here means a fixture page survived the sweep.
     relations: await db.pageRelation.count(),
-    // Phase 5. `Attachment.pageId` cascades from `Page` same as `PageVersion` does, so this is
+    // Phase 6. `Attachment.pageId` cascades from `Page` same as `PageVersion` does, so this is
     // a whole-table count for the same reason `relations` is: it catches a row that survived
     // because the cascade it depends on was ever relaxed, not just the ordinary case sweep
     // already handles explicitly below.
@@ -113,6 +114,14 @@ export async function snapshotCounts(): Promise<Counts> {
     // project has now met seven times. Nothing else here creates a report, so the four page-graph
     // specs simply carry an extra invariant they were always meant to hold.
     bugReports: await db.bugReport.count(),
+    // Phase 5 Task 3, added with the table rather than with the feature that writes to it. Task 4
+    // is what makes a publish, a move, a delete and a restore each enqueue a `GitJob`, so every
+    // spec below that publishes will start creating rows here — and the window in which this
+    // count did not exist would be exactly the tasks that introduce the write. That is the shape
+    // Phase 4 met from the other side: `BugReport` rows had been written for two phases before
+    // the contract could see them. `GitJob` cascades from `Page`, so `sweep()` should take these
+    // with the fixture pages and this line is what proves the cascade rather than assuming it.
+    gitJobs: await db.gitJob.count(),
   };
 }
 
@@ -121,7 +130,8 @@ export function formatCounts(counts: Counts): string {
     `${counts.spaces} spaces / ${counts.pages} pages / ${counts.versions} versions / ` +
     `${counts.drafts} drafts / ${counts.audit} audit / ${counts.redirects} redirects / ` +
     `${counts.relations} relations / ${counts.attachments} attachments / ` +
-    `${counts.softDeleted} soft-deleted / ${counts.bugReports} bug reports`
+    `${counts.softDeleted} soft-deleted / ${counts.bugReports} bug reports / ` +
+    `${counts.gitJobs} git jobs`
   );
 }
 
@@ -142,7 +152,7 @@ export function formatCounts(counts: Counts): string {
  * otherwise make the next run's `createPage` fail with `path-occupied`, which reads as a
  * product bug and is not one.
  *
- * Phase 5: `Attachment` is swept explicitly by `pageId`, even though `onDelete: Cascade` would
+ * Phase 6: `Attachment` is swept explicitly by `pageId`, even though `onDelete: Cascade` would
  * remove it anyway once the page goes. Same reasoning as `PageRelation` above and as
  * `scripts/smoke.sh`'s own sweep argues it: a schema decision two files away could be relaxed
  * without this suite noticing, and the row this suite is responsible for cleaning up should be

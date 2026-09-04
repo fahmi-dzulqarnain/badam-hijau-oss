@@ -3,10 +3,11 @@
 An internal documentation platform. Markdown authoring in the browser, drafts in Postgres,
 per-space permissions behind SSO.
 
-**Status: alpha.** Five of seven planned phases are complete — staff read published docs;
+**Status: alpha.** Six of seven planned phases are complete — staff read published docs;
 editors create, draft, preview, publish, move and delete them; ADRs, RFCs and runbooks carry a
-real lifecycle; full-text search and Mermaid diagrams work; and editors attach files, stored in
-a company-owned SharePoint library. The version string and an `alpha` badge are visible in the
+real lifecycle; full-text search and Mermaid diagrams work; publishing mirrors the document to a
+real git commit authored by the publisher; and editors attach files, stored in a company-owned
+SharePoint library. The version string and an `alpha` badge are visible in the
 app, and there is a Report bug button in the nav rail.
 
 ## Running it
@@ -28,19 +29,19 @@ deployed environment**: it enables a passwordless login that inherits any seeded
 memberships. A session minted that way is revoked the moment the flag is turned off, because the
 token records which provider issued it.
 
-Identity moves to Entra ID as of Phase 5 (see
+Identity moves to Entra ID as of Phase 6 (see
 [`docs/ops/entra-id-and-sharepoint.md`](docs/ops/entra-id-and-sharepoint.md) for the cutover
 steps). Entra ID sends no `picture` claim, so `avatarUrl` is null for every account created
 after the cutover. This is accepted, not fixed: fetching `/me/photo/$value` needs delegated
 Graph tokens — per-user consent, token persistence, refresh — which is exactly the machinery
-Phase 5 avoids by authenticating to Graph as the application.
+Phase 6 avoids by authenticating to Graph as the application.
 
 ## Checks
 
 ```bash
-npm test              # 1094 unit and integration tests against a real Postgres
-npm run test:e2e      # 46 Playwright specs against a production build
-npm run smoke         # 93 checks from a cold start: provision, migrate, seed, build, serve, tear down
+npm test              # 1321 unit and integration tests against a real Postgres
+npm run test:e2e      # 67 Playwright specs against a production build
+npm run smoke         # 119 checks from a cold start: provision, migrate, seed, build, serve, tear down
 npm run typecheck && npm run build
 npm run plan:check    # reports plan documents whose code fences no longer match the code
 ```

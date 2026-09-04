@@ -1,5 +1,5 @@
 /**
- * End-to-end coverage for attachments (Phase 5, Task 18).
+ * End-to-end coverage for attachments (Phase 6, Task 18).
  *
  * The first suite to drive the whole upload → commit → read cycle over real HTTP: the browser
  * calls `POST /api/attachments` for a session URL, PUTs bytes directly to it (never through

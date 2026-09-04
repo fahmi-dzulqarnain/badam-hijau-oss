@@ -4,7 +4,7 @@
 **Status:** Approved for planning
 **Supersedes:** D12 and the attachment half of the original Phase 6 in
 [the platform spec](2026-08-21-internal-docs-platform-design.md)
-**Becomes:** Phase 5 in [the roadmap](../plans/2026-08-21-docs-platform-roadmap.md)
+**Becomes:** Phase 6 in [the roadmap](../plans/2026-08-21-docs-platform-roadmap.md)
 
 ## 1. Summary
 
@@ -475,12 +475,14 @@ the remote store is never on the critical path for reading a document.
 
 ## 12. Roadmap consequences
 
-This becomes **Phase 5**, after search and diagrams. Git mirror and systems/admin shift to 6
-and 7.
+This becomes **Phase 6**, after the git mirror, and systems/admin shifts to 7.
 
-Planned and built as Phase 4, in parallel with search on a branch cut before it landed, and
-renumbered on merge: search reached `main` first, and its plan, commits and closed exit criteria
-all say 4.
+**Renumbered twice, by one rule applied twice: the phase that reaches `main` first keeps its
+number.** Planned and built as Phase 4, in parallel with search on a branch cut before it
+landed; search merged first, so this became 5. Then the git mirror merged as its own Phase 5,
+so this became 6. Both times the alternative was renumbering a phase whose plan, commits and
+closed exit criteria were already written, which is the wrong direction. This branch's commit
+messages therefore say "Phase 5 Task N", and its earliest ones say Phase 4.
 
 Superseded rather than deleted, with the reason recorded in place:
 

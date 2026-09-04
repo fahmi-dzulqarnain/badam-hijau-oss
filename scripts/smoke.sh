@@ -14,7 +14,11 @@
 # supersede it, and confirm the first is retired, still readable, and listed beside its
 # replacement in the generated index. Phase 4 added the search pass: a word unique to a published
 # page finds it, and once that page is retired it is still found and ranks below a live match.
-# Phase 5 added the attachment pass: begin an upload, PUT bytes directly to the session URL —
+# Phase 5 added the git-mirror pass: publish over HTTP, drain `npm run git:worker` against a
+# temporary working tree and a local bare remote, and assert the file, its frontmatter, the
+# commit, the sha on the version row and the sha on the page.
+#
+# Phase 6 added the attachment pass: begin an upload, PUT bytes directly to the session URL —
 # never through this application, same as a real browser — commit, and read them back through the
 # permission-checked proxy, with a Range request proving the 206 path.
 # Deliberately no browser: Playwright owns those.
@@ -85,9 +89,33 @@ NEEDLE="capybara"
 # nothing here needs the bodies to differ.
 SEARCH_BODY="The $NEEDLE bridge retries on a fixed interval, so the kiosk sees a stale price."
 
+# The page the git-mirror pass publishes — Phase 5, Task 9. One page, because what this pass is
+# about is the *seam* to git rather than the lifecycle: the file's bytes, the commit, the sha on
+# the version row and the sha on the page. Moves, deletes and restores against a real tree are
+# `e2e/mirror-tree.spec.ts`, which can read a repository between two HTTP calls.
+MIRROR_SLUG="smoke-mirror"
+MIRROR_TITLE="Smoke page that reaches the mirror"
+# Distinct from the title, so a mirror that wrote a canonical block and dropped the body fails.
+MIRROR_MARKER="This body was written into the content repository by the cold-start smoke test."
+# The mirror's working tree and its remote, both throwaway.
+#
+# **Never `content/`.** That directory is gitignored and real in a developer's checkout, and a
+# smoke run that wrote into it would commit fixtures into whatever tree that developer happens to
+# have — `GIT_MIRROR_ROOT` is what makes it avoidable, and `mktemp -d` is what makes it avoided.
+# The guard below is the same one `tests/setup/scratch.ts` states for the vitest suites: prove the
+# directory is not inside this checkout rather than trusting `mktemp`.
+MIRROR_TMP="$(mktemp -d)"
+MIRROR_ROOT="$MIRROR_TMP/tree"
+MIRROR_REMOTE="$MIRROR_TMP/content.git"
+# The worker's own output, so a failed drain can print what it said instead of only its status.
+WLOG="$(mktemp)"
+
 cleanup() {
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null || true
-  rm -f "$JAR" "$LOG" "$OUT" "$FORM" "$PNG_FILE"
+  rm -f "$JAR" "$LOG" "$OUT" "$FORM" "$WLOG" "$PNG_FILE"
+  # The mirror tree and its remote are files, and files do not cascade with the rows the sweep
+  # takes. A crashed run leaves them under $TMPDIR rather than in the repository.
+  [ -n "$MIRROR_TMP" ] && rm -rf "$MIRROR_TMP"
 }
 trap cleanup EXIT
 
@@ -271,6 +299,46 @@ expect_ranked() { # url higher-slug lower-slug label
   fi
 }
 
+# One assertion about the mirrored file "$MIRROR_FILE", which the git-mirror pass has already
+# located. The file's own bytes, not a response body — so unlike every needle above it, nothing on
+# a page can echo one back and satisfy it.
+mirror_has() { # needle label
+  grep -q -- "$1" "$MIRROR_FILE" && ok "$2" \
+    || fail "$2 (no match for '$1' in $MIRROR_FILE)"
+}
+
+# One run of `npm run git:worker` against the temporary tree, leaving its output in "$WLOG" for
+# the assertions that follow and its status in `WORKER_CODE`.
+#
+# **The exit code is read bare, and that is the whole reason this is a function.** A pipe reports
+# its LAST command's status — the trap this project has been bitten by five times, and the one this
+# script's own header warns about for `npm run smoke | tail` — so the run is redirected to a file
+# and `$?` is read on the next line. `set +e` around it because a non-zero here is a named check
+# below rather than a reason to abandon the run before Teardown can sweep.
+#
+# `npm run --silent git:worker` and not `npx tsx scripts/git-worker.ts`: the alias is what an
+# operator puts in a cron, so the alias is what a smoke test should exercise, and `--silent` keeps
+# npm's own banner out of the output these checks grep.
+worker_drain() { # what-is-being-drained
+  set +e
+  GIT_MIRROR_ROOT="$MIRROR_ROOT" GIT_REMOTE_URL="$MIRROR_REMOTE" \
+    npm run --silent git:worker > "$WLOG" 2>&1
+  WORKER_CODE=$?
+  set -e
+  [ "$WORKER_CODE" = "0" ] && ok "the worker drained $1 and exited 0" \
+    || fail "the worker exited $WORKER_CODE draining $1: $(tr -d '\r' < "$WLOG" | tail -c 300)"
+}
+
+# Whether a path is this checkout or inside it. The mirror's working tree must be neither: `git`
+# run in a subdirectory of a repository reports the ANCESTOR's root, so a mirror rooted under this
+# checkout would commit fixtures into the branch under test rather than refusing.
+inside_checkout() { # path
+  case "$1" in
+    "$PWD" | "$PWD"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Creates a page through `/new`, saves `markdown` into its draft, and leaves the new page's id in
 # `PAGE_ID` — empty if any step failed, so the caller branches on one variable.
 #
@@ -342,7 +410,7 @@ author_page() { # slug title docType markdown-as-a-json-string
 # it has to be a whole-table count rather than another clause in `sweep`'s `raise exception`
 # block is in that block's comment.
 #
-# **Nine of the eleven tables in `prisma/schema.prisma`, and the two exceptions are stated rather
+# **Ten of the twelve tables in `prisma/schema.prisma`, and the two exceptions are stated rather
 # than left to be noticed.** `User` and `SpaceMembership` are not counted because nothing in this
 # script writes a row to either: every `sign_in` is an **upsert** of one of the three seeded
 # emails, and a membership exists only where the seed put one. Enumerated against the schema and
@@ -352,15 +420,23 @@ author_page() { # slug title docType markdown-as-a-json-string
 #
 # **Phase 4 added no table**, checked the same way: `Page.searchVector` and
 # `PageVersion.searchText`/`searchHeadings` are columns on tables already counted here, and the
-# search index is a GIN index over one of those columns rather than a row anywhere.
+# search index is a GIN index over one of those columns rather than a row anywhere. So the search
+# pass's cleanup contract is the existing nine numbers, unchanged.
 #
-# **Phase 5 did add one**, which is why `Attachment` appears above: the attachment pass writes a
-# real row, and without a column here the Teardown comparison could not see it leak.
+# **Phase 5 did add one**, and `GitJob` is counted here from the task that creates the table
+# rather than from the task that writes to it. Task 4 makes publish, move, delete and restore each
+# enqueue a row, so this script starts creating them the moment that lands; a column added later
+# would leave exactly those tasks unwatched, which is the same "the contract could not see the
+# only write" gap Phase 4 Task 6 closed after the fact. `GitJob` cascades from `Page`, so `sweep()`
+# below needs no statement of its own — and this number is what proves that rather than assumes it.
+#
+# **Phase 6 added another**, which is why `Attachment` appears above too: the attachment pass
+# writes a real row, and without a column here the Teardown comparison could not see it leak.
 counts() {
   psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX -v ON_ERROR_STOP=1 -c "
     select format(
       '%s spaces / %s pages / %s versions / %s drafts / %s audit / %s redirects / '
-      || '%s relations / %s attachments / %s bug reports / %s soft-deleted',
+      || '%s relations / %s attachments / %s bug reports / %s git jobs / %s soft-deleted',
       (select count(*) from \"Space\"),
       (select count(*) from \"Page\"),
       (select count(*) from \"PageVersion\"),
@@ -370,6 +446,7 @@ counts() {
       (select count(*) from \"PageRelation\"),
       (select count(*) from \"Attachment\"),
       (select count(*) from \"BugReport\"),
+      (select count(*) from \"GitJob\"),
       (select count(*) from \"Page\" where \"deletedAt\" is not null))" 2>/dev/null \
     || echo "counts unavailable"
 }
@@ -715,8 +792,155 @@ else
   fail "search pass skipped: both pages are needed and one was not created"
 fi
 
+step "Git mirror"
+# Phase 5, Task 9. §10 over plain HTTP against a production build: a publish reaches a real git
+# repository, the file that lands there says what the version row says, and the commit's sha comes
+# back to the page a reader looks at.
+#
+# **The tree is a temporary directory and the remote is a local bare repository**, so this runs
+# without a network and still exercises the real push path — Task 5 measured that `push` with no
+# remote *configured* is a no-op success, which would make the sha check below pass while nothing
+# was ever pushed anywhere.
+#
+# **Published as the editor, not the super admin**, for the reason the search pass states: a super
+# admin resolving a `MEMBERS` space they hold no role in writes a `space.access` audit row with a
+# `spaceId` and no `pageId`, which `sweep` cannot key on and Teardown's count comparison would
+# then fail on.
+if [ -z "$MIRROR_TMP" ] || inside_checkout "$MIRROR_TMP"; then
+  # `mktemp -d` honours `TMPDIR`, so this is reachable rather than theoretical — and the failure it
+  # prevents is the worst one in the phase: `git commit` inside this checkout, mirroring fixtures
+  # into the branch under test. `tests/setup/scratch.ts` makes the same check for the same reason.
+  fail "refusing to mirror into '$MIRROR_TMP': it is inside this checkout. Unset TMPDIR."
+else
+  ok "the mirror's working tree is outside this checkout"
+
+  git init --quiet --bare --initial-branch main -- "$MIRROR_REMOTE" \
+    && ok "a bare content remote to push at" \
+    || fail "could not create the bare remote at $MIRROR_REMOTE"
+
+  # **The backlog the passes above left is drained first, and discovering it was this step's
+  # surprise.** Every publish enqueues a `GitJob`, and so does every move, delete and restore — so
+  # by the time this step runs, the authoring, lifecycle and search passes have queued **nine**
+  # jobs, and the first worker run mirrored all nine (measured: `9 done, 0 retrying, 0 failed`).
+  # The first version of this step asserted `1 done` and `1 commit` against that and failed
+  # honestly, which is the check working.
+  #
+  # Draining them here does two jobs. It is the precondition for everything below — "one job done"
+  # is a statement about *this* pass's publish only once the backlog is gone — and it is a check in
+  # its own right: every change this cold-start run made reaches a real repository, through a real
+  # push, without one failure.
+  #
+  # **The count is deliberately not asserted**, unlike the drain below it. It moves with every pass
+  # added above this one, and a number that has to be edited when an unrelated pass grows is a
+  # number that ends up lying. What is asserted is that none of those jobs failed or is retrying.
+  worker_drain "the queue the earlier passes left"
+  grep -q "0 retrying, 0 failed" "$WLOG" \
+    && ok "and every change this run had already made is mirrored" \
+    || fail "the backlog did not drain cleanly: $(tr -d '\r' < "$WLOG" | tail -c 300)"
+
+  BASE_COMMITS="$(git -C "$MIRROR_ROOT" rev-list --count HEAD 2>/dev/null)" || BASE_COMMITS=0
+  ok "the mirror holds $BASE_COMMITS commit(s) before this pass publishes"
+
+  sign_in "aisyah@example.com"
+  author_page "$MIRROR_SLUG" "$MIRROR_TITLE" "DOC" "$MIRROR_MARKER\\n"
+  MIRROR_ID="$PAGE_ID"
+
+  if [ -z "$MIRROR_ID" ]; then
+    fail "git mirror pass skipped: the page to mirror was not created"
+  else
+    api POST "/api/pages/$MIRROR_ID/publish" "" 200 "the page to mirror published"
+    # The version id, from the publish's own response — it is what the mirrored file must name and
+    # what carries the sha afterwards, and reading it here is what makes those two assertions about
+    # the same row rather than about whatever the newest row happens to be.
+    VERSION_ID="$(sed -n 's/.*"versionId":"\([^"]*\)".*/\1/p' "$OUT")"
+    [ -n "$VERSION_ID" ] && ok "the publish names the version it created" \
+      || fail "no versionId in the publish response: $(tr -d '\n' < "$OUT" | head -c 200)"
+
+    worker_drain "the publish this pass just made"
+    # **Exactly one job, which is a guard rather than pedantry** now that the backlog is drained. A
+    # worker takes every claimable job in the database it is pointed at, which here is the
+    # developer's own `badam` — so if a page outside this script had one queued, this says so
+    # instead of that page being mirrored into a temporary tree in silence.
+    grep -q "1 done, 0 retrying, 0 failed" "$WLOG" \
+      && ok "and reported exactly one job done" \
+      || fail "the drain summary was not one job done: $(tr -d '\r' < "$WLOG" | tail -c 300)"
+
+    MIRROR_FILE="$MIRROR_ROOT/engineering/$MIRROR_SLUG.md"
+    if [ ! -f "$MIRROR_FILE" ]; then
+      fail "nothing was mirrored at engineering/$MIRROR_SLUG.md under $MIRROR_ROOT"
+    else
+      ok "the mirror wrote engineering/$MIRROR_SLUG.md"
+      # The file *parses back to the version*, asserted line by line because this is bash and the
+      # canonical block is one key per line. `^…$` on each, so a value appearing inside another
+      # key's value cannot satisfy it — the same reason `idx_row` binds its own cell.
+      mirror_has "^version: $VERSION_ID$" "and named the version that was published"
+      mirror_has "^title: $MIRROR_TITLE$" "with the title as a single scalar key"
+      mirror_has "^space: engineering$" "the space it belongs to"
+      mirror_has "^path: $MIRROR_SLUG$" "the path it sits at"
+      mirror_has "^status: CURRENT$" "and the status it was published into"
+      # Not the title: a mirror that wrote a canonical block and dropped the body would pass every
+      # line above.
+      mirror_has "$MIRROR_MARKER" "and the body it was published with"
+    fi
+
+    SHA="$(git -C "$MIRROR_ROOT" rev-parse HEAD 2>/dev/null)" || SHA=""
+    COMMITS="$(git -C "$MIRROR_ROOT" rev-list --count HEAD 2>/dev/null)" || COMMITS="none"
+    [ "$COMMITS" = "$((BASE_COMMITS + 1))" ] \
+      && ok "one publish added exactly one commit ($BASE_COMMITS -> $COMMITS)" \
+      || fail "the mirror went from $BASE_COMMITS to $COMMITS commit(s) for one publish"
+
+    # The sharper form of the same claim, and the one that survives a pass being added above:
+    # exactly one commit in the whole history names this version. A retry that committed instead of
+    # pushing would leave a **second** commit carrying the same `Version:` line, which is what the
+    # commit/push split exists to prevent — `e2e/mirror-tree.spec.ts` drives that failure with a
+    # remote that goes away, where this script only asserts the healthy shape.
+    git -C "$MIRROR_ROOT" log --format=%B > "$OUT" 2>/dev/null || :
+    NAMING="$(grep -c -- "$VERSION_ID" "$OUT")" || NAMING=0
+    [ "$NAMING" = "1" ] && ok "and exactly one commit in the history names that version" \
+      || fail "$NAMING commit message(s) name $VERSION_ID, wanted 1"
+
+    # `psql` and not the smoke output of `counts()`: this reads one column of one row, and a value
+    # that has to be compared against `rev-parse` cannot come from a `format()` whose failure is
+    # swallowed. Same connection as `counts()` — the local server, `badam`, the developer's role.
+    DB_SHA="$(psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5432}" -d badam -tAX \
+      -v ON_ERROR_STOP=1 -c \
+      "select coalesce(\"gitSha\", '') from \"PageVersion\" where id = '$VERSION_ID'" 2>/dev/null)" \
+      || DB_SHA="unreadable"
+    if [ ${#SHA} -eq 40 ] && [ "$DB_SHA" = "$SHA" ]; then
+      ok "the version carries the commit that mirrors it ($DB_SHA)"
+    else
+      fail "the version's gitSha is '$DB_SHA' and the tree's HEAD is '$SHA'"
+    fi
+
+    # The publisher authored it. Task 5 measured that the author email is the field a git host
+    # matches to an account, which is why it is this one and not the name.
+    AUTHOR="$(git -C "$MIRROR_ROOT" log -1 --format=%ae 2>/dev/null)" || AUTHOR=""
+    [ "$AUTHOR" = "aisyah@example.com" ] \
+      && ok "the commit is authored by the publisher" \
+      || fail "the commit's author email is '${AUTHOR:-none}', wanted aisyah@example.com"
+
+    # It really reached the remote, which is what "mirrored" means once one is configured.
+    git ls-remote -- "$MIRROR_REMOTE" HEAD > "$OUT" 2>/dev/null || :
+    if [ ${#SHA} -eq 40 ] && grep -q -- "$SHA" "$OUT"; then
+      ok "the commit is on the bare remote"
+    else
+      fail "the remote's HEAD does not name $SHA: $(tr -d '\n' < "$OUT" | head -c 200)"
+    fi
+
+    # §10's other half, and the one a person sees: the sha in the repository is the sha on the
+    # page. The needle is the `title` attribute, which carries the whole value — the visible text
+    # is ten characters, and a ten-character prefix is satisfied by any commit sharing it.
+    if [ ${#SHA} -eq 40 ]; then
+      expect_body "/engineering/$MIRROR_SLUG" "sha\" title=\"$SHA\"" \
+        "the reader shows the content commit for the version it renders"
+    else
+      fail "no sha to look for on the page"
+    fi
+  fi
+fi
+
 step "Attachment"
-# Phase 5, Task 19. The first pass in this script to exercise the two-phase upload for real:
+# Phase 6, Task 19. The first pass in this script to exercise the two-phase upload for real:
 # begin a session, PUT bytes straight to it — never through this application, exactly what the
 # browser does — commit, and read the bytes back through the permission-checked proxy. Only
 # runnable at all because `BLOB_STORE=memory` above points the session URL at the unauthenticated
@@ -799,11 +1023,15 @@ step "Teardown"
 # pages, their versions, a `PageRelation`, and the `page.cascade` audit row the cascade writes on
 # the page it retired. Phase 4's search pass adds two more pages and **three** versions — the page
 # it retires is published twice — with no relation between them and no audit row beyond the create
-# and publish ones, because it searches as a member and not as a super admin. Phase 5's attachment
-# pass adds one `Attachment` row, on the lifecycle pass's own `$LIVE_ID` page rather than a fixture
-# of its own. `sweep` removes all of it and then asserts it is gone, so this run leaves `badam` at
-# exactly the counts it found. Scoped to the markers this script writes rather than a TRUNCATE, so
-# a developer's own rows survive.
+# and publish ones, because it searches as a member and not as a super admin. Phase 5's git-mirror
+# pass adds one more page, its version and the one `GitJob` its publish enqueued — which the drain
+# leaves `DONE` rather than deleting, because deleting finished jobs would make "the job drained"
+# and "no job was ever enqueued" the same observation. `GitJob` cascades from `Page`, so the sweep
+# needs no statement for it and `counts()` is what proves that rather than assuming it.
+# Phase 6's attachment pass adds one `Attachment` row, on the lifecycle pass's own `$LIVE_ID`
+# page rather than a fixture of its own. `sweep` removes all of it and then asserts it is gone,
+# so this run leaves `badam` at exactly the counts it found. Scoped to the markers this script writes rather than a
+# TRUNCATE, so a developer's own rows survive.
 sweep && ok "removed everything this run created" \
   || fail "could not clean up after the run — check for smoke- pages and 'smoke test' bugs"
 

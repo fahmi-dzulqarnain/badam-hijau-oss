@@ -4,7 +4,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
 import { can } from "@/lib/authz/can";
 import { getPublishedPage, listSpacePages, resolveRedirect } from "@/lib/pages/repo";
-import { pageHref } from "@/lib/pages/href";
+import { pageHistoryHref, pageHref } from "@/lib/pages/href";
 import { renderMarkdown } from "@/lib/markdown/render";
 import { dateFormat } from "@/lib/format";
 import { getPageRelations } from "@/lib/lifecycle/read";
@@ -12,6 +12,7 @@ import { retirementNotice } from "@/lib/lifecycle/retired";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { DocBody } from "@/components/DocBody";
 import { PageInfoCard } from "@/components/PageInfoCard";
+import { ContentCommit } from "@/components/Provenance";
 import { RelationList, RetiredBanner } from "@/components/Relations";
 import { Toc } from "@/components/Toc";
 
@@ -128,19 +129,40 @@ export default async function DocPage({
             <span className="k">Published</span>{" "}
             {page.publishedAt ? dateFormat.format(page.publishedAt) : "—"}
           </span>
-          <span>
-            <span className="k">Commit</span> {version.gitSha ?? "not mirrored yet"}
-          </span>
+          {/*
+            The content sha and the link to version history — spec §10, Task 7.
+
+            **`Commit` was the label here and it was ambiguous.** The nav rail's foot paints
+            `Build 0.1.0+df0ef11` on this same page, and that is a sha of a *different
+            repository*: `buildInfo().gitSha` is the application build and `PageVersion.gitSha`
+            is a commit in the content mirror. The bare word "Commit" is a reasonable name for
+            either, so a reader comparing the two would conclude the mirror was broken. Both
+            labels now name their repository and neither is a name the other value could answer
+            to; `src/lib/version/labels.ts` owns the pair, because the property is a property of
+            the pair and cannot be tested where each half is a literal at its use site.
+
+            The 40-character sha is displayed short with the whole value in a `title` — the
+            overflow shape this project keeps hitting, and the one shape `overflow-wrap` cannot
+            rescue, because there is no break opportunity in a git object name.
+          */}
+          <ContentCommit
+            gitSha={version.gitSha}
+            historyHref={pageHistoryHref(space.key, page.path)}
+          />
           {/*
             In the meta row and NOT in the right rail, and that is a decision rather than a
             placement. `doc.css` hides `.rail-r` entirely below 1180px, so an Edit link in
             `PageInfoCard` would simply not exist on a laptop in a split window — the same
             shape of bug as Phase 1's bug dialog, which was rendered inside `.rail-l` and
             vanished with it below 860px, taking the user's typed text along. `.meta` is
-            hidden at no width.
+            hidden at no width. The history link above is in `.meta` for the same reason, and
+            the rail's "Versions" count is deliberately left as a count rather than becoming a
+            second copy of the affordance.
 
-            It carries no page data — not the title, not the path, not the slug — so it cannot
-            be the sixth shape of the horizontal-overflow class. The href is built from a cuid.
+            Neither carries page data — not the title, not the path, not the slug — so neither
+            can be the sixth shape of the horizontal-overflow class. The `Edit` href is built
+            from a cuid; the history href is built from `Page.path`, which is percent-encoded
+            per segment by `pageHistoryHref` and never rendered as text.
           */}
           {mayEdit ? (
             <Link className="doc-edit" href={`/edit/${page.id}` as Route}>

@@ -7,6 +7,7 @@ import { visiblePage } from "@/lib/pages/visible";
 import { defaultPublishStatus, validateTransition } from "@/lib/pages/transition";
 import { stripControl } from "@/lib/text/control";
 import { splitFrontmatter, type FrontmatterErrorCode } from "@/lib/markdown/frontmatter";
+import { enqueueMirrorJobs } from "@/lib/git/enqueue";
 import { searchFieldsOf } from "@/lib/search/fields";
 import {
   KEY_FOR_RELATION,
@@ -1121,7 +1122,7 @@ export async function publishPage(
           // not the same value. `supersedes: decisions/adr-0031` is one scalar in the draft and
           // a one-element array here; a key left empty in the template is `null` there and `[]`
           // here; `relations` carries all four types whether or not the doc type can declare
-          // them. This is the row the reader, Phase 5's git mirror and Phase 6's `PageSystem`
+          // them. This is the row the reader, Phase 5's git mirror and Phase 7's `PageSystem`
           // backfill all read, so it holds the normalised value rather than one each of them
           // would have to re-derive.
           frontmatter,
@@ -1161,8 +1162,8 @@ export async function publishPage(
         );
       }
 
-      // TODO(phase-6): spec §9 step 3 also replaces the page's `PageSystem` rows from the
-      // declared `systems:` frontmatter. Phase 6 adds the model.
+      // TODO(phase-7): spec §9 step 3 also replaces the page's `PageSystem` rows from the
+      // declared `systems:` frontmatter. Phase 7 adds the model.
 
       // Deleting the draft is NOT one of spec §9's eight steps — the spec does not mention
       // it. It is this plan's decision, and its reason is that a draft identical to what is
@@ -1240,9 +1241,42 @@ export async function publishPage(
         },
       });
 
-      // TODO(phase-5): spec §9 step 8 — enqueue a `GitJob`, committed with this transaction
-      // and processed asynchronously. Publishing must work without it, which is the property
-      // Phase 5 exists to prove rather than assert.
+      // Spec §9 step 8, and the spec is explicit that the job "is committed with it": a
+      // published version with no queued job is not a state this system can reach. The test for
+      // that is that a **forced enqueue failure rolls this publish back**, which is exactly what
+      // happens — nothing here catches, so the transaction goes.
+      //
+      // **That is not a contradiction of "git is never on the critical path", and the two
+      // sentences are about different steps.** This is one `INSERT` into the same Postgres, in
+      // this transaction; it cannot fail for anything a git host does, because no git host is
+      // involved. The clone, the commit, the **push** and every retry happen in Task 6's worker,
+      // in another process, and none of them can delay or fail a publish. Deleting either
+      // sentence because it seems to contradict the other is the mistake both are written
+      // against; `src/lib/git/enqueue.ts` carries the long form.
+      //
+      // `tx`, never `db`: an enqueue on `db` inside a `$transaction` runs on another connection
+      // and commits independently, which would leave a job for a version this transaction may
+      // still roll back — and every test would stay green.
+      //
+      // Every value is captured, none is joined at drain time. `page.path` is the path read
+      // under the lock, which is where this version's file belongs even if a move rewrites the
+      // column a millisecond later; `version.id` is the row just inserted and just pointed at.
+      // `spaceKey` comes from the authorisation read, and nothing renames a `Space` in this
+      // product — Phase 7 owns space administration, and the schema records that the captured
+      // key is the correct one anyway, because it names the directory the file is actually in.
+      await enqueueMirrorJobs(tx, {
+        kind: "PUBLISH",
+        spaceKey,
+        targets: [
+          {
+            id: page.id,
+            path: page.path,
+            // Nothing moved; `fromPath` is a `MOVE`'s column.
+            fromPath: null,
+            publishedVersionId: version.id,
+          },
+        ],
+      });
 
       // What this publish wrote and deliberately did not act on. Derived from the checked
       // relations by `dormantCascade`, which owns the rule — this loop only carries the answer

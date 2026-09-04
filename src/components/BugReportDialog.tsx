@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import type { BuildInfo } from "@/lib/version/build";
+import { BUILD_LABEL } from "@/lib/version/labels";
 
 type State = "editing" | "sending" | "sent" | "failed";
 
@@ -60,7 +61,11 @@ export function BugReportDialog({
         {state === "sent" ? (
           <>
             <h2>Thanks</h2>
-            <p className="bughint">Logged against {build.label}.</p>
+            {/* "build", because this is the third place a reader meets a sha and the only
+                other one that showed it unnamed. See `src/lib/version/labels.ts`. */}
+            <p className="bughint">
+              Logged against {BUILD_LABEL.toLowerCase()} {build.label}.
+            </p>
             <div className="bugactions">
               <button type="button" onClick={onClose}>
                 Close

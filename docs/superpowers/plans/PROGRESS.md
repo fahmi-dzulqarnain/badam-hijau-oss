@@ -1,19 +1,27 @@
 # Execution status
 
-**Phases 1 through 5 are complete.**
+**Phases 1 through 6 are complete.**
 
-Phases 1–4 are in `main`. Phase 5 — attachments and the Entra ID cutover — is on
-`claude/onedrive-microsoft-sso-7ac97b` with an open PR.
+Phases 1–5 are in `main` — Phase 5, the git mirror, merged as `0e947bc`. Phase 6 —
+attachments and the Entra ID cutover — is on `claude/onedrive-microsoft-sso-7ac97b`
+with an open PR.
 
-Branch: `claude/onedrive-microsoft-sso-7ac97b` · **1094 vitest + 46 Playwright
-tests passing**, 93-check cold-start smoke green · typecheck, build and `plan:check`
-clean · working tree clean
+Branch: `claude/onedrive-microsoft-sso-7ac97b` · **1321 vitest + 67 Playwright tests passing**, 119-check cold-start
+smoke green · typecheck, build and `plan:check` clean · working tree clean
 
-**Phase 5 was built as "Phase 4" and renumbered on merge.** It was cut from `main` at
-`2706769`, in parallel with search and diagrams, and search reached `main` first — its plan,
-its commits and its closed exit criteria all say Phase 4. Renumbering a shipped phase to
-accommodate a later one is the wrong direction, so attachments took 5. Anything in this
-repository's history that calls attachments "Phase 4" predates that merge.
+**Attachments have now been renumbered twice, and the second time is the interesting one.**
+This phase was planned and built as **Phase 4**, cut from `main` at `2706769` in parallel with
+search and diagrams; search reached `main` first, so attachments became **5**. Then the git
+mirror reached `main` as its own Phase 5, so attachments became **6**. The rule applied both
+times: the phase that lands in `main` first keeps its number, because renumbering a shipped
+phase to accommodate an unmerged one rewrites closed exit criteria. So this branch's commit
+messages say "Phase 5 Task N" and its earliest ones say "Phase 4" — both predate a merge, and
+neither is worth rewriting.
+
+**The second collision merged clean, which is the part worth remembering.** Both branches
+edited the roadmap's phase table, git took both edits without a marker, and the result listed
+attachments at 5 and the git mirror at 6 — the exact opposite of what `main` had already
+shipped. Four files conflicted; the one that mattered did not.
 
 Two of the five new Playwright specs failed on their first real run, and both had the same
 two causes. `fixture.path` is **space-relative** — every existing spec navigates to
@@ -27,8 +35,55 @@ Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
 [phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
 [phase 4](2026-08-25-docs-platform-phase-4-search-diagrams.md) ·
-[phase 5](2026-08-26-docs-platform-phase-5-attachments.md) ·
+[phase 5](2026-08-26-docs-platform-phase-5-git-mirror.md) ·
+[phase 6](2026-08-26-docs-platform-phase-6-attachments.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
+
+## Phase 5 — git mirror
+
+Decisions taken with the user: **shell out to the real `git` binary** with argv arrays; **a
+standalone worker script on a schedule** rather than an in-process drain; **a minimal super-admin
+failure page now**, folded into Phase 7's `/admin` later; and **publish, move and delete all
+enqueue** — §9 names only publish, but `movePage` rewrites `Page.path`, so a publish-only mirror
+orphans a file at the old path.
+
+One decision this phase took on its own: **the mirrored file is composed from the version row, not
+copied from it.** `publishPage` stores the author's whole document, frontmatter text included,
+while `PageVersion.frontmatter` holds what validation *accepted* — deliberately a different value.
+The deciding fact is that `title` is a column and not part of the document text, so a verbatim
+mirror would produce files that cannot say what they are. What is given up: the templates'
+explanatory frontmatter comments do not reach the mirror.
+
+Landmines carried in, measured while planning:
+
+- **Three different things here are called `gitSha`**, and two are not this phase's:
+  `buildInfo().gitSha` is the application build (7 chars, from `GIT_SHA`), `BugReport.gitSha` is a
+  copy of that, and `PageVersion.gitSha` is a commit in the **content** repository — a different
+  repository. A page will show two shas that mean different things.
+- **A title is user-controlled and lands in two parsers** — YAML, where a newline could inject a
+  second key, and a commit message. Measured and reassuring: a `GIT_AUTHOR_NAME` of
+  `--upload-pack=…` passed through the environment is stored as a name, not parsed as an option,
+  so env vars are the safe channel and `--author=` string building is the thing to avoid.
+- **A fresh repository answers 128** to `rev-parse HEAD`, `rev-parse --verify HEAD` and `log -1`
+  alike — an expected state, not a crash. Found while a pipeline hid that exit code and reported
+  success, which is the fourth time that trap has bitten this project.
+- **Commit and push are two failures**, and only one may be retried by repeating it. A sha
+  recorded late means a retried push commits twice.
+
+| Task | State |
+|---|---|
+| 1. The mirrored document | ✅ |
+| 2. Where the file goes | ✅ |
+| 3. `GitJob` | ✅ |
+| 4. Enqueue, inside the transactions that already exist | ✅ |
+| 5. The git seam | ✅ |
+| 6. The worker | ✅ |
+| 7. The sha on the page | ✅ |
+| 8. Failures a super admin can see | ✅ |
+| 9. End-to-end and the smoke test | ✅ |
+
+**All nine tasks done and every exit criterion verified** — see the end of the
+[phase-5 plan](2026-08-26-docs-platform-phase-5-git-mirror.md).
 
 ## Phase 4 — search and diagrams
 
@@ -301,6 +356,77 @@ turns one file into a blind spot for the tool you switched to in order to be saf
 
 When a search must be trustworthy, read the file with Python and count.
 
+**A credential can reach a database column through argv, not only through a subprocess's
+stderr.** Phase 5 Task 8 found `failedRun` quoting `JSON.stringify(run.argv)` into every error
+message, and `push`'s argv is `["push", "--", config.remoteUrl, …]` — so a remote URL of the form
+`https://ghp_…@host/repo.git`, which the design explicitly permits, puts a live token into
+`GitJob.lastError` on **any** failed push, with no help from git at all. Redaction has to sit at
+both ends, and each end needs its own test: removing either one alone leaks. The general lesson is
+that the obvious channel (what the tool prints) was not the certain one — **the command line this
+application built was**.
+
+**Playwright's browser binaries keep vanishing from this machine** — twice on 2026-09-03, once
+mid-session after a passing 41-spec run. It presents as a mass failure (40 of 41 specs failing in
+~3ms with `browserType.launch: Executable doesn't exist`), not as a missing dependency, so check
+`~/Library/Caches/ms-playwright/` before believing a route regression. Reinstalling is
+`npx playwright install chromium`, roughly 95 MB. Playwright takes a `__dirlock` in that directory
+during install, so two sessions cannot install at once — the second waits.
+
+**A literal NUL was found in a third file, and this one had been hiding from `rg` for a whole
+task.** `src/lib/git/repo.test.ts` was written with `":odd/welcome.md\0"` as an actual byte, so `rg`
+silently classified that file as binary and skipped it — in a file whose own docstring says control
+characters are escapes here. Third occurrence on this project. **`rg` reporting nothing about a
+file is not evidence the file lacks the thing**; check for the byte itself with Python or Perl.
+
+**`timeout` and `gtimeout` are not installed on this machine**, and a missing wrapper reports its
+own absence as the command's status: three probes in Phase 5 Task 5 returned `exit=127 elapsed=0s`,
+which nearly established that `git push` does not hang against a dead peer. It does. Same family as
+the pipeline trap — the status you read belongs to something other than what you meant to measure.
+
+**A git worktree of this repo is not a separate test database, and another session's `npm test`
+will corrupt yours.** Measured during Phase 5 Task 1: a full-suite run reported `211 failed`,
+including `Foreign key constraint violated on PageDraft_pageId_fkey` for a page created two lines
+earlier, and 41 `deadlock detected` errors on `Space`/`Page`/`PageVersion` — the tables `resetDb`
+truncates. None of it was the code. `ps` showed `npm test` running from
+`.claude/worktrees/onedrive-microsoft-sso-7ac97b`, a worktree that shares this checkout's
+`.env.test` and therefore `badam_test`. Two runs, racing `TRUNCATE`s.
+
+**Resolved for this checkout, and the fix is worth knowing.** `.env.test` is untracked, and a
+worktree has its own copy — both merely happened to name `badam_test`. This checkout now points at
+**`badam_p5_test`**, created and brought up with `prisma migrate deploy`. Proof it works: the run
+immediately after the switch passed **998/998 with zero deadlocks while the other session's
+processes were running**, under conditions that had just produced 207 failures. The guards only
+require a name ending in `_test`, so nothing else changed. The **dev** database `badam` is still
+shared, so `npm run smoke` and Playwright can still collide.
+
+**A related trap the collision checklist misses entirely: a shared migration *history*.**
+`20260826160447_attachments`, from another branch, was applied to `badam_test` and `badam` while
+being on neither `main` nor the branch that hit this — the attachments merge has since put it on
+both, so the specific drift is gone and the trap is not. `prisma migrate dev` offers to **reset
+the schema** in exactly this situation, which would drop another branch's table and the dev data — and neither `ps` nor `pg_stat_activity`
+can see this coming. Use `prisma migrate deploy` (it applies without drift-checking), generate new
+migrations against a throwaway database, and run `prisma migrate status` before any `migrate dev`.
+
+**A test that stages a race by *starting* the other party is staged by luck, and the load that
+breaks it is the rest of the suite.** `tests/integration/git-worker.test.ts`'s
+"a second worker cannot claim a job another worker has already claimed" opened a transaction that
+locks the row, then issued the claim, then slept 200ms — with nothing guaranteeing the lock was
+taken before the claim read the row. On a loaded machine the claim won, claimed the job perfectly
+legitimately, and failed the assertion with the very row it was staged not to see. Measured once
+in a full 1321-test run and never in that file alone: `npx vitest run <path>` is not load, so it
+green-lights the flake. Fixed by resolving a promise **inside** the transaction, after the
+UPDATE, and awaiting it before the claim — staging by construction rather than by timing. Checked
+against the mutant it exists for: with `SKIP LOCKED` removed the claim blocks and the test fails
+with `returned: false`, so the determinism did not cost the discrimination.
+
+`fileParallelism: false` makes this *look* impossible from inside one run, which is what sends you
+looking at the wrong thing — and the failure attributes itself to whatever you changed last. The
+same run also passed at the previous commit, which is what finally ruled the code out. **Before
+diagnosing a mass integration failure, check `ps` for another `npm test` and
+`pg_stat_activity` for connections to `badam_test`.** A pure module's tests can be verified
+without collision — `npx vitest run <paths>` — because only the integration suite touches the
+database.
+
 **A pipeline hides the exit code of its first command**, and this project has now been bitten by
 that three times in three different places: `npm run smoke | tail` reporting tail's status (Phase
 2 Task 15, which is why the smoke script's docstring warns about it), a background runner
@@ -404,7 +530,7 @@ All 15 tasks approved and every exit criterion verified.
 
 ## Test suite
 
-**827 vitest tests over 53 files**, plus **21 Playwright specs** in `e2e/` and a **37-check
+**1321 vitest tests over 88 files**, plus **67 Playwright specs** in `e2e/` and a **119-check
 cold-start smoke script**. The per-file table that used to sit here described Phase 1's 128 tests
 over 18 files and had been wrong for two phases — a table that has to be edited by hand on every
 task is a table that ends up lying, so the counts live in one place now and
@@ -455,7 +581,7 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 
 ## Decisions that should not be relitigated
 
-### Phase 5 — attachments and the Entra cutover
+### Phase 6 — attachments and the Entra cutover
 
 - **`editableSpace` must short-circuit on `isSuperAdmin`, exactly as `can()` does.** The naïve
   composition `readableSpace(v, { memberships: { some: … } })` returns `{ AND: [{}, …] }` for a

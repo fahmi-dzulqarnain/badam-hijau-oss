@@ -16,10 +16,10 @@ import { RestoreButton } from "@/components/RestoreButton";
  * would imply the delete next to it is reversible by them. It belongs somewhere an admin would
  * look, which is the space they administer, reached from the nav rail they are already reading.
  *
- * **Phase 6 owns administration properly** (spec §11 — space settings, membership, `PageSystem`
+ * **Phase 7 owns administration properly** (spec §11 — space settings, membership, `PageSystem`
  * rows), and this is not a down payment on it: it is one list and one button, added because
  * Task 12 shipped `restorePage` with no way to reach it and "a deleted page can be restored by
- * an admin" is a Phase 2 exit criterion. When Phase 6 builds a real space-admin area this route
+ * an admin" is a Phase 2 exit criterion. When Phase 7 builds a real space-admin area this route
  * is a section inside it, not a thing to keep beside it.
  *
  * ## The path is `-/deleted`, and that segment is reserved rather than lucky

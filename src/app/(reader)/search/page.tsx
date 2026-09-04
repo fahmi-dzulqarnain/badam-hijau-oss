@@ -55,7 +55,7 @@ import {
  *
  * ## The `system` filter is absent, not disabled
  *
- * §13 lists it and Phase 6 owns the systems catalogue, so there is nothing to filter on. There is
+ * §13 lists it and Phase 7 owns the systems catalogue, so there is nothing to filter on. There is
  * no control and no greyed-out select: a disabled control advertises a feature that does not
  * exist, and a reader cannot tell "not built" from "broken" by looking at one.
  *
