@@ -117,12 +117,12 @@ Settled in Phases 1–6. Changing one is a decision, not a detail.
 
 **Files:** `prisma/schema.prisma`, a migration, `prisma/seed.ts`.
 
-- [ ] **Step 1: `System`, `SystemKind` and `PageSystem`**
+- [x] **Step 1: `System`, `SystemKind` and `PageSystem`**
 
 Per spec §5.2 and `enum SystemKind { MOBILE_APP DEVICE_APP SERVICE LIBRARY }`. `PageSystem` is a
 join and §7 says systems carry no permissions, so it holds no role and no visibility.
 
-- [ ] **Step 2: Seed the seven systems §7 names**
+- [x] **Step 2: Seed the seven systems §7 names**
 
 `store-ios`, `display-ios`, `order-hub`, `pricing-engine`, `backend`, `kiosk-bridge`, `admin-web`.
 The seed is idempotent by contract and the dev baseline is asserted by `scripts/smoke.sh` and the
@@ -131,7 +131,7 @@ whose value had become invalid, because `upsert` with `update: {}` does not fix 
 Extend the counts both places rather than deferring: Phase 4 found a count contract blind to the
 only write a spec made.
 
-- [ ] **Step 3: Decide what a deleted system does to the documents that named it**
+- [x] **Step 3: Decide what a deleted system does to the documents that named it**
 
 Cascade strips the facet silently; `Restrict` blocks an admin who cannot see why. Decide, and make
 Task 5's surface show the reference count either way.
