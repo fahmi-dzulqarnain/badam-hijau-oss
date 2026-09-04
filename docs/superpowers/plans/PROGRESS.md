@@ -367,10 +367,20 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
   window — bounded, small, and the over-reporting direction, which is the only one an audit may
   fail in.
 
-**Open, to decide deliberately rather than discover:** the memory store's session URL accepts
-any key from anyone rather than minting a one-key token, so it does not honour
-`UploadSession`'s documented contract — acceptable while the route is off unless a harness
-enables it.
+- **The dev upload URL carries a TOKEN, not a key, and the session owns the key.** `store.ts`
+  calls `UploadSession` "a write capability for ONE key, for a short time"; a URL carrying the
+  key honoured none of it. Keys are derivable — the id is visible in `/api/attachments/<id>`
+  and the hash is in this repository — so overwriting a specific attachment was one `curl`
+  inside any process with the route enabled. The store now mints an unguessable token, holds
+  `token → {key, size, expiresAt, chunks}`, consumes it on completion, and 410s once it lapses.
+  There is no key on the request any more, so the traversal allowlist the route needed has
+  nothing left to guard.
+- **The same change fixed a capability gap nobody had hit.** Chunks all named the same key and
+  each overwrote the last, so the fake could not accept a resumable upload at all: two 5-byte
+  chunks of a 10-byte object left `"world"`. Every upload over the transport's 10MiB chunk size
+  arrived truncated and failed at commit on the size check. Sessions accumulate by offset and
+  assemble once every declared byte has arrived, and `GET` reports `nextExpectedRanges` so the
+  resume path is exercisable against the fake rather than only against a mocked `fetch`.
 
 - **`readableSpace(viewer, ...and)` returns the complete Prisma `where` and must never be
   spread**, at any nesting depth. The spread form silently drops the permission predicate;

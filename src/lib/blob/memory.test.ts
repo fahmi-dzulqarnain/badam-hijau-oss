@@ -10,10 +10,20 @@ async function read(stream: ReadableStream<Uint8Array>): Promise<string> {
   return new TextDecoder().decode(new Uint8Array(await new Response(stream).arrayBuffer()));
 }
 
-test("a session's uploadUrl points at the dev upload route for that key", async () => {
+test("a session's uploadUrl carries an unguessable TOKEN, never the key", async () => {
+  // `store.ts` calls UploadSession "a write capability for ONE key, for a short time". A URL
+  // carrying the key honoured none of that: keys are derivable from an id and the hash in this
+  // repository, so any caller could overwrite any attachment.
   const session = await store.beginUpload("ab/abc.png", 5, "image/png");
-  expect(session.uploadUrl).toBe("http://localhost:3000/api/attachments/dev-upload/ab/abc.png");
+  expect(session.uploadUrl).toMatch(
+    /^http:\/\/localhost:3000\/api\/attachments\/dev-upload\/[0-9a-f]{32}$/,
+  );
+  expect(session.uploadUrl).not.toContain("ab/abc.png");
   expect(session.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+  // Two sessions for the SAME key get different tokens, or the URL is not a capability.
+  const again = await store.beginUpload("ab/abc.png", 5, "image/png");
+  expect(again.uploadUrl).not.toBe(session.uploadUrl);
 });
 
 test("stat is null before the bytes arrive, and reports size after", async () => {

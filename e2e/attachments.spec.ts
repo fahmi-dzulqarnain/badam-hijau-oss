@@ -9,7 +9,7 @@
  *
  * `BLOB_STORE=memory` in `playwright.config.ts`'s `webServer.env` is what makes any of this
  * reachable without tenant credentials: the session URL it mints points at
- * `PUT /api/attachments/dev-upload/<key>`, gated on `ALLOW_DEV_UPLOAD=1` **and** the memory
+ * `PUT /api/attachments/dev-upload/<token>`, gated on `ALLOW_DEV_UPLOAD=1` **and** the memory
  * store. Without either flag every spec below fails at boot, which is `select.ts` working as
  * designed, not a suite bug.
  *
