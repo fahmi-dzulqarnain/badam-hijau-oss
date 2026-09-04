@@ -1,35 +1,25 @@
 # Execution status
 
-**Phases 1 through 6 are complete.**
+**Phases 1 through 6 are complete and in `main`.** Attachments and the Entra ID cutover merged as
+`e9377ed`; the git mirror as `0e947bc`. **Phase 7 (systems, administration and review) is
+planned** — the roadmap's sixth and last phase.
 
-Phases 1–5 are in `main` — Phase 5, the git mirror, merged as `0e947bc`. Phase 6 —
-attachments and the Entra ID cutover — is on `claude/onedrive-microsoft-sso-7ac97b`
-with an open PR.
+Branch: `phase-7-systems-admin-review` (cut from `main` at `e9377ed`; this phase lands through a
+PR) · **1321 vitest + 67 Playwright tests passing**, 119-check cold-start smoke · typecheck,
+build and `plan:check` clean
 
-Branch: `claude/onedrive-microsoft-sso-7ac97b` · **1321 vitest + 67 Playwright tests passing**, 119-check cold-start
-smoke green · typecheck, build and `plan:check` clean · working tree clean
+**Why the last phase is numbered 7.** Attachments were planned as Phase 4, became 5, and landed as
+6, under the rule that branch recorded: *the phase that reaches `main` first keeps its number,
+because renumbering a shipped phase rewrites closed exit criteria.* There are six phases, numbered
+1–7 with no 4 in this track, and the two tracks' commit messages disagree about the number for
+work that predates a merge. Neither is worth rewriting.
 
-**Attachments have now been renumbered twice, and the second time is the interesting one.**
-This phase was planned and built as **Phase 4**, cut from `main` at `2706769` in parallel with
-search and diagrams; search reached `main` first, so attachments became **5**. Then the git
-mirror reached `main` as its own Phase 5, so attachments became **6**. The rule applied both
-times: the phase that lands in `main` first keeps its number, because renumbering a shipped
-phase to accommodate an unmerged one rewrites closed exit criteria. So this branch's commit
-messages say "Phase 5 Task N" and its earliest ones say "Phase 4" — both predate a merge, and
-neither is worth rewriting.
-
-**The second collision merged clean, which is the part worth remembering.** Both branches
-edited the roadmap's phase table, git took both edits without a marker, and the result listed
-attachments at 5 and the git mirror at 6 — the exact opposite of what `main` had already
-shipped. Four files conflicted; the one that mattered did not.
-
-Two of the five new Playwright specs failed on their first real run, and both had the same
-two causes. `fixture.path` is **space-relative** — every existing spec navigates to
-`` `/engineering/${fixture.path}` `` and these used the bare path, which resolves to a
-nonexistent URL. And these are the only specs in the suite that publish through the **UI**
-rather than through `seedPublishedPage`, so there was no established wait to copy: clicking
-Publish and navigating immediately raced the POST, and the reader saw the version from before
-the attachment reference was published. Both fixed; the publish now waits on its own response.
+**Two sessions built this repository in parallel, and that cost real time.** Both tracks rewrote
+`PROGRESS.md`, the roadmap and the spec; both extended `scripts/smoke.sh` and
+`src/lib/pages/visible.test.ts`. What made it survivable was that each track kept its own plan
+document and its own branch. What cost time: four corrupted test runs before the shared
+`badam_test` was diagnosed, a `prisma migrate dev` that offered to reset another branch's schema,
+and 27 test failures on merge because `.env.test` is untracked and a new variable had no default.
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
@@ -38,6 +28,38 @@ Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 5](2026-08-26-docs-platform-phase-5-git-mirror.md) ·
 [phase 6](2026-08-26-docs-platform-phase-6-attachments.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
+
+## Phase 7 — systems, administration and review
+
+The last phase. Systems catalogue and facet (§7), `/systems` and `/systems/[key]`, the four
+`/admin` surfaces, and the due-for-review workflow (§12) — plus **three debts Phase 5 named and
+deferred here**, because this is the phase whose surfaces make them fixable: `Space.key` has no
+validation, finished `GitJob` rows have no retention pass, and pre-mirror versions are never
+reconciled. Attachments are **not** in scope: §17's S3 design was superseded by D12 and shipped as
+Phase 6 on SharePoint over Graph.
+
+The landmine it opens: **a system page aggregates across spaces by design.** Every read before it
+was scoped to a space the URL named; `/systems/[key]` lists documentation from wherever it lives,
+so without a readable-space filter in SQL it is a cross-space enumeration of titles and paths.
+Phase 4's search solved this exact shape, and its lesson applies too — the test has to be a
+**discrimination between two viewers**, because an absence assertion for a viewer who can see
+nothing is near-vacuous.
+
+The inherited one: **Phase 3 accepted `systems:` without validating it** and wrote down the
+failure it was deferring — *"the author writes their systems, publish drops them, and the page
+ships with an empty facet."* This is the phase where that becomes reachable.
+
+| Task | State |
+|---|---|
+| **1. The catalogue** | **next** |
+| 2. Resolving what authors already wrote | — |
+| 3. `/systems` and `/systems/[key]` | — |
+| 4. Due for review | — |
+| 5. `/admin/systems` | — |
+| 6. `/admin/spaces`, and the key that was never validated | — |
+| 7. `/admin/git`, and two more debts | — |
+| 8. `/admin/bugs` | — |
+| 9. End-to-end and the smoke test | — |
 
 ## Phase 5 — git mirror
 
