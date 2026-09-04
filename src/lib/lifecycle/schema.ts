@@ -313,12 +313,23 @@ const relationTargets = listOf(pageRef, MAX_RELATION_TARGETS);
  * that it is text or a list of text, non-empty, and JSON-safe (`findNonFinite`, below, is the
  * reason that last one is not vacuous).
  *
- * TODO(phase-7): validate each key against the systems catalogue and write `PageSystem` rows.
+ * **Phase 7 Task 2 has taken the deferred half, and the TODO that stood here is gone rather than
+ * left to be trusted.** `src/lib/systems/resolve.ts` looks each key up against Task 1's
+ * catalogue inside the publish transaction and writes the `PageSystem` rows; a key that names no
+ * system **refuses the publish**, which is the option this note above calls "reject the key" only
+ * in appearance. The distinction is worth keeping straight from here, because this is where a
+ * reader meets it first: what Phase 3 declined to reject was `systems:` *as a key* — §7 documents
+ * it and Task 4's templates print it, and both still publish. What Phase 7 refuses is a *value
+ * that names nothing*, exactly as `supersedes: no-such-page` is already refused. Nothing in this
+ * module changed: the shape check below is still all a schema without a database can ask.
  *
  * No count cap, unlike `relationTargets`, and the asymmetry is deliberate rather than an
  * oversight: a relation target costs a query, a cycle walk and a row lock inside the publish
- * transaction, while a system key costs nothing at all in Phase 3. The 16KB block cap and the
- * 200-entry cap are the bounds until Phase 7 has per-system work to protect.
+ * transaction, while a system key costs nothing at all here. Phase 7 Task 2 then measured that
+ * it costs nothing there either — unknown keys are refused and duplicates collapsed, so the rows
+ * one page can cause are bounded by `count(System)` however long the declared list is — and
+ * added no cap of its own. The 16KB block cap and the 200-entry cap remain the bounds, and are
+ * now the bounds on purpose rather than for want of a better one.
  */
 const systemsSchema = listOf(
   z
