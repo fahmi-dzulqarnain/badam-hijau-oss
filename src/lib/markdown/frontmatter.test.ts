@@ -3,6 +3,7 @@ import {
   MAX_FRONTMATTER_BYTES,
   MAX_FRONTMATTER_DEPTH,
   MAX_FRONTMATTER_ENTRIES,
+  serializeFrontmatter,
   splitFrontmatter,
 } from "./frontmatter";
 import { renderMarkdown } from "./render";
@@ -283,4 +284,100 @@ test("a `__proto__` key does not reach Object.prototype", () => {
   expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
   expect(parsed.status).toBe("DRAFT");
+});
+
+// ---------------------------------------------------------------------------
+// serializeFrontmatter — the writer, and the library behaviours it relies on
+// ---------------------------------------------------------------------------
+
+test("a written block is read back by the parser beside it, values intact", () => {
+  // The property the whole file exists for, in one line: one grammar, both directions. Nothing
+  // reads the mirror back in production, so this test is the only place the two halves meet.
+  const block = serializeFrontmatter({ title: "Topic registry", status: "PROPOSED" });
+
+  expect(block).toBe("---\ntitle: Topic registry\nstatus: PROPOSED\n---\n");
+  expect(frontmatterOf(`${block}Body.\n`)).toEqual({
+    title: "Topic registry",
+    status: "PROPOSED",
+  });
+  expect(bodyOf(`${block}Body.\n`)).toBe("Body.\n");
+});
+
+test("keys are written in insertion order, not sorted", () => {
+  // Kills: `sortMapEntries` turning on. The mirror's key order is a design decision about a
+  // diff a human reads, and alphabetical would scatter its groups.
+  expect(serializeFrontmatter({ zebra: 1, apple: 2, mango: 3 })).toBe(
+    "---\nzebra: 1\napple: 2\nmango: 3\n---\n",
+  );
+});
+
+test("an object met twice is written out in full, never as an anchor and an alias", () => {
+  // Kills: dropping `aliasDuplicateObjects: false`. `yaml`'s default emits `&a1`/`*a1` here,
+  // which is valid YAML that a naive reader chokes on — and, worse for a git mirror, makes the
+  // output depend on object **identity** rather than value: the two calls below would then
+  // disagree, and the mirror would produce a diff for content nobody changed.
+  const shared = ["decisions/adr-0031"];
+  const byIdentity = serializeFrontmatter({ supersedes: shared, related: shared });
+  const byValue = serializeFrontmatter({
+    supersedes: ["decisions/adr-0031"],
+    related: ["decisions/adr-0031"],
+  });
+
+  expect(byIdentity).toBe(byValue);
+  expect(byIdentity).toBe(
+    "---\nsupersedes:\n  - decisions/adr-0031\nrelated:\n  - decisions/adr-0031\n---\n",
+  );
+  expect(byIdentity).not.toContain("&");
+  expect(byIdentity).not.toContain("*");
+});
+
+test("a long scalar is written on one line, not folded", () => {
+  // Kills: `lineWidth` back to its default of 80, which breaks a long value across continuation
+  // lines. That round trips correctly and still costs: a one-character edit to a long title
+  // re-flows every line after it, so the diff reports far more than changed.
+  const long = `word ${"long ".repeat(40)}`.trim();
+  const block = serializeFrontmatter({ title: long });
+
+  expect(block.split("\n")).toHaveLength(4); // fence, one key, fence, and the trailing empty
+  expect(frontmatterOf(`${block}Body.\n`).title).toBe(long);
+});
+
+test("a cyclic value is refused, not quietly written as an anchor", () => {
+  // The honest cost of the option above: with aliases off, `yaml` recurses until the stack goes
+  // instead of writing `&a1`. Nothing can hand one over from a row — Prisma writes the `Json`
+  // column through `JSON.stringify`, which throws on a cycle, and `splitFrontmatter` rejects
+  // `frontmatter-cyclic` at publish — so a throw is the honest report of a programming error.
+  //
+  // Kills the same mutant as the test above, from the other side: with the default, this call
+  // succeeds and writes an anchor.
+  const cyclic: Record<string, unknown> = { a: 1 };
+  cyclic.self = cyclic;
+
+  expect(() => serializeFrontmatter(cyclic as never)).toThrow();
+});
+
+test("the values that are nearly JSON, one row at a time", () => {
+  // Library behaviours this module's callers rely on, so they get a test rather than a claim —
+  // the same reason the `__proto__` case above has one. Only the first row is inside
+  // `FrontmatterValue`; the others are pinned because a caller with a `Date` in hand would
+  // otherwise discover the answer in a mirrored file.
+  expect(serializeFrontmatter({ a: undefined, b: 1 })).toBe("---\nb: 1\n---\n");
+  expect(serializeFrontmatter({ a: [undefined, 1] as never })).toBe(
+    "---\na:\n  - null\n  - 1\n---\n",
+  );
+
+  const date = new Date("2026-08-26T09:00:00.000Z");
+  const written = serializeFrontmatter({ at: date as never });
+  expect(written).toBe("---\nat: 2026-08-26T09:00:00.000Z\n---\n");
+  // A `Date` goes in and a **string** comes back: YAML 1.2's core schema has no timestamp tag.
+  // That is why `mirrorDocumentOf` formats its own ISO string rather than passing the object.
+  expect(frontmatterOf(`${written}Body.\n`).at).toBe("2026-08-26T09:00:00.000Z");
+  expect(frontmatterOf(`${written}Body.\n`).at).not.toBeInstanceOf(Date);
+});
+
+test("an empty map is still a block, and reads back as empty frontmatter", () => {
+  // Not a state the mirror can reach — its block always has nine keys — but the flow-collection
+  // `{}` is what `yaml` writes here, and a fence wrapping nothing would be a broken file.
+  expect(serializeFrontmatter({})).toBe("---\n{}\n---\n");
+  expect(frontmatterOf(serializeFrontmatter({}))).toEqual({});
 });

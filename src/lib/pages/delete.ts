@@ -6,6 +6,7 @@ import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { subtreePattern } from "@/lib/pages/like";
 import { descendantPaths, descendantsOf } from "@/lib/pages/slug";
+import { enqueueMirrorJobs } from "@/lib/git/enqueue";
 import type { Viewer } from "@/lib/authz/types";
 
 export type DeletedPage = {
@@ -95,8 +96,20 @@ class PageNoLongerRestorable extends Error {}
  */
 class SubtreeStatementTouchedUnexpectedRows extends Error {}
 
-/** What the subtree read returns: enough to stamp, redirect and audit each row. */
-type SubtreeRow = { id: string; path: string; deletedAt: Date | null };
+/**
+ * What the subtree read returns: enough to stamp, redirect, audit and **mirror** each row.
+ *
+ * `publishedVersionId` is Phase 5's addition, read here rather than in a second query for the
+ * reason every other column is: both mutations decide their mirror jobs from the same snapshot,
+ * under the same lock, as the write those jobs accompany. It answers one question — does this
+ * page have a file in the mirror at all — and `enqueueMirrorJobs` owns what the answer means.
+ */
+type SubtreeRow = {
+  id: string;
+  path: string;
+  deletedAt: Date | null;
+  publishedVersionId: string | null;
+};
 
 /**
  * Reads the subtree rooted at `path` — the row itself plus everything strictly below it at a
@@ -125,7 +138,7 @@ async function readSubtree(
   path: string,
 ): Promise<SubtreeRow[]> {
   const candidates = await tx.$queryRaw<SubtreeRow[]>`
-    SELECT "id", "path", "deletedAt"
+    SELECT "id", "path", "deletedAt", "publishedVersionId"
       FROM "Page"
      WHERE "spaceId" = ${spaceId}
        AND ("path" = ${path} OR "path" LIKE ${subtreePattern(path)} ESCAPE '\\')
@@ -371,8 +384,31 @@ export async function deletePage(viewer: Viewer, pageId: string): Promise<Delete
       // TODO(phase-4): spec §9 step 6 — the search index still carries every row taken down
       // here. Phase 4 owns the removal; it belongs in this transaction when it exists.
 
-      // TODO(phase-5): spec §10 — a delete is a file removal in the git mirror. Phase 5
-      // enqueues a `GitJob` here, committed with this transaction.
+      // Spec §10 — a delete removes the file, one job per row this call actually took down.
+      // Committed with this transaction, on `tx` and never `db`, for the reason `publishPage`
+      // states at its own enqueue: this is a row insert in the same Postgres, while the git work
+      // it queues happens in Task 6's worker and can never delay a delete.
+      //
+      // **`taking`, not `subtree`**, and it is the same distinction the stamp makes: a
+      // descendant that was already deleted by some earlier call had its file removed by *that*
+      // delete's job, and a second `git rm` of a path the tree no longer contains would fail for
+      // a page this call never touched. Rows with no published version enqueue nothing at all —
+      // `enqueueMirrorJobs` owns that rule for all four kinds.
+      //
+      // `row.path` is captured, not joined: `Page.path` is untouched by this transaction, but a
+      // move committing between now and the drain would move a page whose file is already gone
+      // and leave this job removing the wrong address.
+      await enqueueMirrorJobs(tx, {
+        kind: "DELETE",
+        spaceKey,
+        targets: taking.map((row) => ({
+          id: row.id,
+          path: row.path,
+          // A `MOVE`'s column, and there is no second address here.
+          fromPath: null,
+          publishedVersionId: row.publishedVersionId,
+        })),
+      });
 
       return {
         ok: true,
@@ -606,7 +642,35 @@ export async function restorePage(viewer: Viewer, pageId: string): Promise<Resto
       });
 
       // TODO(phase-4): spec §9 step 6 — every restored row needs its search index entry back.
-      // TODO(phase-5): spec §10 — a restore re-adds the files a delete removed from the mirror.
+
+      // Spec §10 — a restore re-adds the files its delete removed, one job per restored row.
+      // `RESTORE` rather than `PUBLISH` even though the git operation is the same one: no
+      // version was authored here, so a commit message calling this a publish would be false and
+      // Task 8's failure list would name the wrong event. The `GitJobKind` docstring makes that
+      // argument; a worker is free to share the code path.
+      //
+      // **`restoring`, not `subtree`**: exactly the rows this restore brought back, identified
+      // by the stamp — a descendant deleted separately stays deleted and its file stays gone.
+      //
+      // `row.path` is the path the page has **now**, which is not necessarily where it was when
+      // it was deleted: an ancestor may have moved in between, taking this row's path with it
+      // and enqueueing nothing, because a deleted page has no file to move. The restore is what
+      // puts the file back, and it puts it where the page actually is.
+      //
+      // This is also the one caller in the codebase whose enqueue is about pages that were
+      // soft-deleted a statement ago. It needs no soft-delete argument of its own because
+      // `enqueueMirrorJobs` reads no `Page` row — see its docstring, and its registration in
+      // `src/lib/pages/visible.test.ts`.
+      await enqueueMirrorJobs(tx, {
+        kind: "RESTORE",
+        spaceKey,
+        targets: restoring.map((row) => ({
+          id: row.id,
+          path: row.path,
+          fromPath: null,
+          publishedVersionId: row.publishedVersionId,
+        })),
+      });
 
       return {
         ok: true,

@@ -4,6 +4,7 @@ import { readableSpace } from "@/lib/authz/where";
 import { writeAudit } from "@/lib/audit/log";
 import { visiblePage } from "@/lib/pages/visible";
 import { subtreePattern } from "@/lib/pages/like";
+import { enqueueMirrorJobs } from "@/lib/git/enqueue";
 import {
   childPath,
   descendantPaths,
@@ -109,8 +110,21 @@ class PageNoLongerMovable extends Error {}
  */
 class RewriteTouchedUnexpectedRows extends Error {}
 
-/** What the subtree read returns: enough to rewrite, redirect and audit each row. */
-type SubtreeRow = { id: string; path: string; deletedAt: Date | null };
+/**
+ * What the subtree read returns: enough to rewrite, redirect, audit and **mirror** each row.
+ *
+ * `publishedVersionId` is Phase 5's addition and is read here rather than in a second query, for
+ * the reason every other column in this row is: the mirror job for a moved page is decided from
+ * the same snapshot, under the same lock, as the rewrite it accompanies. It answers one
+ * question — does this page have a file in the mirror at all — and `enqueueMirrorJobs` owns what
+ * the answer means.
+ */
+type SubtreeRow = {
+  id: string;
+  path: string;
+  deletedAt: Date | null;
+  publishedVersionId: string | null;
+};
 
 /**
  * Moves a page — renames it, reparents it, or both — and takes its whole subtree with it.
@@ -330,7 +344,7 @@ export async function movePage(
       // raw statements are scoped by the same authorised space id, and neither can reach a row
       // outside it.
       const candidates = await tx.$queryRaw<SubtreeRow[]>`
-        SELECT "id", "path", "deletedAt"
+        SELECT "id", "path", "deletedAt", "publishedVersionId"
           FROM "Page"
          WHERE "spaceId" = ${spaceId}
            AND ("path" = ${oldPath} OR "path" LIKE ${pattern} ESCAPE '\\')
@@ -535,8 +549,41 @@ export async function movePage(
       // row's index entry is now stale. Phase 4 owns the refresh; it belongs in this
       // transaction when it exists, not in a follow-up job that can fail separately.
 
-      // TODO(phase-5): spec §10 — a move is a rename in the git mirror. Phase 5 enqueues a
-      // `GitJob` here, committed with this transaction.
+      // Spec §10 — a move is a rename in the mirror, and one job per file: every rewritten row's
+      // `.md` is at a path that no longer describes it, not just the named page's.
+      //
+      // Committed with this transaction, on `tx` and never `db`, for the reason `publishPage`
+      // states at its own enqueue: the job is a row insert in this Postgres, while the git work
+      // it queues happens in Task 6's worker and can never delay a move.
+      //
+      // **`fromPath` cannot be recovered after this transaction commits** — the statement above
+      // has already rewritten `Page.path` — which is the original argument for capturing every
+      // address on the job rather than joining it at drain time.
+      //
+      // Two filters, and only one of them is this function's:
+      //
+      // - **Soft-deleted descendants are excluded here.** They are rewritten with the subtree
+      //   (see the read above for why they must be), and they have no file in the mirror: their
+      //   delete removed it. A `git mv` of a path the tree does not contain is a failed job on
+      //   Task 8's page for a page nobody touched. `restorePage` writes their file back at
+      //   whatever path they have by then, which is what makes skipping them correct rather than
+      //   merely convenient. It is the same `deletedAt === null` set the redirect reclaim above
+      //   computes, and for a related reason: both ask which of these rows are live *now*.
+      // - **Never-published rows are excluded by `enqueueMirrorJobs`**, which owns that rule for
+      //   all four kinds — see its docstring for the argument and for what a future unpublish
+      //   would have to change.
+      await enqueueMirrorJobs(tx, {
+        kind: "MOVE",
+        spaceKey,
+        targets: moves
+          .filter((move) => move.deletedAt === null)
+          .map((move) => ({
+            id: move.id,
+            path: move.newPath,
+            fromPath: move.path,
+            publishedVersionId: move.publishedVersionId,
+          })),
+      });
 
       return {
         ok: true,

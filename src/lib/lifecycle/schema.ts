@@ -75,8 +75,14 @@ export type RelationKey = "supersedes" | "amends" | "decides" | "related";
  * relation type no author can ever declare. The inverse lookup is never needed — the assembly
  * below iterates this map — so there is no second copy to keep in step.
  *
- * Exported for Task 5 (resolving a target), Task 7 (upserting the rows) and Phase 5's git
- * mirror, which has to write the keys back out as YAML.
+ * Exported for Task 5 (resolving a target) and Task 7 (upserting the rows).
+ *
+ * It also said "and Phase 5's git mirror, which has to write the keys back out as YAML", and
+ * Phase 5 Task 1 decided otherwise: `src/lib/git/document.ts` writes `PageVersion.frontmatter`
+ * **verbatim**, so the mirrored file carries `SUPERSEDES` and not `supersedes`. Reshaping it
+ * would mean the mirror knowing the column's shape, which is a second place to keep in step with
+ * this module and a silent drop for any key it did not expect. Corrected here rather than left to
+ * be trusted — a stale measurement in a comment is the one a reader meets first.
  */
 export const KEY_FOR_RELATION = {
   SUPERSEDES: "supersedes",

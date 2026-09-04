@@ -1,10 +1,10 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkFrontmatter from "remark-frontmatter";
-import { parseDocument } from "yaml";
+import { parseDocument, stringify } from "yaml";
 
 /**
- * Frontmatter: finding it, and reading it.
+ * Frontmatter: finding it, reading it, and writing one.
  *
  * ## Why this module exists at all
  *
@@ -38,13 +38,29 @@ import { parseDocument } from "yaml";
  * deliberately showing to a reader, and the renderer — which knows what a code fence is —
  * would keep rendering it. The two halves would disagree on a real document.
  *
- * ## It does not throw
+ * ## The writer lives here too, for the same reason
+ *
+ * `serializeFrontmatter` is Phase 5's, and it is in this file rather than in `src/lib/git/`
+ * because it writes the block this module's parser has to be able to read. `---` is the fence
+ * `remark-frontmatter` matches for `FRONTMATTER_MATTER`, and a writer in another module would be
+ * a second, invisible declaration of that grammar — the exact thing the paragraph above says
+ * this module exists to prevent, arriving from the other direction. Nothing reads the mirror
+ * back in production (Phase 5 is deliberately write-only), so a test is the only place the two
+ * halves are ever compared; keeping them in one file is what makes that comparison a property
+ * of the code rather than of the test.
+ *
+ * ## `splitFrontmatter` does not throw; `serializeFrontmatter` can
  *
  * Autosave fires every two seconds and an author mid-keystroke produces malformed YAML
  * constantly. Every rejection here is a `FrontmatterFieldError` the editor can render and the
  * publish path can refuse — the same asymmetry Phase 2 settled for the title, where a draft
  * accepts what publish rejects. A parse that throws turns "I am still typing" into "your work
  * stopped saving", which is the exact failure the whole conflict contract exists to prevent.
+ *
+ * The writer is the opposite, and deliberately: its input is not a person typing, it is values
+ * this application already stored, so anything it cannot write is a programming error and a
+ * throw is the honest report. `FrontmatterValue` is what it accepts; see its note for what the
+ * `yaml` serializer does with the four things that are *nearly* JSON.
  *
  * ## What it deliberately does not do
  *
@@ -313,4 +329,99 @@ export function splitFrontmatter(text: string): FrontmatterResult {
   }
 
   return { ok: true, frontmatter: value as Frontmatter, body };
+}
+
+/**
+ * What `serializeFrontmatter` accepts: JSON, and nothing that merely resembles it.
+ *
+ * The type is written out rather than taken from Prisma so that this module stays free of that
+ * import, and it is deliberately wider in one place only — an object's values may be
+ * `undefined`, because `Prisma.JsonValue`'s object member has optional properties and a seam
+ * that could not accept the column it exists to serialise would be useless. The `Json` column is
+ * the source of every value this ever writes.
+ *
+ * **Four things are nearly JSON, and `yaml@2.9.0` treats them four different ways.** Measured,
+ * because a serializer's edge cases are exactly what a caller assumes rather than checks:
+ *
+ * | Value | What is written | Read back as |
+ * |---|---|---|
+ * | `undefined` as an object's value | nothing — **the key is dropped** | absent |
+ * | `undefined` inside an array | `null` | `null` |
+ * | a `Date` | an unquoted ISO 8601 timestamp | a **string** (YAML 1.2's core schema has no timestamp tag) |
+ * | `NaN`, `Infinity` | `.nan`, `.inf` | `NaN`, `Infinity` |
+ *
+ * Only the first is in this type, and it matches `JSON.stringify`, so the column and the block
+ * agree. A `Date` is excluded because a value that comes back a different type than it went in
+ * is a round trip that quietly is not one: a caller with a timestamp formats it itself, which is
+ * why `mirrorDocumentOf` writes `publishedAt` as a string. Non-finite numbers are excluded by
+ * `validateFrontmatter` before anything is stored (`non-finite-number`), and a function or a
+ * `Map` makes `stringify` throw outright (`Tag not resolved for Function value`).
+ *
+ * The type cannot express "acyclic", and a cycle is the one input that fails badly: with
+ * `aliasDuplicateObjects` off — see below — `stringify` recurses until the stack goes, where the
+ * default would have written an anchor. Nothing can hand one over from a row: Prisma writes the
+ * column through `JSON.stringify`, which throws on a cycle, and `splitFrontmatter` rejects
+ * `frontmatter-cyclic` at publish before that.
+ */
+export type FrontmatterValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly FrontmatterValue[]
+  | { readonly [key: string]: FrontmatterValue | undefined };
+
+/**
+ * How the block is written. Three options, none of them a default worth inheriting.
+ *
+ * **`aliasDuplicateObjects: false`** is the one that matters. `yaml` emits an anchor and an
+ * alias for any object it meets twice — measured: `{ x: shared, y: shared }` writes
+ * `x: &a1 [a, b]` and `y: *a1`, while the structurally identical `{ x: [a,b], y: [a,b] }` writes
+ * both out in full. Two consequences, and both are disqualifying for a git mirror. The output
+ * would depend on **object identity rather than value**, so two runs over equal data could
+ * differ and produce a diff for content that did not change; and an anchor, while perfectly
+ * valid YAML, is a shape a naive reader of the mirror will choke on. Validated frontmatter is
+ * JSON-shaped and can legitimately repeat a value — `relations` carries four keys and three of
+ * them are usually the same empty list — so this is a live case, not a hypothetical.
+ *
+ * **`lineWidth: 0`** disables line folding. The default (80) breaks a long scalar across
+ * continuation lines, which round trips correctly but re-flows every line after the edit when a
+ * title changes by one character. One key per line means one changed line in the diff, and this
+ * block exists to be read as a diff.
+ *
+ * **`sortMapEntries: false`** is already the default; it is stated because `mirrorDocumentOf`'s
+ * key order is a design decision documented at length there, and a library default flipping
+ * would silently overrule it.
+ *
+ * Not set, and checked: no `%YAML` directive is emitted, so the block's first line is the first
+ * key. Block scalars stay enabled (`blockQuote`), which is what turns a title containing a
+ * newline into an indented `|-` literal instead of a folded double-quoted string.
+ */
+const SERIALIZE_OPTIONS = {
+  aliasDuplicateObjects: false,
+  lineWidth: 0,
+  sortMapEntries: false,
+} as const;
+
+/**
+ * The inverse of `splitFrontmatter`: values in, a `---`-fenced YAML block out, newline-terminated
+ * and ready to have a body appended to it.
+ *
+ * Pure, and it builds no strings by concatenation except the two fences. That is the whole point
+ * of using the serializer: a title of `Registry\nstatus: ACCEPTED` is written as an indented
+ * block literal, so the second line is part of the title's value and **not** a second key. A
+ * template-string implementation of this function would inject one.
+ *
+ * The fences are the only literal `---` this application writes, and they are here rather than
+ * at the mirror's call site so that the writer and the parser of this grammar sit in one file.
+ *
+ * Throws only for a value outside `FrontmatterValue` — see that type. It cannot be made to
+ * produce a block that reads back as something else by any *string* it is given.
+ */
+export function serializeFrontmatter(
+  frontmatter: Readonly<Record<string, FrontmatterValue | undefined>>,
+): string {
+  // `stringify` always terminates its output with a newline, so the closing fence starts its own
+  // line without one being added here.
+  return `---\n${stringify(frontmatter, SERIALIZE_OPTIONS)}---\n`;
 }

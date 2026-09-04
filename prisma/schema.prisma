@@ -38,6 +38,31 @@ enum DocType {
   RUNBOOK
 }
 
+// Spec §5.2, normative and reproduced verbatim. `DONE` is a state rows actually reach — see the
+// retention note on `GitJob` for why finished jobs are kept rather than deleted.
+enum GitJobState {
+  PENDING
+  RUNNING
+  FAILED
+  DONE
+}
+
+// Not in §5.2, which sketches the state but not the work. The four kinds are the four mutations
+// that change what the mirror should contain — the phase plan's "publish, move and delete all
+// enqueue", plus restore, because a soft delete that is undone leaves the mirror missing a page
+// Postgres has.
+//
+// `RESTORE` and `PUBLISH` perform the *same* git operation (write the file, stage it) and are
+// still two values, because they are not the same event: a restore creates no version, so a
+// commit message that called it a publish would be false, and Task 8's failure list would name
+// the wrong thing. A worker is free to share the code path; the row must not lose the distinction.
+enum GitJobKind {
+  PUBLISH
+  MOVE
+  DELETE
+  RESTORE
+}
+
 enum DocStatus {
   DRAFT
   IN_REVIEW
@@ -168,6 +193,7 @@ model Page {
   redirects     Redirect[]     @relation("RedirectTarget")
   relationsFrom PageRelation[] @relation("RelationFrom")
   relationsTo   PageRelation[] @relation("RelationTo")
+  gitJobs       GitJob[]
 
   @@unique([spaceId, path])
   @@index([spaceId, status])
@@ -219,6 +245,7 @@ model PageVersion {
   author        User        @relation("PageVersionAuthor", fields: [authorId], references: [id])
   publishedOn   Page?       @relation("PagePublishedVersion")
   draftsBasedOn PageDraft[] @relation("DraftBaseVersion")
+  gitJobs       GitJob[]
 
   @@index([pageId, createdAt])
 }
@@ -287,4 +314,195 @@ model PageRelation {
 
   @@unique([fromId, toId, type])
   @@index([toId, type])
+}
+
+// Queued mirror work with retry state (spec §5.2, §10). One row is one file operation the git
+// mirror still owes the content repository. Task 4 writes these inside the transactions that
+// already exist; Task 6 drains them.
+//
+// ## Every mutable thing this job needs is captured here, not read at drain time
+//
+// The load-bearing property of the model, and the reason for `spaceKey`, `path` and `fromPath`.
+//
+// A job is a statement about an instant that has already passed. `Page` is mutable, so reading
+// any of its columns when the job *runs* silently makes the job mean something else than it did
+// when it was enqueued — and the plan's own example is the sharp one: `movePage` rewrites
+// `Page.path`, so a move's old path is not reconstructible afterwards at all. But it is not only
+// the move that needs this. A publish enqueued before a move and drained after it would, if it
+// read `Page.path` at drain time, write its file at the *new* path — and then the move's own job
+// would `git mv` a path that never existed, so a correctly ordered queue would still produce a
+// wrong tree. The same holds for a delete and a restore.
+//
+// So the rule is stated once and applies to every kind: **capture the mutable, join the
+// immutable.** `PageVersion` is append-only — publish never updates a version row — so joining it
+// at drain time yields the same bytes it would have yielded at enqueue time, which is why the
+// document's content is a `versionId` and not a copy. `Page.docType`, which
+// `src/lib/git/document.ts` needs and `PageVersion` does not carry, is written by `createPage`
+// and updated by nothing, so it is joined rather than captured; a Phase 6 that lets a page change
+// type makes it a capture candidate, and this line is where to look.
+//
+// `spaceKey` is captured for the same reason and is easy to leave out by half: the mirror's
+// address is `<spaceKey>/<path>.md`, so capturing the path and joining the key would give a job
+// whose address comes from two different instants. Nothing renames a `Space` today (Phase 6 owns
+// space administration), and when something does, the captured key is also the *correct* one — it
+// names the directory the file is actually in, where reading the current key would write into a
+// new directory and orphan the old file. A cross-space move would need a `fromSpaceKey` beside
+// `fromPath`; `movePage` is within one space, so there is deliberately no such column yet.
+//
+// ## Ordering: `id` is a sequence, and that is a decision
+//
+// The phase's exit criterion is that jobs for one page apply in order, so the drain needs a
+// **total** order — and neither obvious candidate provides one:
+//
+// - **`createdAt` cannot.** Prisma binds it client-side as a parameter (measured: the emitted
+//   `INSERT` lists `"createdAt"` with a `$6` placeholder rather than leaving it to the column's
+//   `DEFAULT CURRENT_TIMESTAMP`), and the column is `TIMESTAMP(3)`. Two `create` calls in one
+//   transaction happened to differ by 24 ms; a single `createMany` — which is the shape a move
+//   enqueuing one job per moved descendant will want — wrote **byte-identical** timestamps for
+//   both rows. So the tie is not a rare coincidence to be tolerated, it is guaranteed for exactly
+//   the operation that most needs ordering.
+// - **`cuid()` cannot.** It is generated per process and is not a documented monotonic sequence;
+//   two application instances enqueuing concurrently have no reason to sort in enqueue order.
+// - **`(createdAt, id)` is deterministic but not *correct*.** It orders reliably and orders the
+//   tie above arbitrarily, which is the failure this project keeps meeting: a mirror one version
+//   stale, with the newer sha recorded, and nothing that can notice.
+//
+// A Postgres sequence is the one thing here that is monotonic across sessions, so `id` is that
+// sequence rather than a cuid — a deliberate departure from every other model in this schema.
+// Having *both* a cuid identity and a `seq` ordering column was the alternative and was rejected:
+// two surrogate keys mean two ways to name a row and a query that can order by the wrong one,
+// which is the same "stated twice, so neither is testable" shape as a duplicated permission
+// predicate. A `GitJob` id reaches no client-visible URL — unlike `Page.id`, which is in
+// `/edit/[pageId]` — so nothing is made enumerable by it.
+//
+// **What a sequence does not give, measured so Task 6 does not assume it.** Sequence values are
+// handed out at INSERT, not at COMMIT, and they are not gap-free (a rolled-back enqueue burns
+// one; gaps are harmless to an order, only to a count). Reproduced with two concurrent
+// transactions: the slow one took id 62009 and held its transaction open, the fast one took 62010
+// and committed, and a third session reading a second later saw **62010 and not 62009**. So a
+// worker that claims the lowest ready id would drain the later job first and the earlier job
+// afterwards — out of enqueue order, with no error anywhere.
+//
+// `id` is therefore *commit* order only where the enqueues are mutually exclusive. For one page
+// they nearly are — publish takes a `FOR UPDATE` row lock on the page's `PageDraft`, and create
+// and move take the space-wide advisory lock — but a publish and a move of the same page take
+// **different** locks and so can interleave exactly as above. Task 6 must not claim a job while
+// an earlier job for the same page is unfinished; the `[pageId, id]` index below is for exactly
+// that question, and it is a check the worker owes rather than a guarantee this column makes.
+//
+// ## Foreign keys, going the *opposite* way from `BugReport`
+//
+// `BugReport` deliberately holds `pageId`/`versionId` without foreign keys, because its value is
+// highest once the referenced row is gone. A `GitJob` is the reverse: it is not a record, it is
+// work, and work for a page that no longer exists in any form has nothing to mirror. So both keys
+// are real, both `onDelete: Cascade`, and `versionId` cascades rather than `SetNull` — nulling it
+// would turn a publish job into a job with no bytes, which is a job that writes an empty file.
+//
+// The hazard `Cascade` carries is real and worth naming: hard-deleting a `Page` would remove the
+// very job that was going to remove its mirrored file, leaving an orphan `.md` with nothing left
+// to notice it. What makes that safe today is that **this product has no hard delete** —
+// `deletePage` sets `Page.deletedAt` and `restorePage` clears it, and the only statements that
+// remove a `Page` row are the test harness's `TRUNCATE` and the `e2e`/smoke fixture sweeps, where
+// cascading is precisely the wanted behaviour: without the foreign key those sweeps would leave
+// `GitJob` rows behind and fail their own count contract. What keeps it safe is a rule, recorded
+// here because this is where someone will look: **a future hard delete must remove the mirrored
+// file before it removes the row** — enqueue and drain, or delete the file in the same operation.
+//
+// ## `DONE` rows are kept
+//
+// The alternative — delete on success — keeps the table bounded for free, and its cost is what
+// decided it: a deleted row makes success **unobservable**, so "the job drained" and "no job was
+// ever enqueued" become the same observation, and every assertion Task 6 and Task 9 want to make
+// about a drain goes vacuous. That is this project's most repeated test failure, arriving through
+// the schema. It also quietly deletes a state the spec declares: §5.2 fixes `DONE` in the enum,
+// and a `DONE` no row can be in is a lie in the type.
+//
+// The costs, stated rather than discovered: the table grows without bound, and there is no
+// retention pass — `BugReport` has a retention migration and this does not, deliberately, because
+// a sweep with no operator surface is a cron job nobody knows about. Task 8 is the surface, and
+// retention belongs with the rest of `/admin` in Phase 6. The claim index below is unaffected by
+// the growth in *cost* (its leading column is `state`, so the scan seeks past finished rows
+// rather than reading them) but not in *size*; a partial index would fix that and is not
+// available, because Prisma cannot declare one and an index created only in raw SQL is dropped by
+// the next unrelated `migrate dev` — Phase 4 Task 2 reproduced that.
+model GitJob {
+  // The enqueue order, and the row's identity. See the ordering note above for why this is a
+  // sequence and not a `cuid()`.
+  id    Int         @id @default(autoincrement())
+  kind  GitJobKind
+  state GitJobState @default(PENDING)
+
+  pageId    String
+  // The version whose bytes get written. Null is a legitimate value, not a missing one: a
+  // `DELETE` has no content and a `MOVE` is a `git mv`, so neither writes bytes.
+  //
+  // **This comment used to add "or a `MOVE`/`RESTORE` of a page with no published version", and
+  // Task 4 made that state unreachable**: a page that was never published has no file in the
+  // mirror, so none of the four mutations enqueues for one at all. `PUBLISH` and `RESTORE`
+  // therefore always carry a version. A future unpublish would reopen the question — see
+  // `enqueueMirrorJobs`, which owns that rule and states what would have to change.
+  //
+  // Captured rather than read from `Page.publishedVersionId` at drain time for the same reason
+  // the paths are: a later publish would otherwise retroactively change which text an
+  // already-queued job mirrors.
+  versionId String?
+
+  // The mirror address as it stood when the job was enqueued: the file is
+  // `<spaceKey>/<path>.md` inside the working tree, which is what `mirrorPathOf` takes.
+  spaceKey String
+  // Where this job's file ends up — the destination of a `MOVE`, and simply the file's location
+  // for the other three kinds.
+  path     String
+  // Where a `MOVE`'s file is now, so the operation is `git mv <fromPath> <path>`. Null for every
+  // other kind, which is the only reason it is nullable; a move without it is unexecutable,
+  // because `Page.path` has already been rewritten by the transaction that enqueued this row.
+  fromPath String?
+
+  // Retry state. `nextAttemptAt` defaults to now, so a fresh job is claimable immediately and
+  // backoff is expressed by pushing it forward rather than by a separate "ready" flag.
+  // `lastError` is `text` and unbounded here; the worker is what must truncate a runaway stderr.
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError     String?
+
+  // Not the ordering key — see above. `createdAt` is how long a job has been queued and
+  // `updatedAt` is when it was last attempted, which is what makes Task 8's list of failures
+  // readable: an attempt count with no timestamp cannot distinguish a job failing now from one
+  // that gave up last week.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  page    Page         @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  version PageVersion? @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  // The claim query, and nothing else: Task 6 asks for the next claimable job with
+  //   WHERE state = 'PENDING' AND "nextAttemptAt" <= now() ORDER BY "nextAttemptAt", id
+  //   FOR UPDATE SKIP LOCKED LIMIT 1
+  // and this serves all three clauses from the index alone — equality on the leading column, a
+  // range on the second, and `id` as the tiebreak that makes the order total without a sort. The
+  // ordering is `("nextAttemptAt", id)` rather than `id` alone precisely so that it matches this
+  // index, and that is measured rather than assumed: over 60,000 `DONE` rows and 8 pending ones,
+  // `ORDER BY "nextAttemptAt", id` plans as a bare `Index Scan` touching 4 buffers, while
+  // `ORDER BY id` plans the same index scan **plus a Sort** of every ready row. The same
+  // measurement is the evidence for keeping finished rows: the 60,000 of them cost nothing to
+  // seek past, because `state` leads.
+  //
+  // Task 8's list of failures reads `WHERE state = 'FAILED'` and uses the same leading column, so
+  // it needs no index of its own.
+  @@index([state, nextAttemptAt, id])
+  // "Is there an earlier unfinished job for this page?" — the per-page ordering check Task 6 owes
+  // (`WHERE "pageId" = $1 AND id < $2 AND state IN ('PENDING','RUNNING')`), and the same index
+  // that lets a drain walk one page's jobs in enqueue order. `state` is deliberately not in it:
+  // one page has few jobs, so the seek is on `(pageId, id)` and the state is a heap filter.
+  //
+  // It is also the index the `pageId` foreign key wants. Postgres does not create one for a
+  // referencing column, so without this every cascade from `Page` — the fixture sweeps, and any
+  // future hard delete — would sequential-scan this table.
+  //
+  // `versionId` gets no index of its own, and that is a choice rather than an oversight: no query
+  // in this phase looks a job up by version, and the only thing that would use it is the cascade
+  // that arrives *through* `Page`, which happens in the same statement as the `pageId` cascade
+  // this index already serves. `PageDraft.baseVersionId` is the same unindexed shape for the same
+  // reason. An index whose only justification is symmetry is an index nothing can be measured on.
+  @@index([pageId, id])
 }

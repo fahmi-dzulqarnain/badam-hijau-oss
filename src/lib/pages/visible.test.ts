@@ -57,8 +57,19 @@ const ROOT = join(SRC, "..");
  * `(`-terminated, while `$queryRaw` is a **tagged template** and is followed by a backtick or a
  * type argument. Requiring `(` after both — the first version of this pattern — matched no raw
  * statement in the codebase, and the test below is why that lasted one run instead of a phase.
+ *
+ * **`new PrismaClient` is the sixth widening**, and Phase 5 Task 6 is what needed it. Both
+ * alternatives above are anchored on the *names* `db` and `tx`, so a module that constructs its
+ * own client and calls it anything else is invisible to them — and `src/lib/git/worker.ts` does
+ * exactly that: its working-tree advisory lock has to live on a pinned connection, so it makes a
+ * one-connection client called `holder` and runs `pg_advisory_lock` on it. That module happens to
+ * make ordinary `db.` calls too and so would have been registered **by accident**, which is the
+ * shape this guard has now been caught in five times. Naming the client construction closes the
+ * category instead of the instance. It also pulls `src/lib/db.ts` into the registry, which is
+ * right: the module that owns the connection is the one place a reader looks for it.
  */
-const PRISMA_QUERY = /\b(?:db|tx)\.(?:[a-z]\w*\.[a-z]\w*\(|\$(?:query|execute)Raw(?:Unsafe)?\b)/;
+const PRISMA_QUERY =
+  /\b(?:db|tx)\.(?:[a-z]\w*\.[a-z]\w*\(|\$(?:query|execute)Raw(?:Unsafe)?\b)|\bnew PrismaClient\b/;
 
 function sweepForPrismaQueries(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -260,6 +271,34 @@ const MODULES: Record<string, Registration> = {
     covered: ["deletePage", "restorePage", "listDeletedPages"],
     exempt: [],
   },
+  "src/lib/pages/history.ts": {
+    load: () => import("@/lib/pages/history"),
+    // Soft-delete tests: tests/integration/page-history.test.ts. Phase 5 Task 7's version
+    // history. Three queries, and only the first one names `Page` — which is the point of
+    // listing them rather than the module:
+    //   the page read carries `visiblePage()` at the top level and `readableSpace` as its
+    //   `space` relation filter, and both are covered: "a soft-deleted page has no history, and
+    //   reads as not-found" is the soft-delete test, and "a non-member cannot read the history of
+    //   a page in a space they cannot read" is the permission one. The second is a
+    //   discrimination rather than an absence — the same viewer reads one space and not the
+    //   other, and the readable page's rows are counted — because an absence assertion made by a
+    //   viewer who can see nothing is near-vacuous, which is what Phase 4's non-member search
+    //   turned out to be;
+    //   the version read and the `GitJob` aggregate carry **no** predicate of either kind, and
+    //   both absences are deliberate: they are keyed on the `pageId` the read above authorised,
+    //   in the same function, with nothing caller-supplied in between. A `page: visiblePage(...)`
+    //   on either could be deleted with the whole suite green — the `resolveRedirect` shape,
+    //   measured twice in this project — so a second copy would make neither testable. What is
+    //   pinned instead is that removing the copy that exists changes the answer.
+    //
+    //   The `GitJob` aggregate is also the reason this module is not `reachesPage: false` on the
+    //   strength of its last two queries: it reads rows *about* a page for a reader, so the
+    //   question "which pages may this viewer learn the mirror state of" has to be answered
+    //   somewhere, and it is answered once, above, by the page read.
+    covered: ["listPageVersions"],
+    // Pure: folds a `groupBy` result into two numbers. Queries nothing.
+    exempt: ["mirrorQueueOf"],
+  },
   "src/lib/drafts/repo.ts": {
     load: () => import("@/lib/drafts/repo"),
     // Soft-delete tests: tests/integration/drafts-repo.test.ts
@@ -387,6 +426,90 @@ const MODULES: Record<string, Registration> = {
       "source page by relation rows a publish in that space wrote; no page identity leaves " +
       "the module.",
   },
+  "src/lib/git/enqueue.ts": {
+    reachesPage: false,
+    why:
+      "writes GitJob and reads nothing. Phase 5 Task 4: the one delegate call is " +
+      "`tx.gitJob.createMany`, on a client its caller supplies, and every column of every row " +
+      "is a value the caller already read under its own lock — a `pageId` and a `path` are " +
+      "passed in, never looked up. There is no `Page` query to filter, directly or through a " +
+      "relation, so the module is registered here rather than as `covered`. " +
+      "That absence is the design and not an accident, and the reason is `restorePage`: it " +
+      "enqueues for pages whose `deletedAt` was set a statement ago, so it is the one caller " +
+      "in this codebase for which a soft-delete filter would be the bug rather than the " +
+      "guard — a version of this module that read `Page` would need a deliberately " +
+      "`deletedAt`-blind query, the argument for it, and a test, exactly as `restorePage`, " +
+      "`listDeletedPages` and `findDeleted` each carry one. Reading nothing is what makes all " +
+      "three unnecessary. The insert does take a foreign-key `KEY SHARE` lock on the `Page` " +
+      "row, which is not a read: it returns no column and applies no predicate, and the row it " +
+      "names is the row the caller has already authorised and written.",
+  },
+  "src/lib/git/worker.ts": {
+    load: () => import("@/lib/git/worker"),
+    // Soft-delete tests: tests/integration/git-worker.test.ts —
+    //   Registered as `covered` rather than `reachesPage: false` because it does reach a `Page`
+    //   row: `loadVersion` selects `page: { select: { docType: true } }` through a relation, the
+    //   shape this guard was too narrow to see the fourth time it was widened. And it reaches it
+    //   with **no soft-delete filter, deliberately** — so what is pinned here is the *absence*,
+    //   the same way `createPage`'s collision check is, and for a stronger reason: adding the
+    //   filter would break a test rather than merely be redundant.
+    //
+    //   "a page soft-deleted before the drain still has its publish mirrored, then removed" is
+    //   that test. A page can be published and deleted before the worker ever runs; the `PUBLISH`
+    //   job's version then belongs to a page whose `deletedAt` is set, and a filtered read would
+    //   fail it — leaving the `DELETE` job behind it removing a file that was never written and
+    //   the version permanently unmirrored. `restorePage`, `listDeletedPages` and `findDeleted`
+    //   each carry a deliberately blind query for the same family of reason; this is the fourth.
+    //   The write side has the same blindness and the same test: the sha is recorded for a
+    //   version whose page is soft-deleted, and "a restore puts the file back" walks the whole
+    //   delete-then-restore sequence.
+    //
+    //   The other exported functions are the drain's own pieces, each with its own test in that
+    //   file: the claim (a second worker cannot take a claimed job), the reclaim (an abandoned
+    //   job becomes claimable; one past its attempts is FAILED), the finish (a reclaimed job's
+    //   worker writes nothing), and the tree lock (a second worker blocks, and reports `busy`
+    //   when it will not wait). None of them names a `Page` row, but they are listed rather than
+    //   exempted because they are the same module's exports and an `exempt` list that grows is an
+    //   `exempt` list nobody re-reads.
+    covered: [
+      "drainMirrorJobs",
+      "claimNextJob",
+      "reclaimAbandonedJobs",
+      "finishJob",
+      "withMirrorLock",
+    ],
+    // Pure: configuration read from a literal environment, and the retry curve. Neither queries
+    // anything.
+    exempt: ["workerConfigFromEnv", "backoffMs"],
+  },
+  "src/lib/git/failures.ts": {
+    load: () => import("@/lib/git/failures"),
+    // Soft-delete tests: tests/integration/git-failures.test.ts. Phase 5 Task 8's super-admin
+    // list of jobs that gave up. Registered as `covered` because it does reach a `Page` row —
+    // `page: { select: { title, path, deletedAt, space: … } }` through a relation, the shape this
+    // guard was blind to the fourth time it was widened.
+    //
+    // And it reaches it with **no `visiblePage()` and no `readableSpace()`**, both deliberately,
+    // so what is pinned here is the *absence* — the same shape as `createPage`'s collision check
+    // and `worker.ts`'s version read, and for the stronger reason: adding either filter would
+    // break a test rather than merely be redundant.
+    //
+    //   "a failed DELETE job for a soft-deleted page is listed, with the page marked deleted" is
+    //   the soft-delete test. A `DELETE` job's page is soft-deleted *by definition*, so a
+    //   `deletedAt: null` filter would hide every failure of the one job kind that guarantees
+    //   one — and would hide a `PUBLISH` or `MOVE` failure for a page deleted since, while that
+    //   job went on blocking the page's queue for ever. `restorePage`, `listDeletedPages`,
+    //   `findDeleted` and the worker each carry a deliberately blind query; this is the fifth.
+    //
+    //   The permission absence has its own test rather than sharing that one: "a member of a
+    //   space is refused, and reads not-found" is the mutation target for the `isSuperAdmin`
+    //   guard, and it is a **discrimination** and not an absence — the same fixture that refuses
+    //   the member is read by the super admin in the assertion above it, so "refused" cannot be
+    //   confused with "there was nothing to show", which is how Phase 4's non-member search was
+    //   nearly vacuous.
+    covered: ["listMirrorFailures"],
+    exempt: [],
+  },
   "src/lib/audit/log.ts": {
     reachesPage: false,
     why:
@@ -396,6 +519,14 @@ const MODULES: Record<string, Registration> = {
       "would have nothing to filter — and it must NOT acquire one: `page.delete` and " +
       "`page.restore` audit rows are about pages that are soft-deleted at the moment they are " +
       "written, so a filter here would drop exactly the rows the trail exists for.",
+  },
+  "src/lib/db.ts": {
+    reachesPage: false,
+    why:
+      "constructs the Prisma client and makes no query at all. It is here because the sweep now " +
+      "names `new PrismaClient` as well as `db.`/`tx.` calls — a module that owns a connection is " +
+      "a module a reader should find in this list, and the alternative that catches it is what " +
+      "catches a client under any other variable name.",
   },
   "src/lib/auth/config.ts": { reachesPage: false, why: "queries User only, to resolve a sign-in" },
   "src/lib/users/upsert.ts": { reachesPage: false, why: "upserts User from an OIDC profile" },
@@ -458,13 +589,18 @@ test.each(PAGE_MODULES)(
  * file that makes a raw call also makes a delegate call, so the first alternative would match it
  * either way. Both halves are exercised here against literal source lines.
  */
-test("the sweep pattern can see both a delegate call and a raw statement", () => {
+test("the sweep pattern can see a delegate call, a raw statement and a constructed client", () => {
   expect(PRISMA_QUERY.test('await tx.page.updateMany({ where: visiblePage() })')).toBe(true);
   expect(PRISMA_QUERY.test("const rows = await tx.$queryRaw<Row[]>`SELECT 1`")).toBe(true);
   expect(PRISMA_QUERY.test("await db.$executeRaw`UPDATE \"Page\" SET x = 1`")).toBe(true);
+  // The client-construction alternative, which is the only one that can see a module whose
+  // client is not called `db` or `tx` — the shape `src/lib/git/worker.ts` needs for its
+  // session-scoped advisory lock.
+  expect(PRISMA_QUERY.test("const holder = new PrismaClient({ datasourceUrl: url })")).toBe(true);
   // Not a database call: the guard must not start demanding registration for every method on
   // anything named `db` or `tx`.
   expect(PRISMA_QUERY.test("await tx.$disconnect()")).toBe(false);
+  expect(PRISMA_QUERY.test("import { PrismaClient } from \"@prisma/client\"")).toBe(false);
 });
 
 test("visiblePage excludes soft-deleted rows and nests its extra conditions", () => {
