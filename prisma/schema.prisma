@@ -43,6 +43,29 @@ enum DocType {
   RUNBOOK
 }
 
+// Spec §5.2, normative and reproduced verbatim, in its order. It is a **closed** vocabulary and
+// this phase does not widen it, which matters because it is narrower than the estate it has to
+// describe — see the per-system reasoning in `prisma/seed.ts`, which is where each of the seven
+// seeded systems argues its own kind. Two boundaries are worth stating here, because they are
+// where a reader will disagree:
+//
+// - `MOBILE_APP` vs `DEVICE_APP` is not "phone vs tablet": both seeded iPad apps run on the same
+//   hardware. It is who operates it. `store-ios` is driven by a cashier and is `MOBILE_APP`;
+//   `display-ios` faces the customer from a fixed second screen and has no operator, so it is
+//   `DEVICE_APP`. Anything else makes the two values a synonym pair.
+// - **There is no web-app kind, and `admin-web` is a `SERVICE`.** That is a gap in a normative
+//   enum rather than a classification insight: a browser console is not a service in the sense
+//   `backend` is. Recorded rather than fixed, because widening a §5.2 enum is a spec change and
+//   §7's own reader-visible use of `kind` is a label, so the cost of the squeeze is one
+//   imprecise word on one page. If Task 3's catalogue page reads badly because of it, that is
+//   the evidence a `WEB_APP` value needs, and this comment is where to start.
+enum SystemKind {
+  MOBILE_APP
+  DEVICE_APP
+  SERVICE
+  LIBRARY
+}
+
 // Spec §5.2, normative and reproduced verbatim. `DONE` is a state rows actually reach — see the
 // retention note on `GitJob` for why finished jobs are kept rather than deleted.
 enum GitJobState {
@@ -244,6 +267,7 @@ model Page {
   relationsTo   PageRelation[] @relation("RelationTo")
   attachments   Attachment[]
   gitJobs       GitJob[]
+  systems       PageSystem[]
 
   @@unique([spaceId, path])
   @@index([spaceId, status])
@@ -555,4 +579,196 @@ model GitJob {
   // this index already serves. `PageDraft.baseVersionId` is the same unindexed shape for the same
   // reason. An index whose only justification is symmetry is an index nothing can be measured on.
   @@index([pageId, id])
+}
+
+// A deployable or a library, and a **label rather than a container** (spec §5.1, §5.2, §7).
+//
+// §7 is explicit, and it is the sentence the whole shape follows from: *"Systems are global, not
+// owned by a space, and carry no permissions of their own."* So there is no `spaceId` here, no
+// `visibility`, no membership table, and nothing on `PageSystem` below that a permission check
+// could read. A system is the *second* axis of a deliberately two-axis model — §7 again: a space
+// per deployable "would duplicate memberships across a dozen spaces and force every cross-system
+// ADR into an arbitrary home".
+//
+// The consequence for the phase, stated here because it is where a reader will look for it: a
+// `/systems/[key]` page aggregates pages from every space, so its permission predicate comes
+// entirely from the **pages** it lists (`readableSpace`, derived and filtered in SQL, exactly as
+// `src/lib/search/query.ts` does it). This table contributes nothing to that filter and must
+// never be given the chance to look as if it does.
+//
+// ## `key` is the one column with a constraint the database enforces
+//
+// It is three things at once, which is why it is the constrained one: the URL segment in
+// `/systems/[key]`, the token an author types in `systems:` frontmatter, and therefore the join
+// between two strings written by two different people at two different times. `Space.key` is the
+// same shape with none of the guarantees, and Phase 5 named that debt three times — an
+// unvalidated key is why `mirrorPathOf` needs a containment guard, why a static route is
+// shadowable, and why `Engineering` and `engineering` are two rows over one directory on a
+// case-insensitive filesystem. Task 6 of this phase pays that debt for spaces; this table does
+// not incur it.
+//
+// The `systems_key_shape` CHECK in the `systems_catalogue` migration is
+// `key ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'` — the character class `validateSlug` already
+// enforces for a path segment (lowercase, digits and hyphens; no leading or trailing hyphen, no
+// uppercase, no dots, no whitespace, no `/`). Three things follow, and each is a decision:
+//
+// 1. **`@unique` on a lowercase-only column *is* folded uniqueness.** Task 6 has to add folding
+//    to `Space.key` as a separate constraint because the existing rows carry no such guarantee;
+//    here the constraint ships in the same migration as the empty table, so the cheap moment is
+//    now and never again.
+// 2. **Task 2's resolution rule gets a closed vocabulary.** Phase 3 accepted `systems:` without
+//    validating it and wrote down the failure it was deferring — "the author writes their
+//    systems, publish drops them, and the page ships with an empty facet". With this constraint,
+//    a lookup of a lowercased author key that finds no row means *the catalogue does not have
+//    it*, and can never mean "it is in there under a different spelling". Without it, Task 2
+//    would have to decide about case, whitespace and dots itself — which is the `Space.key`
+//    shape arriving again, the constraint landing after its consumers.
+// 3. **It is raw SQL in the migration because Prisma cannot express it, and that is safe here
+//    for the same reason the search trigger is.** Prisma models no CHECK constraints, so the
+//    diff cannot see this one in either direction — measured on a throwaway database before this
+//    line was written: an unrelated `migrate dev` afterwards emitted an empty migration, not a
+//    `DROP CONSTRAINT`. That is the *opposite* of an index created only in SQL, which Phase 4
+//    Task 2 watched Prisma drop. Indexes are declared in this file; the CHECK cannot be.
+//
+// What is deliberately **not** here: the field-level message. A CHECK produces a Postgres error,
+// not a sentence an admin can act on, so Task 5 still owes a pure `validateSystemKey` beside
+// `validateSlug` — with the length cap, which is left to it on purpose rather than retyped as a
+// number in SQL that nothing ties back to `SLUG_MAX_LENGTH`. **That is a deferral, not an
+// omission:** what the CHECK buys is that the worst case in the window is an ugly 500 on an
+// admin form rather than a row Task 2 and every URL builder have to cope with forever.
+model System {
+  // A surrogate id, and `key` is deliberately not the primary key even though it is unique and
+  // is what every URL and every author names. `key` is admin-editable in Task 5, and as a
+  // primary key it would be a text foreign key in `PageSystem` — so renaming `order-hub` would
+  // rewrite every join row, and any row an ON UPDATE missed would be a page whose facet silently
+  // moved to a system that no longer exists. A cuid rather than `GitJob`'s sequence because
+  // nothing here needs a total order: this table is a catalogue, not a queue.
+  id   String     @id @default(cuid())
+  // The URL segment and the frontmatter token. `@unique` is the `/systems/[key]` lookup (Task 3
+  // Step 1 and 2) and Task 2's `key IN (...)` batch resolution of an author's declared list —
+  // both served by this index alone, which is why this table needs no other. See the note above
+  // for the CHECK that makes this unique index a *folded* one.
+  key  String     @unique
+  // The human label. `/systems` and `/systems/[key]` render it; nothing queries on it. Not
+  // unique: two systems may legitimately share a display name while differing in kind or owner,
+  // and `key` is the identity.
+  name String
+  // §7's first piece of metadata, and the grouping Task 3's index page is expected to read.
+  // Required, unlike the three optional columns below, because a catalogue entry that cannot say
+  // what kind of thing it is has not said anything — and every value is legal for every system,
+  // which is the property that lets this table's seed use `update: {}` (see `prisma/seed.ts`).
+  kind SystemKind
+
+  // The three optional columns, and the nullability is used rather than decorative: three of the
+  // seven seeded systems have no `repoUrl`, because this machine holds no remote for them and a
+  // wrong link in a service catalogue is worse than no link. So Task 3 has to render a system
+  // with no repository from the seeded corpus rather than from a fixture it invents — the shape
+  // this project has been caught by, where "a guard that asserts a class over a fixed corpus is
+  // testing the corpus".
+  description String?
+  // **A repo URL is a credential channel, and this one is rendered to every signed-in reader.**
+  // Not hypothetical: `git remote -v` in the real checkouts on this machine prints
+  // `https://oauth2:glpat-…@gitlab.…/…`, which is exactly what an admin would paste into Task 5's
+  // form, and Phase 5 Task 8's finding was that the certain leak is the string this application
+  // builds and stores, not the one a tool prints. The seed stores the credential-free form. Task
+  // 5 owes a refusal of embedded userinfo on write and Task 3 owes not linking one if it is
+  // somehow stored; neither belongs in the seed, because a repair over seven seeded rows is the
+  // "too narrow, and silent about it" shape and would read as coverage.
+  repoUrl     String?
+  ownerTeam   String?
+
+  // §7's "active or sunsetting", and the reason `onDelete: Restrict` below is operable rather
+  // than merely strict: **a system that should stop appearing has a state for that, so deletion
+  // is for a row created in error** — and a row created in error has no pages naming it, which is
+  // precisely the case `Restrict` never blocks. Task 5 must offer this as the action beside a
+  // refused delete, or the refusal is a dead end.
+  isActive Boolean @default(true)
+
+  // No `createdAt`, which every other model in this schema has. Nothing reads it: §7's metadata
+  // list is kind, owning team, repo and active-or-sunsetting, and Task 5 orders a seven-row
+  // catalogue by `key`. "When was this system added, and by whom" is a question `AuditLog`
+  // already answers for Task 5's mutations, so a column here would be a second place that fact
+  // lives and a second one that can be wrong. Same standard this schema applies to indexes —
+  // `GitJob.versionId` has none because "an index whose only justification is symmetry is an
+  // index nothing can be measured on".
+
+  pages PageSystem[]
+}
+
+// The join, and nothing but the join (spec §5.1: "PageSystem — join between Page and System").
+//
+// It holds **no role and no visibility**, per §7: systems carry no permissions of their own. That
+// is the one property this model has to keep, and it is kept by having no column that could
+// express one — a phase exit criterion says "a system carries no permissions: it neither grants
+// nor denies access to any page", and the way to make that testable is for there to be nothing
+// here to test.
+//
+// ## Deleting a system: `Restrict`, and what Task 5 must show for that to be operable
+//
+// The two candidates, and neither is free. `Cascade` silently strips the facet from every
+// document that declared it; `Restrict` refuses an admin who cannot see what is refusing them.
+// `Restrict`, for three reasons, in increasing order of how much they decided it:
+//
+// 1. A `PageSystem` row is not this table's data — it is a **projection of authored frontmatter**.
+//    Task 2 writes these rows from `systems:` inside the publish transaction, so a cascade would
+//    not just remove the facet: the document's own text would go on saying `systems: [order-hub]`
+//    with no row behind it, and nothing re-derives that until someone happens to republish. The
+//    page and the database would disagree, with the page winning on the reader's screen and the
+//    database winning on `/systems/[key]`. Cascade does not lose a label, it manufactures a lie.
+// 2. `Restrict`'s stated weakness is a **surface** problem, and this phase owns the surface.
+//    Cascade's weakness is not fixable by any surface, because the rows are gone.
+// 3. `isActive` already exists (see `System.isActive`). Deletion is therefore for a row created
+//    in error, and such a row has no pages naming it — so `Restrict` blocks exactly nothing that
+//    deletion is *for*, while `Cascade` would only ever fire in the case where deletion is the
+//    wrong verb.
+//
+// **What Task 5 owes, for this to be a decision rather than a wall.** Three things, and the third
+// is the one that is easy to miss:
+//
+// - The reference count next to every system in the list, from a `_count` on this relation, so a
+//   delete that will be refused is *predicted* and not discovered. The plan asks for this
+//   already ("show the reference count either way"); with `Restrict` it is load-bearing.
+// - The refused delete must say the count and offer `isActive = false` in the same place. A
+//   refusal that names no alternative is how an admin ends up in psql.
+// - **The count may be over pages in spaces the admin cannot read**, and that is fine only
+//   because a count is not a title. A super admin reads everywhere (`isSuperAdmin` grants
+//   `MANAGE_SPACE`, §8), so *listing* the blocking pages is permitted — but it is a
+//   cross-boundary read and therefore an audited act, through `src/lib/audit/log.ts` like every
+//   other one. Showing the number needs no audit; showing the titles does.
+//
+// `pageId` goes the other way and cascades, for `Attachment`'s reason rather than `BugReport`'s:
+// a facet without its page is not a record worth keeping, it is unreachable. This product has no
+// hard delete — `deletePage` sets `Page.deletedAt` — so the only statements that remove a `Page`
+// row are the test harness's `TRUNCATE` and the e2e/smoke fixture sweeps, where cascading is
+// exactly what those sweeps' count contracts require.
+model PageSystem {
+  pageId   String
+  systemId String
+
+  page   Page   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  system System @relation(fields: [systemId], references: [id], onDelete: Restrict)
+
+  // A composite primary key rather than a `cuid()` plus a `@@unique`, which is what
+  // `PageRelation` and `SpaceMembership` do. The difference is that this row has no payload —
+  // it is exactly its two keys — so a surrogate id would be a second way to name it and a query
+  // that can order by the wrong one, the same objection `GitJob`'s note raises against carrying
+  // both a cuid and a `seq`. Nothing needs a single-column handle either: Task 2 rewrites a
+  // page's facet by `pageId` and Task 3 reads by `systemId`.
+  //
+  // As an index it serves "which systems does this page declare" — the page's own facet, and the
+  // `deleteMany({ where: { pageId } })` that Task 2's re-resolve does inside the publish
+  // transaction.
+  @@id([pageId, systemId])
+  // The reverse question, and `PageRelation` is the precedent: `@@index([toId, type])` exists
+  // there because "what supersedes THIS page" is keyed on `toId` and runs on every retired
+  // page's banner. "Which pages name THIS system" is the same shape — keyed on `systemId`, and it
+  // runs on every `/systems/[key]` render — and the primary key above cannot serve it, because
+  // `systemId` is its second column.
+  //
+  // `pageId` is in it as well, which makes it covering: this table has exactly two columns, so
+  // Task 3's read of "the page ids for this system" is answered from the index with no heap
+  // access at all. It is also the index the `systemId` foreign key wants — Postgres creates none
+  // for a referencing column, so without it every `Restrict` check on a delete, and every
+  // reference count Task 5 renders, would sequential-scan this table.
+  @@index([systemId, pageId])
 }
