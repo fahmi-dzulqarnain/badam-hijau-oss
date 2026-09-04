@@ -2,16 +2,17 @@
 
 **Phases 1, 2, 3 and 4 are complete.**
 
-Branch: `claude/onedrive-microsoft-sso-7ac97b` · **961 vitest tests passing**, 73-check
-cold-start smoke green · typecheck, build and `plan:check` clean · working tree clean
+Branch: `claude/onedrive-microsoft-sso-7ac97b` · **961 vitest + 32 Playwright tests
+passing**, 73-check cold-start smoke green · typecheck, build and `plan:check` clean ·
+working tree clean
 
-**Playwright is UNVERIFIED for Phase 4.** `e2e/attachments.spec.ts` is written but has never
-been run: this machine has no Chromium in `~/Library/Caches/ms-playwright`, and the 178MB
-download does not complete on this network. That means the 27 pre-existing specs are unrun
-here too, so the previously recorded "27 Playwright tests passing" was measured elsewhere.
-Anyone with a working browser install should run `npm run test:e2e` before trusting Phase 4's
-end-to-end claims — everything else in the phase is verified, including the full upload →
-commit → read cycle over real HTTP, which the smoke test covers.
+Two of the five new Playwright specs failed on their first real run, and both had the same
+two causes. `fixture.path` is **space-relative** — every existing spec navigates to
+`` `/engineering/${fixture.path}` `` and these used the bare path, which resolves to a
+nonexistent URL. And these are the only specs in the suite that publish through the **UI**
+rather than through `seedPublishedPage`, so there was no established wait to copy: clicking
+Publish and navigating immediately raced the POST, and the reader saw the version from before
+the attachment reference was published. Both fixed; the publish now waits on its own response.
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·

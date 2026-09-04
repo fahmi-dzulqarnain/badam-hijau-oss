@@ -52,7 +52,29 @@ const PNG = Buffer.from(
  */
 const MP4 = readFileSync(path.join(__dirname, "fixtures", "clip.mp4"));
 
-test.afterEach(sweep);
+// The pattern `lifecycle.spec.ts` settled on, and its reasoning applies here unchanged: not
+// just an `afterEach`, because a fixture surviving a CRASHED run makes the next run's
+// `createPage` fail on the unique `(spaceId, path)` index rather than starting clean.
+test.beforeAll(sweep);
+test.beforeEach(sweep);
+test.afterAll(sweep);
+
+/**
+ * Clicks Publish and waits for the publish to actually land.
+ *
+ * Every other spec in this suite publishes through `seedPublishedPage`, i.e. the product's own
+ * functions, so there is no established wait to copy. Clicking and navigating immediately
+ * raced the POST: the reader then read the version from BEFORE the attachment reference was
+ * published, which is how both of this file's original failures presented — a 404 on a
+ * mis-built URL masked one and a missing `<video>` the other.
+ */
+async function publishAndWait(page: import("@playwright/test").Page) {
+  const landed = page.waitForResponse(
+    (response) => /\/api\/pages\/[^/]+\/publish$/.test(response.url()) && response.status() < 400,
+  );
+  await page.getByRole("button", { name: /publish/i }).click();
+  await landed;
+}
 
 /** Attaches the fixture PNG through the editor and returns the attachment id from the inserted URL. */
 async function attachThroughEditor(page: import("@playwright/test").Page, pageId: string) {
@@ -79,7 +101,7 @@ test("an editor attaches an image and another member's browser renders it", asyn
   });
   await signIn(page, "aisyah@example.com");
   const id = await attachThroughEditor(page, fixture.id);
-  await page.getByRole("button", { name: /publish/i }).click();
+  await publishAndWait(page);
 
   // A SECOND identity, with its own cookie jar. The property is that the reader's browser
   // fetches the bytes through the proxy under the READER's session — asserting the Markdown
@@ -89,7 +111,7 @@ test("an editor attaches an image and another member's browser renders it", asyn
   // stranger (member of nothing) and admin. This spec's property is "a different session
   // renders it"; whether MEMBERSHIP is what admits them is the next spec's job.
   const reader = await actorContext(browser, "admin@example.com");
-  const response = await reader.page.goto(fixture.path);
+  const response = await reader.page.goto(`/engineering/${fixture.path}`);
   expect(response!.status()).toBe(200);
 
   const image = reader.page.locator(`img[src="/api/attachments/${id}"]`);
@@ -143,9 +165,9 @@ test("a video plays and seeking issues a 206", async ({ page }) => {
   await expect(page.getByRole("progressbar")).toHaveCount(0, { timeout: 30_000 });
   // The `/video` suffix is what the render plugin matches on.
   await expect(page.locator(".cm-content")).toContainText("/video)");
-  await page.getByRole("button", { name: /publish/i }).click();
+  await publishAndWait(page);
 
-  await page.goto(fixture.path);
+  await page.goto(`/engineering/${fixture.path}`);
   const video = page.locator("video");
   await expect(video).toBeVisible();
   // The metadata-only preload has to actually finish parsing the container before a seek means
