@@ -482,6 +482,34 @@ const MODULES: Record<string, Registration> = {
     // anything.
     exempt: ["workerConfigFromEnv", "backoffMs"],
   },
+  "src/lib/git/failures.ts": {
+    load: () => import("@/lib/git/failures"),
+    // Soft-delete tests: tests/integration/git-failures.test.ts. Phase 5 Task 8's super-admin
+    // list of jobs that gave up. Registered as `covered` because it does reach a `Page` row —
+    // `page: { select: { title, path, deletedAt, space: … } }` through a relation, the shape this
+    // guard was blind to the fourth time it was widened.
+    //
+    // And it reaches it with **no `visiblePage()` and no `readableSpace()`**, both deliberately,
+    // so what is pinned here is the *absence* — the same shape as `createPage`'s collision check
+    // and `worker.ts`'s version read, and for the stronger reason: adding either filter would
+    // break a test rather than merely be redundant.
+    //
+    //   "a failed DELETE job for a soft-deleted page is listed, with the page marked deleted" is
+    //   the soft-delete test. A `DELETE` job's page is soft-deleted *by definition*, so a
+    //   `deletedAt: null` filter would hide every failure of the one job kind that guarantees
+    //   one — and would hide a `PUBLISH` or `MOVE` failure for a page deleted since, while that
+    //   job went on blocking the page's queue for ever. `restorePage`, `listDeletedPages`,
+    //   `findDeleted` and the worker each carry a deliberately blind query; this is the fifth.
+    //
+    //   The permission absence has its own test rather than sharing that one: "a member of a
+    //   space is refused, and reads not-found" is the mutation target for the `isSuperAdmin`
+    //   guard, and it is a **discrimination** and not an absence — the same fixture that refuses
+    //   the member is read by the super admin in the assertion above it, so "refused" cannot be
+    //   confused with "there was nothing to show", which is how Phase 4's non-member search was
+    //   nearly vacuous.
+    covered: ["listMirrorFailures"],
+    exempt: [],
+  },
   "src/lib/audit/log.ts": {
     reachesPage: false,
     why:
