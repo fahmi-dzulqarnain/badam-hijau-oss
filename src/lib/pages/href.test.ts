@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { pageHistoryHref, pageHref } from "./href";
+import { MIRROR_FAILURES_PATH, pageHistoryHref, pageHref } from "./href";
 import { validateSlug } from "./slug";
 
 test("keeps the separators of a multi-segment path and encodes nothing else", () => {
@@ -86,4 +86,33 @@ test("no slug can shadow the reserved segment", () => {
   // The non-vacuity companion: a slug that is merely similar is fine, so the refusal above is
   // about the leading character and not about the word.
   expect(validateSlug("history").ok).toBe(true);
+});
+
+/**
+ * The failures page's address, and the two halves of the argument for it.
+ *
+ * The path is asserted as a literal because two files name it and the route directory has to
+ * agree with the constant — a mismatch is a 404 nothing else in the suite would catch.
+ */
+test("the mirror failures page lives under the same reserved segment, one level up", () => {
+  expect(MIRROR_FAILURES_PATH).toBe("/-/mirror");
+  // It is built from the same `RESERVED` constant as the history URL, so the two cannot drift
+  // into disagreeing about which character the product reserves.
+  expect(pageHistoryHref("engineering", "welcome").split("/")[2]).toBe(
+    MIRROR_FAILURES_PATH.split("/")[1],
+  );
+});
+
+/**
+ * The honest limit of that reservation, pinned so it is not read as stronger than it is.
+ *
+ * `validateSlug` refuses a leading `-`, which is what stops a **page** shadowing `/{space}/-/…`.
+ * A **space key** is a bare `String @unique` with no validation anywhere, so `-` protects the
+ * top-level route by convention and not by a guard — the collision was measured against a real
+ * `next start` with a space actually keyed `-`, and the static route wins. This test says which
+ * of the two guarantees exists, so a future reader does not assume the wrong one.
+ */
+test("the reserved segment binds slugs, and nothing today binds space keys", () => {
+  expect(validateSlug("-mirror").ok).toBe(false);
+  expect(validateSlug("mirror").ok).toBe(true);
 });
