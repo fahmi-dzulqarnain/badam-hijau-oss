@@ -1,7 +1,7 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is under way — Tasks 1–7 of 9 done.**
+is under way — Tasks 1–8 of 9 done.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
 **951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
@@ -54,8 +54,8 @@ Landmines carried in, measured while planning:
 | 5. The git seam | ✅ |
 | 6. The worker | ✅ |
 | 7. The sha on the page | ✅ |
-| **8. Failures a super admin can see** | **next** |
-| 9. End-to-end and the smoke test | — |
+| 8. Failures a super admin can see | ✅ |
+| **9. End-to-end and the smoke test** | **next** |
 
 ## Phase 4 — search and diagrams
 
@@ -327,6 +327,15 @@ control characters as escapes, never as literals.** A literal NUL is invisible i
 turns one file into a blind spot for the tool you switched to in order to be safe.
 
 When a search must be trustworthy, read the file with Python and count.
+
+**A credential can reach a database column through argv, not only through a subprocess's
+stderr.** Phase 5 Task 8 found `failedRun` quoting `JSON.stringify(run.argv)` into every error
+message, and `push`'s argv is `["push", "--", config.remoteUrl, …]` — so a remote URL of the form
+`https://ghp_…@host/repo.git`, which the design explicitly permits, puts a live token into
+`GitJob.lastError` on **any** failed push, with no help from git at all. Redaction has to sit at
+both ends, and each end needs its own test: removing either one alone leaks. The general lesson is
+that the obvious channel (what the tool prints) was not the certain one — **the command line this
+application built was**.
 
 **Playwright's browser binaries keep vanishing from this machine** — twice on 2026-09-03, once
 mid-session after a passing 41-spec run. It presents as a mass failure (40 of 41 specs failing in

@@ -695,7 +695,7 @@ spec says about markup is asserted and executed by the two component tests.
 
 ---
 
-## Task 8: Failures a super admin can see
+## Task 8: Failures a super admin can see ✅
 
 **Files:** `src/lib/git/failures.ts`, `src/lib/git/redact.ts`, `src/components/MirrorFailures.tsx`,
 a route at `/-/mirror` + tests.
