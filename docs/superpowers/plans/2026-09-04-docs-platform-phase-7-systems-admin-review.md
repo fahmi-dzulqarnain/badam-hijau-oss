@@ -199,26 +199,138 @@ this and when" is what `AuditLog` answers for Task 5's mutations.
 
 ---
 
-## Task 2: Resolving what authors already wrote
+## Task 2: Resolving what authors already wrote ✅
 
 **Files:** `src/lib/systems/resolve.ts`, `src/lib/pages/publish.ts` + tests.
 
-- [ ] **Step 1: Measure the seeded corpus first**
+- [x] **Step 1: Measure the seeded corpus first**
 
 Before choosing a rule, find out which `systems:` keys exist in the dev database and the seed and
 whether they resolve against Task 1's catalogue. The rule is a decision about real data, not a
 hypothetical.
 
-- [ ] **Step 2: Resolve at publish, inside the transaction that already exists**
+- [x] **Step 2: Resolve at publish, inside the transaction that already exists**
 
 §9 step 3 puts `PageSystem` rows in the publish transaction. Phase 5 Task 4 established the
 pattern and the trap: use `tx`, never `db`, and note that for publish the mistake **times out on
 a lock** rather than committing silently.
 
-- [ ] **Step 3: An unknown key is reported, never dropped**
+- [x] **Step 3: An unknown key is reported, never dropped**
 
 Refuse the publish or accept and report — but the author must see it. Phase 3's own note is the
 specification for the failure to avoid.
+
+**The corpus contains no `systems:` at all, and that is what decided the rule.** Measured before
+anything was written: no seeded page's markdown has a frontmatter block and `publishSeedVersion`
+writes no `frontmatter` column, so all six published versions in the dev database carry `{}`;
+there are no drafts and `PageSystem` was empty. Every template ships `systems:` with nothing after
+it, which normalises to `[]`. So **no page anywhere declares a system, and none declares one that
+fails to resolve** — nothing to migrate, no author to ask for a re-edit, and **the seed needed no
+attention**, which is the branch this step was told to watch for.
+
+That measurement is what makes the strict rule affordable rather than merely defensible. Had a
+published version held an unresolvable key, refusing would have made an already-published page
+unrepublishable until someone edited text they may not own, and *accept and report* would have
+been the right answer. The two keys in the repository that do not resolve were both **test
+fixtures** — `mqtt-broker` in `tests/integration/git-worker.test.ts` and `e2e/mirror-tree.spec.ts`
+— invented while nothing validated them; both now name `order-hub`, so a fixture can no longer pass
+on a key the product does not have.
+
+**An unknown key refuses the publish.** The argument is in `src/lib/systems/resolve.ts` and the
+half that decided it is consistency with Task 1: `PageSystem.systemId` is `Restrict` because
+"cascade does not drop a facet; it manufactures a lie" — a document whose text says
+`systems: [order-hub]` with no row behind it. *Accept and report* manufactures exactly that lie
+from the authoring side, with one keystroke, and **permanently**, because nothing re-resolves a
+published version until someone republishes it. A phase that forbids an admin from creating that
+state while letting any author create it has taken half a decision. It is also **not** the option
+Phase 3 declined: Phase 3 declined rejecting `systems:` *as a key*, and every template's empty
+`systems:` still publishes; what is refused is a value that names nothing, exactly as
+`supersedes: no-such-page` already is. `publishPage` had already written the rest of the argument
+for `body-empty` — publish is one round trip with a boolean outcome, so "report" means a message
+nobody has to read or a confirm-and-resend handshake.
+
+No new error channel: the refusal is a `PublishFieldError` with `key: "systems"`, which
+`src/lib/editor/publish.ts` already turns into the "line N · systems:" control Phase 3 shipped for
+the supersede-cycle refusal. `SystemRefusalCode` joins the four unions `PublishErrorCode` imports
+rather than being restated there.
+
+**The four smaller decisions.** *Case* is folded with `toLowerCase` — on a lowercase-only column
+`@unique` is folded uniqueness, so `Order-Hub` can name at most one row and there is nothing to
+disambiguate; `toLocaleLowerCase` is deliberately avoided, because a Turkish default locale would
+fold `store-IOS` to a key the CHECK forbids and the same document would publish in one deployment
+and be refused in another. *No trim*, because `systemsSchema` already refuses surrounding
+whitespace and the `Space.key` lesson is what happens when one string is normalised in several
+places by habit. *Duplicates* collapse **after** the fold, which is the case that matters —
+`[Order-Hub, order-hub]` is one system. *A sunsetting system may be declared*: `isActive` is a
+catalogue state (§7's "active or sunsetting"), not an authoring gate, and the documents that most
+need the facet are the ones written about a retirement — the seeded `adr-0042-mqtt-topic-naming`
+already says the bridge is on its way out, and a decommissioning runbook would otherwise be the
+one page that could not be published. Filtering on it would also let an admin flipping one boolean
+make pages unpublishable in spaces they never looked at: a permission-shaped consequence on a
+table §7 says carries no permissions. *And no cap*, with the reasoning **in the code** rather than
+only here: on success the rows one page can cause are bounded by `count(System)`, because unknown
+keys are refused and duplicates collapsed, and on the way in the list is already bounded by
+`MAX_FRONTMATTER_ENTRIES` (200, counting list items) and the 16KB block cap. A constant of 20 here
+could never bind before either of those, and `MAX_RELATION_TARGETS` is the cautionary tale — two
+thirds of its stated reasoning went stale and sat in the file for three tasks.
+
+**Three mutation results corrected a claim rather than confirming one**, and they are the useful
+part of this task:
+
+- **`replaceSystems(db, …)` blocks; it does not commit silently.** The plan's warning is right and
+  the mechanism is worth recording: publish updates `Page.publishedVersionId`, which carries
+  `Page_publishedVersionId_key`, so Postgres takes `FOR UPDATE` on the row rather than
+  `FOR NO KEY UPDATE` — and the `PageSystem` insert's foreign key wants `FOR KEY SHARE` on that
+  same row from another connection. It arrives as `Test timed out in 5000ms` against a line that
+  names nothing. The discrimination is a lock and cannot be made into an assertion, so what is
+  shaped deliberately is the diagnosis: the facet test's docstring says a timeout there means the
+  client is `db`.
+- **`resolveSystems(db, …)` is an equivalent mutant** — 68 of 68 green. It reads a table this
+  transaction never writes or locks, and the foreign key is checked against committed data at
+  insert time either way, so the race it looks like it introduces exists on `tx` too. Reported
+  rather than pinned by a manufactured test, per this project's rule.
+- **Deleting the `deleteMany` alone dies for the wrong reason** — a `PageSystem` unique violation
+  when the second publish re-declares a surviving system, which is a crash and not the removal the
+  test names. So the re-resolution test is written against the *accumulating* implementation (no
+  delete, `skipDuplicates: true`) and kills it by assertion:
+  `['backend','order-hub','store-ios']` where `['backend','order-hub']` was expected.
+
+**`skipDuplicates` is deliberately absent, and that was measured too.** With it restored and the
+dedupe deleted, the whole publish file passes 68 of 68 — so a `[order-hub, order-hub]` test would be
+testing `ON CONFLICT DO NOTHING` rather than the dedupe it names. Without it that mutation dies on
+`@@id([pageId, systemId])`. `replaceSystems` also uses a plain `deleteMany({ where: { pageId } })`
+where `replaceRelations` uses a `NOT`, and the difference is argued rather than copied: the `NOT`
+exists to keep a surviving relation's `createdAt`, and `PageSystem` "is exactly its two keys" with
+no payload to preserve — the statement Task 1 named in as many words.
+
+**No `systems` diff in the audit row, and that is a decision.** Both halves of `RelationDiff`'s
+argument fail here: "reconstructible from the version chain" was too weak for relations because
+recovering an edge means re-resolving a *path* through `Redirect` rows a later move may have
+replaced, while a system key resolves through one lookup against a closed catalogue with no
+time-dependent hop; and "removal has a consequence nothing else records" was the deciding half —
+dropping a system fires no cascade and changes no other row. What remains is that a `System.key`
+renamed by Task 5 would strand an old version's stored keys, and that rename is Task 5's own
+audited mutation on the row that changed.
+
+**Registered `reachesPage: false`** in `src/lib/pages/visible.test.ts`, with the reason spelled
+out: four statements, none of which reads, selects or filters a `Page` row — not through a delegate
+and not through a `page:` relation filter. The `pageId` is never looked up; `publishPage` has
+already authorised that row under `visiblePage({ space: readableSpace(viewer) })` and locked it, so
+restating the predicate here would be the `resolveRedirect` mistake. Same registration and same
+argument as `src/lib/git/enqueue.ts`, the FK `KEY SHARE` locks included. **This module performs no
+permission check at all**, said at each query rather than once: `System` has no `spaceId`, no
+`visibility` and no `deletedAt`, because §7 makes a system a label and not a container.
+
+**`snapshot()` in `tests/integration/publish.test.ts` was widened to carry the `PageSystem` rows.**
+Every atomicity assertion in that file compares a whole snapshot precisely so a half-commit fails
+in whichever half nobody looked at, and until that line existed a facet row written by a publish
+that then rolled back was in exactly that blind spot — the eighth time a count contract on this
+project has been too narrow. The staged soft-delete test is what proves the rollback rather than
+the comment claiming it.
+
+**Phase 3's `TODO(phase-7)` on `systemsSchema` is gone rather than left to be trusted**, and its
+cap note corrected in the same change: correcting a plan is not correcting the code comment that
+says the same thing, and that comment is where a reader meets this decision first.
 
 ---
 
