@@ -113,7 +113,7 @@ Settled in Phases 1–6. Changing one is a decision, not a detail.
 
 ---
 
-## Task 1: The catalogue
+## Task 1: The catalogue ✅
 
 **Files:** `prisma/schema.prisma`, a migration, `prisma/seed.ts`.
 
@@ -135,6 +135,67 @@ only write a spec made.
 
 Cascade strips the facet silently; `Restrict` blocks an admin who cannot see why. Decide, and make
 Task 5's surface show the reference count either way.
+
+**`Restrict`, and the argument is stronger than "don't lose data".** A `PageSystem` row is a
+*projection of authored frontmatter*, so a cascade would not lose a label — it would leave the
+document's own text saying `systems: [order-hub]` with no row behind it, and nothing re-derives that
+until someone happens to republish. The page and the database then disagree, with the page winning
+on the reader's screen and the database winning on `/systems/[key]`. **Cascade does not drop a
+facet; it manufactures a lie.** And `isActive` already exists, so deletion is the verb for a row
+created in error — which by definition has no pages naming it, exactly the case `Restrict` never
+blocks. `Restrict`'s weakness is a *surface* problem and this phase owns the surface; cascade's is
+unfixable by any surface, the rows being gone.
+
+**What that makes Task 5 owe:** the reference count beside every system so a refusal is predicted
+rather than discovered; a refused delete that states the count *and* offers `isActive = false` in
+the same place, or the admin ends up in psql; and the distinction that a **count** across spaces
+the admin cannot read needs no audit, while **listing** the blocking pages is a cross-boundary
+read and therefore an audited act.
+
+**`System.key` is validated here, as a CHECK constraint**, and the free moment is now: on a
+lowercase-only column `@unique` *is* folded uniqueness, so unlike `Space.key` in Task 6 there are
+no pre-existing rows to retro-validate. It also hands Task 2 a **closed vocabulary** — a lookup of
+a lowercased author key that finds no row means "not in the catalogue" and can never mean "present
+under a different spelling". Deferred explicitly to Task 5: the field-level message and the length
+cap, because a CHECK yields a Postgres error rather than a sentence an admin can act on, and
+retyping `SLUG_MAX_LENGTH` into SQL would be a predicate stated twice with one copy untestable.
+
+**This plan's framing of that debt was two-thirds right.** The route-shadowing half **does not
+transfer**: `Space.key` is the first path segment and competes with `/admin`, `/search`,
+`/systems`, `/new`, `/edit` and `/api`, while `System.key` sits under a static prefix with no
+static siblings. What transfers is case folding and URL safety — and the decisive reason is one
+this plan did not name: `System.key` is matched against **author-typed frontmatter** by Task 2,
+which is Phase 3's "publish drops them" failure arriving from the other side.
+
+**`update: {}` in the seed, and the repair clause was declined deliberately.** Phase 3 needed its
+narrow repair because `DocStatus` is a *column type wider than the rule the product enforces* — the
+vocabulary is per doc type and lives in application code, so the column could hold a value the
+product cannot produce. Nothing on this table qualifies: `key` is the `where` and is now narrowed
+by the database itself, every `SystemKind` is legal for every system, and the free-text columns are
+what Task 5 exists to edit. A repair clause would be a guard that cannot fire. The cost is stated
+in the file: a later change to a seeded system's `name` or `kind` lands only on a fresh database,
+so **assertions should bind to a system's `key`**, the one column the upsert can never leave stale.
+
+**`repoUrl` is a credential channel — Phase 5 Task 8's finding arriving somewhere new.** Real
+checkouts on this machine carry remotes of the form `https://oauth2:<token>@gitlab…`, which is
+exactly what an admin would paste into Task 5's form, and Task 3 renders `repoUrl` as a link to
+**every signed-in reader**. The seed stores the credential-free form and deliberately does *not*
+repair anything, because a repair over seven seeded rows would read as coverage. **Task 5 owes a
+refusal of embedded userinfo on write, and Task 3 owes not linking one if it is somehow stored** —
+two ends, because Phase 5's lesson was that removing either alone still leaks.
+
+**`SystemKind` is too narrow for the estate §7 names.** There is no web-app kind, so `admin-web` is
+filed as a `SERVICE` — a gap in a normative enum rather than a classification insight. Recorded
+rather than fixed, because widening a §5.2 enum is a spec change and `kind` is a reader-visible
+label; if Task 3's page reads badly, that comment is where the evidence for a `WEB_APP` value goes.
+`MOBILE_APP` versus `DEVICE_APP` also had to be *decided* — both are iPads here, so it is who
+operates it: a cashier drives `store-ios`, while `display-ios` faces the customer with no operator.
+
+**`PageSystem` has no normative column list anywhere** — §5.2's sketch stops at `System` and the
+join appears only as prose. So the composite primary key, the index direction and `Restrict` are
+all this task's choices, argued in the file. `System` also has **no `createdAt`**, a deliberate
+divergence from every other model: nothing reads it, §7's metadata list omits it, and "who added
+this and when" is what `AuditLog` answers for Task 5's mutations.
 
 ---
 
