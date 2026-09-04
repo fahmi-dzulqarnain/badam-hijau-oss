@@ -163,7 +163,15 @@ test("a page whose mirror job has given up says so, and stays readable", async (
   await expect(page.locator("body")).not.toContainText("could not read from remote");
   // And the publish stood, which is the spec's central claim.
   await page.goto(`/engineering/${fixture.path}`);
-  await expect(page.getByRole("heading", { level: 1, name: "History stuck" })).toBeVisible();
+  /*
+   * `.doc > h1` and not `getByRole("heading", …)`: the reader paints `Page.title` into its own
+   * `h1` **and** the document's `# History stuck` renders a second one inside `.body`, so the
+   * role query is a strict-mode violation rather than an assertion. Corrected by Phase 5 Task 8,
+   * which is the first run of this file with Playwright's browsers present — the specs Task 7
+   * wrote were never executed. What is asserted here is the title the *product* painted, which
+   * is the half that says the publish stood.
+   */
+  await expect(page.locator(".doc > h1")).toHaveText("History stuck");
 });
 
 test("a page with no published version has an empty history rather than a 404", async ({
