@@ -2228,6 +2228,12 @@ Either select `space.visibility` and call `needsAccessAudit`, or record in the d
 attachment read is exempt where the page read is not. Silence is the one unacceptable answer.
 Raised by the Task 3 review.
 
+**Answered: it audits.** `pages/repo.ts` can skip this because its callers resolve the space
+first; an attachment is fetched by its own id, often as a bare `<img src>` in its own request,
+so this repository is the only choke point that read passes. And a follow-on the volume forced:
+the audit needed a second de-dup scope, because twelve screenshots on one page are twelve
+requests and `cache()` is inert outside a render — see `"subresource"` in `audit/log.ts`.
+
 **Files:**
 - Create: `src/lib/attachments/repo.ts`
 - Test: `tests/integration/attachments-repo.test.ts`
@@ -2654,7 +2660,11 @@ export async function readableAttachment(
   });
   if (!row) return null;
 
-  await auditSpaceAccess(viewer, row.page.space);
+  // `"subresource"`, because this is not a page view. One page with twelve screenshots is
+  // twelve calls here, and a scrubbed video is one per seek — all one act of reading. The
+  // request scope cannot see that: `cache()` is inert outside a render, and each of those is
+  // its own HTTP request. Measured before the window existed: twelve reads, twelve rows.
+  await auditSpaceAccess(viewer, row.page.space, "subresource");
 
   const { page: _page, ...attachment } = row;
   return attachment;
@@ -5066,12 +5076,12 @@ relitigated" —
   `text/html`: it stops a browser guessing a *different* type, and that one is genuinely
   executable.
 
-And record as **open, to decide deliberately rather than discover**: `readableAttachment`
-audits every read, so a super admin scrubbing a video in a MEMBERS space emits one
-`space.access` row per range request. Auditing too much is the safe direction and the choke
-point is correct — an attachment is fetched by its own id, so the repository is the only place
-that read passes — but the volume wants a de-dup window before the log becomes unreadable at
-the moment someone needs it.
+- The access audit has **two** de-dup scopes. Per-request collapses one render's repeated
+  space resolutions and its granularity is deliberate; `"subresource"` adds a 60-second
+  per-`(actor, space)` window for callers whose fan-out is a browser's — twelve screenshots on
+  one page are twelve requests, and a scrubbed video is one per seek. `cache()` is inert
+  outside a render, so the request scope caught none of it: measured at twelve rows for twelve
+  reads.
 
 - [ ] **Step 4: Run everything**
 

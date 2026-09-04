@@ -1,12 +1,17 @@
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { db, resetDb } from "../setup/reset";
 import { attach, cast } from "./support/attachments";
 import { memoryStore } from "@/lib/blob/select";
+import { resetAccessWindow } from "@/lib/audit/log";
 import {
   beginUpload, commitUpload, readableAttachment, softDeleteAttachment,
 } from "@/lib/attachments/repo";
 
 beforeEach(resetDb);
+// Module state that outlives a single test by design, so it is reset like the database is.
+// Ids are fresh per test so keys cannot collide in practice, but relying on that would make
+// these tests order-dependent for no reason.
+beforeEach(resetAccessWindow);
 
 test("a published page's attachment is readable by every role, and by a non-member of ALL_STAFF", async () => {
   const c = await cast({ visibility: "ALL_STAFF", published: true });
@@ -201,4 +206,68 @@ test("two concurrent soft-deletes: exactly one wins", async () => {
   const won = results.filter((r) => r.ok).length;
   expect(won, JSON.stringify(results)).toBe(1);
   expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, reason: "not-found" }]);
+});
+
+test("a page's worth of attachment reads writes ONE audit row, not one each", async () => {
+  // Measured before the sub-resource window existed: twelve reads wrote twelve identical
+  // `space.access` rows a millisecond apart. A page with twelve screenshots is twelve HTTP
+  // requests and a scrubbed video is one per seek — all one act of reading, and none of them
+  // a render, so the per-request scope (`cache()`) is inert and caught none of it.
+  //
+  // Auditing too much is the safe direction, which is why this was shipped noisy rather than
+  // silent — but a table that logs hundreds of rows per video view is unreadable at exactly
+  // the moment an auditor needs it.
+  const c = await cast({ visibility: "MEMBERS", published: true });
+  const a = await attach(c.pageId, c.editor.id);
+
+  for (let i = 0; i < 12; i += 1) {
+    expect((await readableAttachment(c.superAdmin, a.id))?.id).toBe(a.id);
+  }
+
+  expect(
+    await db.auditLog.count({ where: { action: "space.access", actorId: c.superAdmin.id } }),
+  ).toBe(1);
+});
+
+test("a read after the window closes writes a second row", async () => {
+  // The other half: collapsing is bounded, not permanent. Without this the first test would
+  // pass just as well against an audit that fired once per process and never again.
+  vi.useFakeTimers();
+  try {
+    const c = await cast({ visibility: "MEMBERS", published: true });
+    const a = await attach(c.pageId, c.editor.id);
+
+    await readableAttachment(c.superAdmin, a.id);
+    vi.advanceTimersByTime(30_000);
+    await readableAttachment(c.superAdmin, a.id);
+    expect(
+      await db.auditLog.count({ where: { action: "space.access", actorId: c.superAdmin.id } }),
+      "still inside the window",
+    ).toBe(1);
+
+    vi.advanceTimersByTime(31_000);
+    await readableAttachment(c.superAdmin, a.id);
+    expect(
+      await db.auditLog.count({ where: { action: "space.access", actorId: c.superAdmin.id } }),
+      "the window has closed",
+    ).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the window is per (actor, space), so it collapses neither apart", async () => {
+  const first = await cast({ visibility: "MEMBERS", published: true });
+  const a = await attach(first.pageId, first.editor.id);
+
+  // Two different super admins reading the same attachment are two accesses.
+  const other = await db.user.create({
+    data: { email: "root2@example.com", name: "Root Two", isSuperAdmin: true },
+    select: { id: true },
+  });
+  await readableAttachment(first.superAdmin, a.id);
+  await readableAttachment(first.superAdmin, a.id);
+  await readableAttachment({ id: other.id, isSuperAdmin: true, memberships: [] }, a.id);
+
+  expect(await db.auditLog.count({ where: { action: "space.access" } })).toBe(2);
 });

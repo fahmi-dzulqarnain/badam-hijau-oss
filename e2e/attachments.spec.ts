@@ -153,7 +153,7 @@ test("an unsupported type is refused with the server's own message, and inserts 
   await expect(page.locator(".cm-content")).not.toContainText("/api/attachments/");
 });
 
-test("a video plays and seeking issues a 206", async ({ page }) => {
+test("a real video decodes through the proxy, and the proxy honours Range", async ({ page }) => {
   const fixture = await seedPublishedPage({
     slug: "e2e-attach-video", title: "Video", markdown: "# Video\n\nBody.",
   });
@@ -170,21 +170,39 @@ test("a video plays and seeking issues a 206", async ({ page }) => {
   await page.goto(`/engineering/${fixture.path}`);
   const video = page.locator("video");
   await expect(video).toBeVisible();
-  // The metadata-only preload has to actually finish parsing the container before a seek means
-  // anything — on `HAVE_NOTHING` a seek is a documented no-op. `duration` is set once Chromium
-  // has decoded enough of a REAL mp4 to know it; a garbage buffer never reaches this state.
+  // `duration` is the assertion that a REAL container decoded, and it decoded through this
+  // application's proxy under this session — which is the part no integration test covers.
+  // Chromium only reports a duration once it has parsed enough of a valid mp4 to know one; a
+  // buffer of zeroes labelled `video/mp4` never reaches this state, which is how the plan's
+  // original `Buffer.alloc` fixture was caught.
   await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.duration)).toBeGreaterThan(0);
 
-  // A <video> element that renders but cannot seek is exactly what a Range bug produces, so the
-  // 206 is the assertion, not the element. Seeking into the SECOND half of the two-second clip,
-  // not its midpoint — see the comment on `MP4` above for why 0.5s does not exercise this.
-  const partial = page.waitForResponse(
-    (response) => response.url().includes("/api/attachments/") && response.status() === 206,
-  );
-  await video.evaluate((node: HTMLVideoElement) => {
-    node.currentTime = 1.5;
-  });
-  expect((await partial).status()).toBe(206);
+  // The Range assertion is made DIRECTLY, not by seeking, and that is a deliberate retreat
+  // from a test that passed twice and then timed out.
+  //
+  // Seeking asserted a browser decision, not ours. Whether `currentTime = 1.5` issues a fresh
+  // range request depends on how much Chromium happened to buffer during the metadata
+  // preload — a heuristic, not a contract — so on a run where it had already read far enough,
+  // no request fired and the wait timed out at 30s. A flaky test is worse than no test, and
+  // this repository has the lesson recorded twice already: a guard that passes for the wrong
+  // reason is a guard that will pass while broken.
+  //
+  // What is genuinely ours splits into two deterministic claims, and both are made here:
+  const src = await video.getAttribute("src");
+  expect(src).toMatch(/^\/api\/attachments\/[a-z0-9]+\/video$/);
+
+  // One: the proxy answers a range with a 206 and a correct Content-Range, under the browser's
+  // own session, through the real stack. `page.request` shares the page's cookies.
+  const ranged = await page.request.get(src!, { headers: { Range: "bytes=0-99" } });
+  expect(ranged.status()).toBe(206);
+  expect(ranged.headers()["content-range"]).toMatch(/^bytes 0-99\/\d+$/);
+  expect((await ranged.body()).length).toBe(100);
+
+  // Two: an unranged read is a 200 that carries the whole file, so the 206 above is a real
+  // partial rather than the route answering the same way to everything.
+  const whole = await page.request.get(src!);
+  expect(whole.status()).toBe(200);
+  expect((await whole.body()).length).toBe(MP4.length);
 });
 
 test("removing an attachment makes it 404 immediately, for the editor who owns it", async ({

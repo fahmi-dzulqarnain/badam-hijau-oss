@@ -355,12 +355,22 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 - **`MemoryBlobStore` mints session URLs from `AUTH_URL`**, so any harness serving on another
   port must set it or the direct PUT reaches nothing.
 
-**Open, to decide deliberately rather than discover:** `readableAttachment` audits every read,
-so a super admin scrubbing a video in a MEMBERS space emits one `space.access` row per range
-request. Auditing too much is the safe direction and the choke point is correct, but the volume
-wants a de-dup window. And the memory store's session URL still accepts any key from anyone
-rather than minting a one-key token, so it does not honour `UploadSession`'s documented
-contract — acceptable while the route is off unless a harness enables it.
+- **The access audit has TWO de-dup scopes, and the second is not the first with a timer on
+  it.** The request scope collapses the three space resolutions inside one render, and its
+  per-request granularity is deliberate — "two reads in two requests write two rows" is a test,
+  because a super admin browsing five pages must read as five rows. An attachment read is a
+  different kind of event: a page with twelve screenshots is twelve HTTP requests and a
+  scrubbed video is one per seek, all one act of reading, and none of them a render, so
+  `cache()` is inert and the request scope caught none of it. Measured: twelve reads wrote
+  twelve identical rows. `readableAttachment` therefore passes `"subresource"`, which adds a
+  60-second per-`(actor, space)` window. Process-wide, so N replicas may each write one row per
+  window — bounded, small, and the over-reporting direction, which is the only one an audit may
+  fail in.
+
+**Open, to decide deliberately rather than discover:** the memory store's session URL accepts
+any key from anyone rather than minting a one-key token, so it does not honour
+`UploadSession`'s documented contract — acceptable while the route is off unless a harness
+enables it.
 
 - **`readableSpace(viewer, ...and)` returns the complete Prisma `where` and must never be
   spread**, at any nesting depth. The spread form silently drops the permission predicate;

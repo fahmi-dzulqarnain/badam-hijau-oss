@@ -95,7 +95,11 @@ export async function readableAttachment(
   });
   if (!row) return null;
 
-  await auditSpaceAccess(viewer, row.page.space);
+  // `"subresource"`, because this is not a page view. One page with twelve screenshots is
+  // twelve calls here, and a scrubbed video is one per seek — all one act of reading. The
+  // request scope cannot see that: `cache()` is inert outside a render, and each of those is
+  // its own HTTP request. Measured before the window existed: twelve reads, twelve rows.
+  await auditSpaceAccess(viewer, row.page.space, "subresource");
 
   const { page: _page, ...attachment } = row;
   return attachment;
