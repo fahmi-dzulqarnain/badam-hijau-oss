@@ -852,33 +852,82 @@ hundred characters with no space anywhere, so `.mir-err` needs `overflow-wrap: a
 
 ---
 
-## Task 9: End-to-end and the smoke test
+## Task 9: End-to-end and the smoke test ✅
 
-- [ ] Publishing writes a file whose content parses back to the version, in a real repository.
-- [ ] A move renames it; the old path is gone and the new one holds the content.
-- [ ] A delete removes it; a restore brings it back.
-- [ ] A failing push leaves the publish standing, the version unmirrored, and the job retrying —
+- [x] Publishing writes a file whose content parses back to the version, in a real repository.
+- [x] A move renames it; the old path is gone and the new one holds the content.
+- [x] A delete removes it; a restore brings it back.
+- [x] A failing push leaves the publish standing, the version unmirrored, and the job retrying —
       then a working push mirrors it, with **one** commit.
-- [ ] The failed-jobs page shows a persistent failure and a non-admin cannot reach it.
-- [ ] `scripts/smoke.sh`: publish over HTTP, drain the worker, assert the file and the sha. Extend
-      `counts()` for the new table. Prove it can fail; the exit code is the contract.
+- [x] The failed-jobs page shows a persistent failure and a non-admin cannot reach it.
+      *(landed in Task 8 — `e2e/mirror.spec.ts`, credential redaction over HTTP included)*
+- [x] `scripts/smoke.sh`: publish over HTTP, drain the worker, assert the file and the sha.
+      `counts()` already carried `GitJob` *(extended in Task 3, rather than deferred)*. Prove it
+      can fail; the exit code is the contract.
+
+Four Playwright tests in `e2e/mirror-tree.spec.ts` against a real repository with a local bare
+remote, and a **Git mirror** step in the smoke test: **82 → 108 checks**.
+
+**The smoke step found something no unit test could.** By the time it runs, the authoring,
+lifecycle and search passes have already queued **nine** jobs, so a bare "1 done, 1 commit"
+assertion fails honestly — and its first version did exactly that, which is the check working. It
+drains the backlog first and asserts *that* count, then publishes and drains again, which is what
+makes "one publish added exactly one commit (8 → 9)" a statement about this pass rather than about
+the suite's history.
+
+**Proven to fail, twice, with the exit code read bare.** Skipping the drain: `EXIT=1` and six
+failures naming the specific gaps — nothing mirrored, `8 → 8` commits, `gitSha` empty against a
+real HEAD, and the reader missing the commit it should paint. Pointing the worker at a remote that
+does not exist: `EXIT=1` again, and the worker's **exit 2** ("the run could not start") surfacing
+as its own message.
+
+**That second break is cruder than intended, and the reason is worth recording.** With a remote
+configured, `ensureRepository` *clones* — so a bad remote URL means the tree is never created and
+nothing reaches the commit stage at all. The commit-succeeded-but-push-failed state cannot be
+reached by breaking the remote up front; it needs a remote that works at clone time and fails
+afterwards, which is why that discrimination lives in `e2e/mirror-tree.spec.ts` — it deletes the
+bare repository *after* the clone.
+
+**Recovered from a stalled agent's uncommitted tree.** The work was complete and independently
+verified before being committed, but it was one commit's worth of unbounded work at the moment the
+stream died — the third task in this project to stall, and the standing instruction to make small
+commits exists for exactly this. It survived because the tree survived, which is luck rather than
+process.
 
 ---
 
-## Phase 5 exit criteria
+## Phase 5 exit criteria ✅
 
-- [ ] `npm test`, `npm run test:e2e`, `npm run smoke` all pass
-- [ ] `npm run typecheck && npm run build` clean; `npm run plan:check` 0 drifted
-- [ ] A publish produces one commit in the content repository, authored by the publisher, and the
-      version carries its sha
-- [ ] A move renames the mirrored file; a delete removes it; a restore returns it
-- [ ] **A publish succeeds with the remote unreachable** — the version stands, `gitSha` is null,
-      the job retries with backoff, and the failure is visible to a super admin
-- [ ] A push that fails and then succeeds produces exactly one commit
-- [ ] Two workers cannot claim one job, and cannot both hold the working tree
-- [ ] Jobs for one page apply in order
-- [ ] A hostile title reaches neither YAML nor a git argument as syntax
-- [ ] A mirrored path cannot escape `content/`
-- [ ] The reader shows the content sha, distinguishable from the build sha, and links to version
-      history
-- [ ] The PR is open with the phase's exit criteria in its description
+- [x] `npm test`, `npm run test:e2e`, `npm run smoke` all pass — **1178** vitest across 73 files,
+      **62** Playwright, **108** smoke checks
+- [x] `npm run typecheck && npm run build` clean; `npm run plan:check` **0 drifted**
+- [x] A publish produces one commit in the content repository, **authored by the publisher**, and
+      the version carries its sha — with one deliberate narrowing argued in Task 6: a `MOVE`,
+      `DELETE` or `RESTORE` commits as the **service**, because a `GitJob` captures no actor and
+      Task 5 measured that the author email is what a git host matches to an account. Attributing
+      a move to a named person who did not perform it would be a false statement in a permanent
+      record.
+- [x] A move renames the mirrored file; a delete removes it; a restore returns it — and the
+      restore is proven *after a move*, because Task 4 established it writes the file back at
+      whatever path the page has by then
+- [x] **A publish succeeds with the remote unreachable** — the version stands, `gitSha` is null,
+      the job retries with backoff, and the failure is visible to a super admin at `/-/mirror`
+- [x] A push that fails and then succeeds produces exactly **one** commit — and the sha is
+      recorded only on success, per §10, which is where my own task brief contradicted the spec
+      and was overruled
+- [x] Two workers cannot claim one job, and cannot both hold the working tree — the claim's
+      correct observable is a **skip** (`SKIP LOCKED`), and the **tree lock** is the half that
+      blocks, proven by holding it from a competing session and watching the drain do nothing
+- [x] Jobs for one page apply in order — closed for every case where both rows are visible, with
+      the residual (a sequence value issued at INSERT but committed later) made **noticed** rather
+      than silently applied
+- [x] A hostile title reaches neither YAML nor a git argument as syntax — and the assertion that
+      earns its keep is not the one this plan first asked for: `--author=` splits on the first
+      `<`, so a display name can **overwrite the author email**, while two environment variables
+      cannot cross fields
+- [x] A mirrored path cannot escape `content/` — containment against the **space** directory, with
+      `.md` appended **after** resolution, because `".." + ".md"` is a legal filename that resolves
+      inside it
+- [x] The reader shows the content sha, distinguishable from the build sha (`Content commit` vs
+      `Build`), and links to version history
+- [x] The PR is open with the phase's exit criteria in its description

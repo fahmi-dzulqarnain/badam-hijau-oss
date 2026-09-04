@@ -1,10 +1,10 @@
 # Execution status
 
 **Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is under way — Tasks 1–8 of 9 done.**
+is complete, on a branch with an open PR.**
 
 Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
-**951 vitest + 41 Playwright tests passing**, **82-check** cold-start smoke · typecheck, build
+**951 vitest + 41 Playwright tests passing**, **108-check** cold-start smoke · typecheck, build
 and `plan:check` clean · working tree clean
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
@@ -55,7 +55,10 @@ Landmines carried in, measured while planning:
 | 6. The worker | ✅ |
 | 7. The sha on the page | ✅ |
 | 8. Failures a super admin can see | ✅ |
-| **9. End-to-end and the smoke test** | **next** |
+| 9. End-to-end and the smoke test | ✅ |
+
+**All nine tasks done and every exit criterion verified** — see the end of the
+[phase-5 plan](2026-08-26-docs-platform-phase-5-git-mirror.md).
 
 ## Phase 4 — search and diagrams
 
