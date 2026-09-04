@@ -1,0 +1,233 @@
+import { expect, test, vi } from "vitest";
+import type { MemoryBlobStore } from "@/lib/blob/memory";
+
+/**
+ * The dev upload route is the price of the upload/download asymmetry: the browser must PUT
+ * somewhere real for the memory store to exercise the direct-upload path at all. That makes it
+ * the one write endpoint in the application with no authentication.
+ *
+ * Two properties are pinned here, and both replaced an earlier version that failed them.
+ *
+ * **The URL is a token, not a key.** `store.ts` documents `UploadSession` as "a write
+ * capability for ONE key, for a short time". The earlier route took the key from the path, so
+ * any caller could write any key — and keys are derivable, since the id is visible in
+ * `/api/attachments/<id>` and the hash is in this repository. The session now decides the key,
+ * which is why there is no traversal test below: there is no longer a key on the request to
+ * traverse with.
+ *
+ * **The gate is `devUploadEnabled()`, not `memoryStoreEnabled()`.** Gating on the store alone
+ * made the route ON by default in every process where `NODE_ENV` was not the literal string
+ * `production`; Next only DEFAULTS that variable, so `NODE_ENV=staging next start` proceeded
+ * with an open write endpoint.
+ *
+ * `vi.resetModules()` is needed so `vi.doMock` takes effect on a fresh import — NOT because
+ * the route reads the flag at import time. It does not: `devUploadEnabled()` is called per
+ * request, which is the stronger property. An earlier version of this comment claimed
+ * otherwise, and a comment describing a security mechanism as weaker than it is invites
+ * someone to "fix" the code to match.
+ */
+async function route() {
+  return import("@/app/api/attachments/dev-upload/[token]/route");
+}
+
+function params(token: string) {
+  return { params: Promise.resolve({ token }) };
+}
+
+async function put(
+  token: string,
+  body: string,
+  headers: Record<string, string> = {},
+): Promise<number> {
+  const { PUT } = await route();
+  const request = new Request("http://localhost/x", { method: "PUT", body, headers });
+  return (await PUT(request, params(token))).status;
+}
+
+function mockGate(enabled: boolean, store?: MemoryBlobStore) {
+  vi.doMock("@/lib/blob/select", () => ({
+    devUploadEnabled: () => enabled,
+    memoryStore: () => store,
+  }));
+}
+
+async function openSession(store: MemoryBlobStore, size: number): Promise<string> {
+  const session = await store.beginUpload("a3/abc.png", size, "image/png");
+  // The token is the last path segment, and reading it back out is the point: nothing but the
+  // store knows which key it maps to.
+  return session.uploadUrl.split("/").at(-1)!;
+}
+
+async function freshStore(): Promise<MemoryBlobStore> {
+  const { MemoryBlobStore } = await import("@/lib/blob/memory");
+  return new MemoryBlobStore("http://localhost");
+}
+
+test("the route 404s when the dev upload flag is off", async () => {
+  vi.resetModules();
+  mockGate(false);
+
+  expect(await put("sometoken", "hello", { "content-length": "5" })).toBe(404);
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("every other method 404s too, so OPTIONS cannot confirm the route is in the build", async () => {
+  // Without explicit stubs Next auto-implements the unhandled verbs — 405 for most and a 204
+  // carrying `Allow: …` for OPTIONS — either of which distinguishes a gated route from an
+  // unregistered path without ever consulting the gate.
+  vi.resetModules();
+  mockGate(false);
+
+  const mod = await route();
+  for (const method of ["POST", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const) {
+    expect((await mod[method]()).status, method).toBe(404);
+  }
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("a whole-body PUT to a live session writes the session's key", async () => {
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 5);
+
+  expect(await put(token, "hello", { "content-length": "5" })).toBe(201);
+  expect(await store.stat("a3/abc.png")).toMatchObject({ sizeBytes: 5 });
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("an unknown token is a 404, indistinguishable from the gate being off", async () => {
+  // The token IS the capability, so a wrong one must learn nothing. This is the assertion that
+  // replaces the old traversal suite: a caller cannot name a key at all any more, so the only
+  // thing left to guess is an unguessable token.
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  await openSession(store, 5);
+
+  expect(await put("not-a-real-token", "hello", { "content-length": "5" })).toBe(404);
+  // And nothing was written under any key.
+  for await (const _ of store.list("")) throw new Error("an unknown token wrote bytes");
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("a chunked upload is ASSEMBLED, not overwritten chunk by chunk", async () => {
+  // Measured before sessions existed: two 5-byte chunks of a 10-byte object left the store
+  // holding `"world"` at 5 bytes — the last chunk alone. The transport chunks at 10MiB, so
+  // every upload over that size arrived truncated and failed at commit on the size check. The
+  // fake could not accept a real resumable upload at all.
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 10);
+
+  expect(
+    await put(token, "hello", { "content-length": "5", "content-range": "bytes 0-4/10" }),
+    "first chunk is accepted, not complete",
+  ).toBe(202);
+  expect(await store.stat("a3/abc.png"), "nothing is written until every byte has arrived").toBeNull();
+
+  expect(
+    await put(token, "world", { "content-length": "5", "content-range": "bytes 5-9/10" }),
+    "the last chunk completes the object",
+  ).toBe(201);
+
+  const body = await store.fetch("a3/abc.png");
+  const text = new TextDecoder().decode(
+    new Uint8Array(await new Response(body!.stream).arrayBuffer()),
+  );
+  expect(text).toBe("helloworld");
+});
+
+test("a completed session is consumed, so its URL cannot be replayed", async () => {
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 5);
+
+  expect(await put(token, "hello", { "content-length": "5" })).toBe(201);
+  // "for a short time" also means "once". A URL that keeps working after the upload finished
+  // is a standing write capability, which is what `UploadSession` says it is not.
+  expect(await put(token, "XXXXX", { "content-length": "5" })).toBe(404);
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("an expired session is 410, not 404 — the remedy is different", async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  try {
+    const store = await freshStore();
+    mockGate(true, store);
+    const token = await openSession(store, 5);
+
+    vi.advanceTimersByTime(16 * 60 * 1000);
+    expect(await put(token, "hello", { "content-length": "5" })).toBe(410);
+  } finally {
+    vi.useRealTimers();
+    vi.doUnmock("@/lib/blob/select");
+  }
+});
+
+test("a chunk running past the declared size is refused", async () => {
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 5);
+
+  expect(await put(token, "hello world", { "content-length": "11" })).toBe(400);
+  expect(await store.stat("a3/abc.png")).toBeNull();
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("a malformed Content-Range is refused rather than silently treated as offset zero", async () => {
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 5);
+
+  for (const range of ["bytes 5-0/10", "bytes abc/10", "0-4/10", "bytes 0-4"]) {
+    expect(await put(token, "hello", { "content-length": "5", "content-range": range }), range).toBe(400);
+  }
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("a missing Content-Length is 411 and an oversized one is 413, before the body is read", async () => {
+  // The same guard order the drafts route uses, and for the same reason: `Number(null)` is 0,
+  // so a numeric-only cap waves a chunked body through.
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 5);
+
+  const { MAX_UPLOAD_BYTES } = await import("@/lib/attachments/schema");
+  const { PUT } = await route();
+
+  const bare = new Request("http://localhost/x", { method: "PUT", body: "x" });
+  bare.headers.delete("content-length");
+  expect((await PUT(bare, params(token))).status).toBe(411);
+
+  expect(await put(token, "x", { "content-length": String(MAX_UPLOAD_BYTES + 1) })).toBe(413);
+  vi.doUnmock("@/lib/blob/select");
+});
+
+test("GET reports what the session still wants, so a dropped chunk can resume", async () => {
+  // Without this the fake could not exercise resumption at all: the transport's resume path
+  // reads `nextExpectedRanges` after a failed chunk, and a 404 there reports "interrupted"
+  // where the real store would recover.
+  vi.resetModules();
+  const store = await freshStore();
+  mockGate(true, store);
+  const token = await openSession(store, 10);
+  const { GET } = await route();
+
+  const before = await GET(new Request("http://x"), params(token));
+  expect(await before.json()).toEqual({ nextExpectedRanges: ["0-"] });
+
+  await put(token, "hello", { "content-length": "5", "content-range": "bytes 0-4/10" });
+  const after = await GET(new Request("http://x"), params(token));
+  expect(await after.json()).toEqual({ nextExpectedRanges: ["5-"] });
+
+  // An unknown token learns nothing here either.
+  expect((await GET(new Request("http://x"), params("nope"))).status).toBe(404);
+  vi.doUnmock("@/lib/blob/select");
+});

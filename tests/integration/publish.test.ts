@@ -948,7 +948,7 @@ test("two concurrent publishes produce exactly one version", async () => {
  * `relations` map carries all four types whether or not this doc type can declare them.
  *
  * Kills leaving `frontmatter` at its `{}` default: the version would carry no record of what
- * the author declared, Phase 5's git mirror would have nothing to write back out, and Phase 6
+ * the author declared, Phase 5's git mirror would have nothing to write back out, and Phase 7
  * would have no `systems:` to migrate.
  *
  * Kills storing `split.frontmatter` — the raw parse — instead: `supersedes` would be a string,

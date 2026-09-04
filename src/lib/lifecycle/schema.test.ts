@@ -404,11 +404,11 @@ test("the offending entry is numbered from one", () => {
 });
 
 // ---------------------------------------------------------------------------
-// systems — accepted, shape-checked, catalogue-unvalidated until Phase 6
+// systems — accepted, shape-checked, catalogue-unvalidated until Phase 7
 // ---------------------------------------------------------------------------
 
 test("`systems:` is accepted and carried through, for every doc type", () => {
-  // Spec §7 tells authors to write this and Phase 6 owns the catalogue. Rejecting the key
+  // Spec §7 tells authors to write this and Phase 7 owns the catalogue. Rejecting the key
   // would block documented usage; ignoring it would lose data the author meant, invisibly.
   for (const docType of DOC_TYPES) {
     expect(accepted(docType, { systems: ["order-hub", "kiosk-bridge", "store-ios"] }).systems)
@@ -416,7 +416,7 @@ test("`systems:` is accepted and carried through, for every doc type", () => {
   }
 });
 
-test("an unrecognised system key is accepted — Phase 6 owns the catalogue", () => {
+test("an unrecognised system key is accepted — Phase 7 owns the catalogue", () => {
   // Deliberate, and the one thing about `systems` that is deferred rather than absent.
   expect(accepted("ADR", { systems: "not-a-real-system" }).systems).toEqual([
     "not-a-real-system",

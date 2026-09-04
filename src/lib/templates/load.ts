@@ -41,7 +41,7 @@ import { RUNBOOK_TEMPLATE } from "./runbook";
  * it) for `next dev`/`next build`, a Vite-side equivalent for vitest, and a
  * `declare module "*.md"` for `tsc`. Three mechanisms across two toolchains for four short
  * documents, and if one of them is wrong the templates are missing in exactly one environment
- * — the same failure this is trying to leave behind. Not worth it at this size. If Phase 6
+ * — the same failure this is trying to leave behind. Not worth it at this size. If Phase 7
  * makes templates editable content in the database, none of this machinery would survive
  * anyway.
  *

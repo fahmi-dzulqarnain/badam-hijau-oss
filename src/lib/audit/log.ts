@@ -179,6 +179,79 @@ export function inOneRequest<T>(run: () => T): T {
 }
 
 /**
+ * How long one act of reading is allowed to take, for a caller whose fan-out belongs to a
+ * browser rather than to a person.
+ *
+ * A minute covers a page's images and a video's range requests with room to spare, and is
+ * short enough that a genuinely separate visit still records. A ten-minute video scrubbed
+ * throughout produces roughly ten rows rather than several hundred, which is the shape an
+ * auditor can actually read.
+ */
+const SUBRESOURCE_WINDOW_MS = 60_000;
+
+/**
+ * Cap on tracked keys, and the eviction is deliberately blunt.
+ *
+ * When the map outgrows this it drops expired entries and, if that is not enough, clears
+ * entirely. Clearing makes the next read of every tracked pair write a row — it OVER-reports,
+ * never under-reports, which is the only direction an audit may fail in.
+ */
+const MAX_TRACKED_PAIRS = 5_000;
+
+/** `(actor, space)` → the moment its window closes. */
+const windowScope = new Map<string, number>();
+
+/**
+ * A second de-dup scope, for callers whose requests are sub-resources of one page view.
+ *
+ * **Not the request scope with a timer bolted on, and the difference is the point.** The
+ * request scope collapses the three space resolutions inside one render, and its per-request
+ * granularity is deliberate: "two reads in two requests write two rows" is a test, because a
+ * super admin browsing five pages must read as five rows. Widening that to a time window
+ * would answer "did they look" while destroying "how much".
+ *
+ * An attachment read is a different kind of event. A page with twelve screenshots is twelve
+ * HTTP requests, and a scrubbed video is one per seek — all of them one act of reading, and
+ * none of them a render, so `cache()` is inert and the request scope catches nothing.
+ * Measured before this existed: twelve reads wrote twelve identical rows a millisecond apart.
+ *
+ * Process-wide, so N replicas may each write one row per window. That is bounded and small,
+ * and it is the safe direction; exactness would cost either a `SELECT` per audited read or a
+ * unique index on a time bucket, and neither buys anything an auditor asked for.
+ */
+function withinSubresourceWindow(key: string, now: number): boolean {
+  const closes = windowScope.get(key);
+  if (closes !== undefined && closes > now) return true;
+
+  windowScope.set(key, now + SUBRESOURCE_WINDOW_MS);
+
+  if (windowScope.size > MAX_TRACKED_PAIRS) {
+    for (const [tracked, expiry] of windowScope) {
+      if (expiry <= now) windowScope.delete(tracked);
+    }
+    if (windowScope.size > MAX_TRACKED_PAIRS) windowScope.clear();
+  }
+  return false;
+}
+
+/** Test isolation only: the window is module state and outlives a single test by design. */
+export function resetAccessWindow(): void {
+  windowScope.clear();
+}
+
+/**
+ * Which fan-out the caller has.
+ *
+ * `"request"` — a render, where one act of reading is one request. The default, and what
+ * every space read has always done.
+ *
+ * `"subresource"` — a request the browser made *because of* a page it already rendered: the
+ * bytes behind an `<img>` or a `<video>`'s next range. One act of reading spans many of these,
+ * and the caller is the only thing that knows that.
+ */
+export type AccessScope = "request" | "subresource";
+
+/**
  * Pays off `needsAccessAudit`, which shipped in Phase 1 with tests and no call site.
  *
  * Called from `getReadableSpaceByKey`, which every space read passes through, so this is one
@@ -188,14 +261,21 @@ export function inOneRequest<T>(run: () => T): T {
 export async function auditSpaceAccess(
   viewer: Viewer,
   space: SpaceRef & { key: string },
+  accessScope: AccessScope = "request",
 ): Promise<void> {
+  // First, so neither scope is consulted — and no key is retained — for the overwhelming
+  // majority of reads, which are not audited at all.
   if (!needsAccessAudit(viewer, space)) return;
 
   // NUL as the separator: it cannot occur in a cuid, so no pair of ids can collide by
   // concatenation.
   const key = `${viewer.id}\u0000${space.id}`;
+
+  // Both scopes, in the order they narrow. The request scope is inert in a route handler
+  // (`cache()` only memoizes inside a render), which is exactly why the window exists.
   const scope = testScope.getStore() ?? requestScope();
   if (scope.has(key)) return;
+  if (accessScope === "subresource" && withinSubresourceWindow(key, Date.now())) return;
   // Marked before the write is attempted, not after it succeeds. A retry inside the same
   // request would hit the same failure and log the same line twice.
   scope.add(key);

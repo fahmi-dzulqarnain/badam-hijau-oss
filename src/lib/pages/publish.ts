@@ -1122,7 +1122,7 @@ export async function publishPage(
           // not the same value. `supersedes: decisions/adr-0031` is one scalar in the draft and
           // a one-element array here; a key left empty in the template is `null` there and `[]`
           // here; `relations` carries all four types whether or not the doc type can declare
-          // them. This is the row the reader, Phase 5's git mirror and Phase 6's `PageSystem`
+          // them. This is the row the reader, Phase 5's git mirror and Phase 7's `PageSystem`
           // backfill all read, so it holds the normalised value rather than one each of them
           // would have to re-derive.
           frontmatter,
@@ -1162,8 +1162,8 @@ export async function publishPage(
         );
       }
 
-      // TODO(phase-6): spec §9 step 3 also replaces the page's `PageSystem` rows from the
-      // declared `systems:` frontmatter. Phase 6 adds the model.
+      // TODO(phase-7): spec §9 step 3 also replaces the page's `PageSystem` rows from the
+      // declared `systems:` frontmatter. Phase 7 adds the model.
 
       // Deleting the draft is NOT one of spec §9's eight steps — the spec does not mention
       // it. It is this plan's decision, and its reason is that a draft identical to what is
@@ -1262,7 +1262,7 @@ export async function publishPage(
       // under the lock, which is where this version's file belongs even if a move rewrites the
       // column a millisecond later; `version.id` is the row just inserted and just pointed at.
       // `spaceKey` comes from the authorisation read, and nothing renames a `Space` in this
-      // product — Phase 6 owns space administration, and the schema records that the captured
+      // product — Phase 7 owns space administration, and the schema records that the captured
       // key is the correct one anyway, because it names the directory the file is actually in.
       await enqueueMirrorJobs(tx, {
         kind: "PUBLISH",

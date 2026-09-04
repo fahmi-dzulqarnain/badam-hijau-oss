@@ -16,6 +16,11 @@ export function can(viewer: Viewer, space: SpaceRef, action: Action): boolean {
     // where.ts together, or the two mechanisms will silently disagree.
     case "READ":
       return space.visibility === "ALL_STAFF" || role !== undefined;
+    // This role list is duplicated in `editableSpaceWhere` in where.ts, as a SQL
+    // `role: { in: [...] }`. Changing either alone makes the in-memory decision and the query
+    // disagree — the same two-sources-of-truth exposure the READ arm above warns about.
+    // Splitting PUBLISH out of EDIT means where.ts needs a SECOND predicate; `editableSpace`
+    // is the EDIT one and would silently over-grant if reused for a narrowed PUBLISH.
     case "EDIT":
     case "PUBLISH":
       return role === "EDITOR" || role === "ADMIN";

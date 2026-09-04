@@ -11,10 +11,16 @@ import rehypeStringify from "rehype-stringify";
 import { collectHeadings, type Heading } from "./toc";
 import { FRONTMATTER_MATTER } from "./frontmatter";
 import { extractMermaid } from "./mermaid";
+import { attachmentVideo } from "./attachment-video";
 import { wrapTables } from "./wrap";
 
 export type RenderedDoc = { html: string; headings: Heading[] };
 
+// Deliberately NOT widened for `<video>`. The spec first proposed adding the element here;
+// measured against this pipeline that is inert, because `allowDangerousHtml: false` drops raw
+// HTML before the sanitiser runs. `attachmentVideo` builds the element after sanitisation
+// from a regex-captured id instead — see that module. Nothing about this schema changes for
+// attachments.
 const schema: Options = {
   ...defaultSchema,
   // clobberPrefix defaults to "user-content-", but remark-gfm ALREADY prefixes footnote
@@ -104,6 +110,7 @@ export async function renderMarkdown(markdown: string): Promise<RenderedDoc> {
     .use(collectHeadings, { headings })
     .use(rehypeAutolinkHeadings, { behavior: "wrap" })
     .use(extractMermaid)
+    .use(attachmentVideo)
     .use(wrapTables)
     .use(rehypeShiki, {
       themes: { light: "github-light", dark: "github-dark" },

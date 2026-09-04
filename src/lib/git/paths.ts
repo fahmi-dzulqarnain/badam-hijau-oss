@@ -35,7 +35,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
  * - **`Space.key` has no validation anywhere.** It is a bare `String @unique` in
  *   `prisma/schema.prisma`; today the only writers are `prisma/seed.ts`'s two `space.upsert`
  *   calls and the integration fixtures — one of which sets a key of `"eng ops"`, a space
- *   character and all. Phase 6 owns space administration, which is when a human can type one.
+ *   character and all. Phase 7 owns space administration, which is when a human can type one.
  *
  * So the traversal this refuses cannot arrive through the half of the path everyone assumes, and
  * can arrive through the half nobody validates. That inversion is the argument for the guard: its
@@ -96,7 +96,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
  * of the class while leaving NFC/NFD — and Turkish dotless `ı`, and every other fold — wide open,
  * which is this project's most repeated failure: a guard too narrow to cover its class and silent
  * about the rest. The check that actually closes it is a uniqueness constraint on a *folded*
- * `Space.key` where both keys are visible, at the point space keys are created — Phase 6. So this
+ * `Space.key` where both keys are visible, at the point space keys are created — Phase 7. So this
  * module is byte-faithful, a test pins that it does not fold, and the hazard is stated here
  * rather than half-addressed.
  *

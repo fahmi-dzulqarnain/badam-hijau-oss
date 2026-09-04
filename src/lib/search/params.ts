@@ -25,10 +25,10 @@ import type { SearchQuery, SearchResult } from "@/lib/search/query";
  *
  * ## `system` is absent, not disabled
  *
- * §13 lists a `system` filter and Phase 6 owns the systems catalogue, so there is nothing to
+ * §13 lists a `system` filter and Phase 7 owns the systems catalogue, so there is nothing to
  * filter on. This module offers no `system` parameter and the route renders no control for it: a
  * disabled control advertises a feature that does not exist, and a greyed-out select is a support
- * question rather than an explanation. When Phase 6 lands the catalogue, the parameter, the
+ * question rather than an explanation. When Phase 7 lands the catalogue, the parameter, the
  * option list and the `SearchQuery` field arrive together.
  */
 

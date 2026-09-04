@@ -369,6 +369,13 @@ is idempotent so it is safe to re-run.
 This replaces the `docker-compose.yml` the plan originally called for. It is committed so
 the next developer can reproduce the database without guessing.
 
+> **Superseded snapshot.** The script has since gained a drift check: when `.env.test`
+> already exists it reports keys that `.env.example` has and it lacks. That absence hid a real
+> bug — a truthy `AUTH_URL` in a freshly generated `.env.test` broke three tests in
+> `src/lib/auth/providers.test.ts`, while every existing checkout stayed green because its file
+> predated the key. Read `scripts/setup-db.sh` for the current version; syncing this fence
+> forward would turn this task's "create" step into a rewrite that deletes that check.
+
 ```bash
 #!/usr/bin/env bash
 # Creates the badam role and its two databases on a local Postgres.
@@ -940,6 +947,11 @@ export type SpaceRef = { id: string; visibility: SpaceVisibility };
 
 - [ ] **Step 4: Create `src/lib/authz/can.ts`**
 
+> **Superseded snapshot.** Phase 4's Task 3 review added a co-change warning above the
+> `EDIT`/`PUBLISH` arm, because `editableSpaceWhere` in `where.ts` now duplicates that role
+> list in SQL. Read `src/lib/authz/can.ts` for the current version. Syncing this fence forward
+> would turn this task's "create" step into a rewrite that deletes that comment.
+
 ```ts
 import type { Action, SpaceRef, SpaceRole, Viewer } from "./types";
 
@@ -984,6 +996,11 @@ export function needsAccessAudit(viewer: Viewer, space: SpaceRef): boolean {
 - [ ] **Step 5: Create `src/lib/authz/where.ts`**
 
 Separate file so `can.ts` stays free of database types and unit-testable in isolation.
+
+> **Superseded snapshot.** Phase 4's Task 3 appends `editableSpaceWhere` and `editableSpace`
+> to this file. Read `src/lib/authz/where.ts` for the current version. Syncing this fence
+> forward would turn this task's "create" step into a rewrite that deletes that later
+> addition.
 
 ```ts
 import type { Prisma } from "@prisma/client";
@@ -1053,6 +1070,11 @@ the bypass described above — the only test that would have caught it. The seco
 predicate that disagrees with `can(..., "EDIT")` without a failure.
 
 `tests/integration/authz-where.test.ts`:
+
+> **Superseded snapshot.** Phase 4's Task 3 appends the `editableSpace` tests and their
+> `editSpace`/`memberViewer`/`isEditable` helpers to this file. Read
+> `tests/integration/authz-where.test.ts` for the current version. Syncing this fence forward
+> would turn this task's "create" step into a rewrite that deletes that later addition.
 
 ```ts
 import { beforeEach, expect, test } from "vitest";

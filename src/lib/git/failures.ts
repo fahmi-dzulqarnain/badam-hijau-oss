@@ -8,7 +8,7 @@ import type { Viewer } from "@/lib/authz/types";
  * The mirror jobs that gave up — spec §10: *"persistent failures surface on an admin page rather
  * than only in logs."*
  *
- * Phase 6 owns `/admin` and will fold this in. This is one read-only list, which is what §10 asks
+ * Phase 7 owns `/admin` and will fold this in. This is one read-only list, which is what §10 asks
  * for and the whole of what this phase ships: no clearing, no retrying, no queue surgery. A button
  * that re-queued a job would be a mutation with its own audit row, its own permission argument and
  * its own concurrency question against a running worker, and none of that is Phase 5's.

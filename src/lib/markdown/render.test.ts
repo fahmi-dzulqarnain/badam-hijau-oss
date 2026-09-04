@@ -156,3 +156,50 @@ test("`---` inside a fenced code block survives rendering", async () => {
   );
   expect(html).toContain("NOT_FRONTMATTER");
 });
+
+test("a /video attachment reference becomes a <video> element", async () => {
+  const { html } = await renderMarkdown("![clip](/api/attachments/abc123/video)");
+  expect(html).toContain('<video src="/api/attachments/abc123/video"');
+  expect(html).toContain("controls");
+  expect(html).not.toContain("<img");
+});
+
+test("an ordinary attachment reference stays an <img>", async () => {
+  const { html } = await renderMarkdown("![shot](/api/attachments/abc123)");
+  expect(html).toContain('<img src="/api/attachments/abc123"');
+  expect(html).not.toContain("<video");
+});
+
+test("the alt text survives as an accessible label", async () => {
+  const { html } = await renderMarkdown("![a demo](/api/attachments/abc123/video)");
+  expect(html).toContain('aria-label="a demo"');
+});
+
+test("an off-origin src is never turned into a video, whatever it claims", async () => {
+  // The src is RECONSTRUCTED from the captured id, not validated and passed through, so
+  // there is no allowlist to get wrong.
+  for (const src of [
+    "https://evil.test/api/attachments/abc/video",
+    "//evil.test/api/attachments/abc/video",
+    "/api/attachments/../../evil/video",
+    "/api/attachments/abc/video?x=1",
+    "javascript:alert(1)//api/attachments/abc/video",
+  ]) {
+    const { html } = await renderMarkdown(`![x](${src})`);
+    expect(html, src).not.toContain("<video");
+  }
+});
+
+test("raw HTML is still dropped, sanitiser untouched", async () => {
+  // The pipeline's posture is unchanged: `allowDangerousHtml` stays false, so this plugin
+  // adds a video element WITHOUT opening the raw-HTML surface of every document.
+  const { html } = await renderMarkdown('<video src="/api/attachments/abc/video"></video>');
+  expect(html).not.toContain("<video");
+  const script = await renderMarkdown("<script>alert(1)</script>");
+  expect(script.html).not.toContain("<script");
+});
+
+test("a video reference inside a code fence is not transformed", async () => {
+  const { html } = await renderMarkdown("```\n![x](/api/attachments/abc/video)\n```");
+  expect(html).not.toContain("<video");
+});

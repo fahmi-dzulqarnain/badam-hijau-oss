@@ -82,6 +82,7 @@ export type Counts = {
   audit: number;
   redirects: number;
   relations: number;
+  attachments: number;
   softDeleted: number;
   bugReports: number;
   gitJobs: number;
@@ -99,6 +100,11 @@ export async function snapshotCounts(): Promise<Counts> {
     // count is how a leak announces itself: `PageRelation` cascades from both ends, so a
     // non-zero difference here means a fixture page survived the sweep.
     relations: await db.pageRelation.count(),
+    // Phase 6. `Attachment.pageId` cascades from `Page` same as `PageVersion` does, so this is
+    // a whole-table count for the same reason `relations` is: it catches a row that survived
+    // because the cascade it depends on was ever relaxed, not just the ordinary case sweep
+    // already handles explicitly below.
+    attachments: await db.attachment.count(),
     softDeleted: await db.page.count({ where: { deletedAt: { not: null } } }),
     // Phase 4 Task 6. `BugReport` is the one table this suite writes that no fixture page can
     // reach: `reader.spec.ts` posts a real report through the dialog and deletes it by summary in
@@ -123,8 +129,9 @@ export function formatCounts(counts: Counts): string {
   return (
     `${counts.spaces} spaces / ${counts.pages} pages / ${counts.versions} versions / ` +
     `${counts.drafts} drafts / ${counts.audit} audit / ${counts.redirects} redirects / ` +
-    `${counts.relations} relations / ${counts.softDeleted} soft-deleted / ` +
-    `${counts.bugReports} bug reports / ${counts.gitJobs} git jobs`
+    `${counts.relations} relations / ${counts.attachments} attachments / ` +
+    `${counts.softDeleted} soft-deleted / ${counts.bugReports} bug reports / ` +
+    `${counts.gitJobs} git jobs`
   );
 }
 
@@ -145,6 +152,12 @@ export function formatCounts(counts: Counts): string {
  * otherwise make the next run's `createPage` fail with `path-occupied`, which reads as a
  * product bug and is not one.
  *
+ * Phase 6: `Attachment` is swept explicitly by `pageId`, even though `onDelete: Cascade` would
+ * remove it anyway once the page goes. Same reasoning as `PageRelation` above and as
+ * `scripts/smoke.sh`'s own sweep argues it: a schema decision two files away could be relaxed
+ * without this suite noticing, and the row this suite is responsible for cleaning up should be
+ * readable in the cleanup that is responsible for it.
+ *
  * **The marker is a slug and the sweep is space-agnostic, and Phase 4 Task 6 is the first thing
  * to depend on that.** Nothing here filters on `spaceId`, so a fixture seeded into `handbook`
  * rather than `engineering` is removed by the same three statements. Had it been scoped to a
@@ -159,6 +172,7 @@ export async function sweep(): Promise<void> {
   await db.page.updateMany({ where, data: { publishedVersionId: null } });
   const ids = (await db.page.findMany({ where, select: { id: true } })).map((row) => row.id);
 
+  await db.attachment.deleteMany({ where: { pageId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { OR: [{ pageId: { in: ids } }, { createdAt: { gte: RUN_START } }] },
   });

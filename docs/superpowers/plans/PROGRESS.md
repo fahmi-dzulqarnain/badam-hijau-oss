@@ -1,24 +1,49 @@
 # Execution status
 
-**Phases 1–4 are complete and in `main`** (Phase 4 merged as `8dfc7c7`). **Phase 5 (git mirror)
-is complete, on a branch with an open PR.**
+**Phases 1 through 6 are complete.**
 
-Branch: `phase-5-git-mirror` (cut from `main` at `8dfc7c7`; this phase lands through a PR) ·
-**951 vitest + 41 Playwright tests passing**, **108-check** cold-start smoke · typecheck, build
-and `plan:check` clean · working tree clean
+Phases 1–5 are in `main` — Phase 5, the git mirror, merged as `0e947bc`. Phase 6 —
+attachments and the Entra ID cutover — is on `claude/onedrive-microsoft-sso-7ac97b`
+with an open PR.
+
+Branch: `claude/onedrive-microsoft-sso-7ac97b` · **1321 vitest + 67 Playwright tests passing**, 119-check cold-start
+smoke green · typecheck, build and `plan:check` clean · working tree clean
+
+**Attachments have now been renumbered twice, and the second time is the interesting one.**
+This phase was planned and built as **Phase 4**, cut from `main` at `2706769` in parallel with
+search and diagrams; search reached `main` first, so attachments became **5**. Then the git
+mirror reached `main` as its own Phase 5, so attachments became **6**. The rule applied both
+times: the phase that lands in `main` first keeps its number, because renumbering a shipped
+phase to accommodate an unmerged one rewrites closed exit criteria. So this branch's commit
+messages say "Phase 5 Task N" and its earliest ones say "Phase 4" — both predate a merge, and
+neither is worth rewriting.
+
+**The second collision merged clean, which is the part worth remembering.** Both branches
+edited the roadmap's phase table, git took both edits without a marker, and the result listed
+attachments at 5 and the git mirror at 6 — the exact opposite of what `main` had already
+shipped. Four files conflicted; the one that mattered did not.
+
+Two of the five new Playwright specs failed on their first real run, and both had the same
+two causes. `fixture.path` is **space-relative** — every existing spec navigates to
+`` `/engineering/${fixture.path}` `` and these used the bare path, which resolves to a
+nonexistent URL. And these are the only specs in the suite that publish through the **UI**
+rather than through `seedPublishedPage`, so there was no established wait to copy: clicking
+Publish and navigating immediately raced the POST, and the reader saw the version from before
+the attachment reference was published. Both fixed; the publish now waits on its own response.
 
 Plans: [phase 1](2026-08-21-docs-platform-phase-1-foundations-reader.md) ·
 [phase 2](2026-08-23-docs-platform-phase-2-authoring.md) ·
 [phase 3](2026-08-24-docs-platform-phase-3-doc-types.md) ·
 [phase 4](2026-08-25-docs-platform-phase-4-search-diagrams.md) ·
 [phase 5](2026-08-26-docs-platform-phase-5-git-mirror.md) ·
+[phase 6](2026-08-26-docs-platform-phase-6-attachments.md) ·
 [roadmap](2026-08-21-docs-platform-roadmap.md)
 
 ## Phase 5 — git mirror
 
 Decisions taken with the user: **shell out to the real `git` binary** with argv arrays; **a
 standalone worker script on a schedule** rather than an in-process drain; **a minimal super-admin
-failure page now**, folded into Phase 6's `/admin` later; and **publish, move and delete all
+failure page now**, folded into Phase 7's `/admin` later; and **publish, move and delete all
 enqueue** — §9 names only publish, but `movePage` rewrites `Page.path`, so a publish-only mirror
 orphans a file at the old path.
 
@@ -375,11 +400,24 @@ require a name ending in `_test`, so nothing else changed. The **dev** database 
 shared, so `npm run smoke` and Playwright can still collide.
 
 **A related trap the collision checklist misses entirely: a shared migration *history*.**
-`20260826160447_attachments`, from another branch, is applied to `badam_test` and `badam` but is on
-neither `main` nor this branch. `prisma migrate dev` therefore offers to **reset the schema**,
-which would drop another branch's table and the dev data — and neither `ps` nor `pg_stat_activity`
+`20260826160447_attachments`, from another branch, was applied to `badam_test` and `badam` while
+being on neither `main` nor the branch that hit this — the attachments merge has since put it on
+both, so the specific drift is gone and the trap is not. `prisma migrate dev` offers to **reset
+the schema** in exactly this situation, which would drop another branch's table and the dev data — and neither `ps` nor `pg_stat_activity`
 can see this coming. Use `prisma migrate deploy` (it applies without drift-checking), generate new
 migrations against a throwaway database, and run `prisma migrate status` before any `migrate dev`.
+
+**A test that stages a race by *starting* the other party is staged by luck, and the load that
+breaks it is the rest of the suite.** `tests/integration/git-worker.test.ts`'s
+"a second worker cannot claim a job another worker has already claimed" opened a transaction that
+locks the row, then issued the claim, then slept 200ms — with nothing guaranteeing the lock was
+taken before the claim read the row. On a loaded machine the claim won, claimed the job perfectly
+legitimately, and failed the assertion with the very row it was staged not to see. Measured once
+in a full 1321-test run and never in that file alone: `npx vitest run <path>` is not load, so it
+green-lights the flake. Fixed by resolving a promise **inside** the transaction, after the
+UPDATE, and awaiting it before the claim — staging by construction rather than by timing. Checked
+against the mutant it exists for: with `SKIP LOCKED` removed the claim blocks and the test fails
+with `returned: false`, so the determinism did not cost the discrimination.
 
 `fileParallelism: false` makes this *look* impossible from inside one run, which is what sends you
 looking at the wrong thing — and the failure attributes itself to whatever you changed last. The
@@ -492,7 +530,7 @@ All 15 tasks approved and every exit criterion verified.
 
 ## Test suite
 
-**827 vitest tests over 53 files**, plus **21 Playwright specs** in `e2e/` and a **37-check
+**1321 vitest tests over 88 files**, plus **67 Playwright specs** in `e2e/` and a **119-check
 cold-start smoke script**. The per-file table that used to sit here described Phase 1's 128 tests
 over 18 files and had been wrong for two phases — a table that has to be edited by hand on every
 task is a table that ends up lying, so the counts live in one place now and
@@ -542,6 +580,77 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 `update: {}` leaves existing `Page` rows alone.
 
 ## Decisions that should not be relitigated
+
+### Phase 6 — attachments and the Entra cutover
+
+- **`editableSpace` must short-circuit on `isSuperAdmin`, exactly as `can()` does.** The naïve
+  composition `readableSpace(v, { memberships: { some: … } })` returns `{ AND: [{}, …] }` for a
+  super admin — the membership filter standing alone — so it silently denies them.
+- **Merging the two space predicates is a directional bypass.** Two literal `space:` keys in one
+  object is a TS1117 compile error and therefore safe; what tsc and Prisma cannot see is
+  `{ ...editableSpace(v), ...readableSpace(v) }`, which keeps only the last `AND` and drops the
+  edit requirement. Measured returning a members-only page to a VIEWER. They go in **separate
+  varargs**.
+- **Attachment readability nests `visiblePage`, so page delete and restore govern it.** That is
+  emergent from the nesting, not written anywhere, and has its own test for exactly that reason.
+- **The sanitiser is NOT widened for `<video>`.** `remarkRehype` runs with
+  `allowDangerousHtml: false`, so raw HTML never reaches the sanitiser and widening it is inert.
+  The element is built *after* sanitisation from a regex-captured id, so an off-origin `src` is
+  impossible by construction rather than by allowlist.
+- **`BLOB_STORE` has no default, in either direction**, and `memory` is gated on an
+  **allowlist** of dev `NODE_ENV` values — not on `!== "production"`. Next only *defaults*
+  `NODE_ENV`, so `NODE_ENV=staging next start` slipped past the inverted form.
+- **The dev upload route has its own positive flag.** `ALLOW_DEV_UPLOAD=1` **and** the memory
+  store, mirroring `ALLOW_TEST_LOGIN`'s polarity. Gating it on the store alone made an
+  unauthenticated write endpoint on-by-default wherever `NODE_ENV` was not exactly `production`.
+- **Never prefix an App Router folder with `_` and expect it to route.** `_dev-upload` was a
+  *private folder*: it compiled, passed every test that imported the module directly, and was
+  absent from `routes-manifest.json`. A real PUT answered 307. `npm run smoke` caught it.
+- **`Cache-Control: private` on the attachment proxy is a permission boundary**, not a hint.
+  `public` lets a shared proxy serve a members-only screenshot to a non-member.
+- **The proxy reports what the store DID, not what it was asked.** A ranged request is not
+  obliged to get a partial answer — Graph redirects `/content` to a CDN that may return 200 with
+  the whole object — so `BlobBody.partial` carries it, and `Content-Length` is declared only
+  when the store declared one.
+- **Non-inline types are served as `application/octet-stream`.** `nosniff` does not protect
+  `text/html`: it stops a browser guessing a *different* type, and that one is genuinely
+  executable.
+- **Shard a drive key on a HASH, never a slice of a cuid.** `id.slice(0, 2)` is `"c"` plus the
+  top base-36 digit of a millisecond timestamp, which turns over about every two and a half
+  years. Measured: one distinct bucket across twelve consecutive ids.
+- **The orphan sweep walks the 256 shard folders.** One `list("")` call worked against the
+  in-memory fake, whose `list` is a `startsWith` over a flat Map, and could never work against
+  `GraphBlobStore`, which is one folder deep — it would have reported no orphans forever while
+  passing its tests.
+- **`MemoryBlobStore` mints session URLs from `AUTH_URL`**, so any harness serving on another
+  port must set it or the direct PUT reaches nothing.
+
+- **The access audit has TWO de-dup scopes, and the second is not the first with a timer on
+  it.** The request scope collapses the three space resolutions inside one render, and its
+  per-request granularity is deliberate — "two reads in two requests write two rows" is a test,
+  because a super admin browsing five pages must read as five rows. An attachment read is a
+  different kind of event: a page with twelve screenshots is twelve HTTP requests and a
+  scrubbed video is one per seek, all one act of reading, and none of them a render, so
+  `cache()` is inert and the request scope caught none of it. Measured: twelve reads wrote
+  twelve identical rows. `readableAttachment` therefore passes `"subresource"`, which adds a
+  60-second per-`(actor, space)` window. Process-wide, so N replicas may each write one row per
+  window — bounded, small, and the over-reporting direction, which is the only one an audit may
+  fail in.
+
+- **The dev upload URL carries a TOKEN, not a key, and the session owns the key.** `store.ts`
+  calls `UploadSession` "a write capability for ONE key, for a short time"; a URL carrying the
+  key honoured none of it. Keys are derivable — the id is visible in `/api/attachments/<id>`
+  and the hash is in this repository — so overwriting a specific attachment was one `curl`
+  inside any process with the route enabled. The store now mints an unguessable token, holds
+  `token → {key, size, expiresAt, chunks}`, consumes it on completion, and 410s once it lapses.
+  There is no key on the request any more, so the traversal allowlist the route needed has
+  nothing left to guard.
+- **The same change fixed a capability gap nobody had hit.** Chunks all named the same key and
+  each overwrote the last, so the fake could not accept a resumable upload at all: two 5-byte
+  chunks of a 10-byte object left `"world"`. Every upload over the transport's 10MiB chunk size
+  arrived truncated and failed at commit on the size check. Sessions accumulate by offset and
+  assemble once every declared byte has arrived, and `GET` reports `nextExpectedRanges` so the
+  resume path is exercisable against the fake rather than only against a mocked `fetch`.
 
 - **`readableSpace(viewer, ...and)` returns the complete Prisma `where` and must never be
   spread**, at any nesting depth. The spread form silently drops the permission predicate;

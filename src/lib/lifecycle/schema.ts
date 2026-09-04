@@ -291,7 +291,7 @@ const relationTargets = listOf(pageRef, MAX_RELATION_TARGETS);
 
 /**
  * `systems:` — **accepted, shape-checked, and not validated against a catalogue**, because
- * there is no catalogue to validate against until Phase 6.
+ * there is no catalogue to validate against until Phase 7.
  *
  * The three options and why this one:
  *
@@ -300,11 +300,11 @@ const relationTargets = listOf(pageRef, MAX_RELATION_TARGETS);
  *   cannot be published — and would refuse the one thing the spec documents about this key.
  * - **Ignore it.** The failure mode this whole module exists to prevent, on a key we *know* is
  *   coming: the author writes their systems, publish drops them, and the page ships with an
- *   empty facet that nobody can tell apart from a page that declared nothing. Phase 6 then
+ *   empty facet that nobody can tell apart from a page that declared nothing. Phase 7 then
  *   arrives to find that every page written in between has to be re-edited, with no record of
  *   what was lost.
  * - **Accept and store it.** The declaration is preserved in `PageVersion.frontmatter`, so
- *   Phase 6 can populate `PageSystem` from data that already exists instead of asking authors
+ *   Phase 7 can populate `PageSystem` from data that already exists instead of asking authors
  *   to type it again.
  *
  * **This is not a hole in "reject unknown keys".** `systems` is a *known* key, in the table
@@ -313,12 +313,12 @@ const relationTargets = listOf(pageRef, MAX_RELATION_TARGETS);
  * that it is text or a list of text, non-empty, and JSON-safe (`findNonFinite`, below, is the
  * reason that last one is not vacuous).
  *
- * TODO(phase-6): validate each key against the systems catalogue and write `PageSystem` rows.
+ * TODO(phase-7): validate each key against the systems catalogue and write `PageSystem` rows.
  *
  * No count cap, unlike `relationTargets`, and the asymmetry is deliberate rather than an
  * oversight: a relation target costs a query, a cycle walk and a row lock inside the publish
  * transaction, while a system key costs nothing at all in Phase 3. The 16KB block cap and the
- * 200-entry cap are the bounds until Phase 6 has per-system work to protect.
+ * 200-entry cap are the bounds until Phase 7 has per-system work to protect.
  */
 const systemsSchema = listOf(
   z
@@ -393,7 +393,7 @@ const SCHEMAS: Record<DocType, z.ZodType> = {
  * Asked as a precondition over the whole structure rather than key by key, because it is a
  * property of the **destination** — the `Json` column — and not of any one key's meaning. Which
  * means it cannot be reopened by adding a key: today no key's schema admits a number at all, so
- * `status: .nan` is doubly refused, but the day Phase 6 relaxes `systems` into richer values,
+ * `status: .nan` is doubly refused, but the day Phase 7 relaxes `systems` into richer values,
  * or any key takes a number, the guarantee is already in place rather than needing to be
  * remembered. Its observable effect today is the message: "`.nan` is not a value that can be
  * stored" is the truth, where "status must be one of PROPOSED, ACCEPTED, …" would be a guess

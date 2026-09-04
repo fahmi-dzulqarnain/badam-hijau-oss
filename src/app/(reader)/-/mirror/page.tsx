@@ -16,7 +16,7 @@ import { MirrorFailures } from "@/components/MirrorFailures";
  * top-level static segment shadows any space whose key matches it, and `Space.key` has no
  * validation anywhere; so the segment chosen is the one character the product **already** declares
  * reserved (`validateSlug` refuses a leading `-`, with its own error code and its own test), which
- * makes the Phase 6 fix one rule rather than a growing list of English words. `/admin` is Phase
+ * makes the Phase 7 fix one rule rather than a growing list of English words. `/admin` is Phase
  * 6's and is not squatted on here.
  *
  * ## The collision, measured rather than reasoned about

@@ -309,6 +309,17 @@ test("a second worker cannot claim a job another worker has already claimed", as
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
+  // Resolved from INSIDE the transaction, once the UPDATE has actually run — and awaiting it
+  // before the claim is issued is what makes this staging deterministic rather than probable.
+  // It replaced a real flake: starting the transaction only *begins* it, so on a loaded machine
+  // the claim's `FOR UPDATE SKIP LOCKED` could reach the row before that UPDATE had taken the
+  // lock, claim it perfectly legitimately, and fail this assertion with the very job it was
+  // staged not to see. Measured once in a full 1321-test run and never in this file alone: the
+  // rest of the suite is the load, which is why `npx vitest run` on this path proves nothing.
+  let locked!: () => void;
+  const lockHeld = new Promise<void>((resolve) => {
+    locked = resolve;
+  });
 
   // Raw and interactive, because this has to sit between another writer's UPDATE and its COMMIT.
   // The `finally` below is not optional: a leaked uncommitted transaction blocks the next
@@ -319,10 +330,12 @@ test("a second worker cannot claim a job another worker has already claimed", as
         UPDATE "GitJob"
            SET "state" = 'RUNNING', "attempts" = "attempts" + 1, "updatedAt" = now()
          WHERE "id" = ${queued!.id}`;
+      locked();
       await held;
     },
     { timeout: 20_000, maxWait: 20_000 },
   );
+  await lockHeld;
 
   // The claim is raced against the settle window rather than simply awaited, and that is not
   // impatience: the read-then-write mutant **blocks**, so a bare `await` makes it a five-second
@@ -332,7 +345,7 @@ test("a second worker cannot claim a job another worker has already claimed", as
   // second assertion can say what the mutant actually did.
   const claim = claimNextJob(config).then((job) => ({ returned: true as const, job }));
   try {
-    await settle(); // the UPDATE above holds the row lock
+    await settle(); // the claim now has a settle window against a lock already held
 
     const raced = await Promise.race([
       claim,

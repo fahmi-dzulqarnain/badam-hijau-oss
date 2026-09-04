@@ -73,7 +73,7 @@ test("a space key with a space in it is accepted, because one already exists", (
   // `Space.key` is unvalidated (a bare `String @unique`), and this project's own
   // `restore-route.test.ts` sets a key of `eng ops` to prove `pageHref` encodes per segment. A
   // space is legal in a filename and git takes it as one argv element, so refusing it here would
-  // be this module inventing a validation rule that belongs to Phase 6's space administration.
+  // be this module inventing a validation rule that belongs to Phase 7's space administration.
   expect(accept("eng ops", "welcome").repoPath).toBe("eng ops/welcome.md");
 });
 
@@ -320,7 +320,7 @@ test("case is neither folded nor refused, and the hazard is the filesystem's", (
   // This module still does not fold, because a collision is a property of **two** keys and this
   // function sees one: refusing uppercase would close the ASCII half of the class and leave
   // NFC/NFD and every other fold open, which is this project's most repeated failure. The check
-  // that closes it is a folded uniqueness constraint where space keys are created — Phase 6.
+  // that closes it is a folded uniqueness constraint where space keys are created — Phase 7.
   //
   // Kills: a `toLowerCase()` anywhere in the assembly, which would silently mirror two spaces to
   // one path on **every** filesystem.

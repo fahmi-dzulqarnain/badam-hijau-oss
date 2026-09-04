@@ -56,12 +56,12 @@ const RESERVED = "-";
  * So `-` is chosen over `admin` or `mirror`, and the honest claim is narrow: **it does not remove
  * the collision, it makes the fix a rule the product already states.** `validateSlug` refuses any
  * slug beginning with `-`, with `reserved-prefix` as its own error code and its own test, and it
- * is the function a Phase 6 space-key validator would reuse — so reserving one character at the
+ * is the function a Phase 7 space-key validator would reuse — so reserving one character at the
  * top level costs that phase one rule, where reserving `admin`, `mirror`, `search` and whatever
  * comes next costs it a list that grows with every route. `-` is also not a word anybody would
  * name a space, which is not an argument but is worth a line.
  *
- * Phase 6 owns `/admin` and folds this in. Taking `/admin` now would squat on that namespace with
+ * Phase 7 owns `/admin` and folds this in. Taking `/admin` now would squat on that namespace with
  * a single list and reserve an English word for it, which is the debt above, twice.
  *
  * The collision was **measured, not reasoned about**: see the route's own docstring for the

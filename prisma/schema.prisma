@@ -31,6 +31,11 @@ enum BugStatus {
   CLOSED
 }
 
+enum AttachmentState {
+  PENDING
+  COMMITTED
+}
+
 enum DocType {
   DOC
   ADR
@@ -92,6 +97,7 @@ model User {
   pageVersions PageVersion[]     @relation("PageVersionAuthor")
   draftsEdited PageDraft[]       @relation("DraftUpdatedBy")
   auditEntries AuditLog[]        @relation("AuditActor")
+  attachments  Attachment[]      @relation("AttachmentUploader")
 }
 
 model Space {
@@ -147,6 +153,49 @@ model BugReport {
   @@index([reporterId])
 }
 
+model Attachment {
+  id           String          @id @default(cuid())
+  pageId       String
+  // Graph's own id, learned at commit — the item does not exist when the row is created,
+  // which is why this is nullable. `drivePath` is the handle everything else uses.
+  driveItemId  String?         @unique
+  drivePath    String
+  filename     String
+  mimeType     String
+  // Int, not BigInt, which caps usable size just under 2GB. MAX_UPLOAD_BYTES defaults to
+  // 512MB so there is headroom, but raising it past 2^31-1 is a column-type migration rather
+  // than a config change — and BigInt maps to a JS `bigint`, which `JSON.stringify` throws
+  // on, so every response carrying this field would then need a cast at the boundary.
+  sizeBytes    Int
+  eTag         String?
+  // PENDING from the moment the upload session is minted. The browser uploads directly to
+  // Graph, so the application never sees the bytes and cannot know the upload finished; the
+  // commit endpoint verifies against the store and flips this. A PENDING row is never served.
+  state        AttachmentState @default(PENDING)
+  uploadedById String
+  createdAt    DateTime        @default(now())
+  deletedAt    DateTime?
+
+  // Cascade: without it, hard-deleting a page is blocked by its own attachments, via Prisma's
+  // Restrict default on a required relation — the same reasoning that makes Page cascade from
+  // Space. Deliberately the opposite of BugReport, which carries no foreign keys at all
+  // because its value is highest once the page is gone. An attachment is worthless without
+  // its page. `uploadedBy` takes the Restrict default instead, matching BugReport.reporter,
+  // PageVersion.author and Page.createdBy — a person is not deleted out from under their work.
+  page       Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+
+  @@index([pageId])
+  // The sweep's abandoned-upload pass: `state = 'PENDING' AND createdAt < now() - 24h`.
+  // Equality then range, which is the column order a composite index wants.
+  @@index([state, createdAt])
+  // The sweep's purge pass — `deletedAt` older than the retention window — which is
+  // selective. NOT the read path, and do NOT delete this on the strength of Page's note
+  // below: that measurement is about `deletedAt IS NULL`, which matches most of the table and
+  // seq-scans either way. This index serves the inverse query, exactly as Page's own does.
+  @@index([deletedAt])
+}
+
 model Page {
   id                 String                   @id @default(cuid())
   spaceId            String
@@ -193,6 +242,7 @@ model Page {
   redirects     Redirect[]     @relation("RedirectTarget")
   relationsFrom PageRelation[] @relation("RelationFrom")
   relationsTo   PageRelation[] @relation("RelationTo")
+  attachments   Attachment[]
   gitJobs       GitJob[]
 
   @@unique([spaceId, path])
@@ -338,12 +388,12 @@ model PageRelation {
 // at drain time yields the same bytes it would have yielded at enqueue time, which is why the
 // document's content is a `versionId` and not a copy. `Page.docType`, which
 // `src/lib/git/document.ts` needs and `PageVersion` does not carry, is written by `createPage`
-// and updated by nothing, so it is joined rather than captured; a Phase 6 that lets a page change
+// and updated by nothing, so it is joined rather than captured; a Phase 7 that lets a page change
 // type makes it a capture candidate, and this line is where to look.
 //
 // `spaceKey` is captured for the same reason and is easy to leave out by half: the mirror's
 // address is `<spaceKey>/<path>.md`, so capturing the path and joining the key would give a job
-// whose address comes from two different instants. Nothing renames a `Space` today (Phase 6 owns
+// whose address comes from two different instants. Nothing renames a `Space` today (Phase 7 owns
 // space administration), and when something does, the captured key is also the *correct* one — it
 // names the directory the file is actually in, where reading the current key would write into a
 // new directory and orphan the old file. A cross-space move would need a `fromSpaceKey` beside
@@ -420,7 +470,7 @@ model PageRelation {
 // The costs, stated rather than discovered: the table grows without bound, and there is no
 // retention pass — `BugReport` has a retention migration and this does not, deliberately, because
 // a sweep with no operator surface is a cron job nobody knows about. Task 8 is the surface, and
-// retention belongs with the rest of `/admin` in Phase 6. The claim index below is unaffected by
+// retention belongs with the rest of `/admin` in Phase 7. The claim index below is unaffected by
 // the growth in *cost* (its leading column is `state`, so the scan seeks past finished rows
 // rather than reading them) but not in *size*; a partial index would fix that and is not
 // available, because Prisma cannot declare one and an index created only in raw SQL is dropped by
