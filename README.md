@@ -39,7 +39,7 @@ Phase 6 avoids by authenticating to Graph as the application.
 ## Checks
 
 ```bash
-npm test              # 1321 unit and integration tests against a real Postgres
+npm test              # 1323 unit and integration tests against a real Postgres
 npm run test:e2e      # 67 Playwright specs against a production build
 npm run smoke         # 119 checks from a cold start: provision, migrate, seed, build, serve, tear down
 npm run typecheck && npm run build

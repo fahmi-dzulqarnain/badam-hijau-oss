@@ -358,6 +358,27 @@ Inline: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/avif`, `vid
 **`image/svg+xml` and `text/html` are never inline.** An inline SVG is script execution
 against our own origin, which is strictly worse than the same file hosted anywhere else.
 
+> **Superseded after the phase merged, at the user's decision: both are now refused as
+> UPLOADS, not merely served carefully.** The reasoning above is sound about this application
+> and incomplete about the system it stores into. The bytes live in a SharePoint document
+> library, and **SharePoint's own web UI serves them too** — to anyone with access to the site,
+> with none of this section's rules: no `nosniff`, no forced `application/octet-stream`, no
+> `readableAttachment` predicate, at a URL this application cannot add a header to. "Safety
+> comes from how it is served" only holds where we are the one serving it.
+>
+> So the refusal moved to the single point that governs both readers: whether the file may be
+> stored at all. `image/svg+xml` and `text/html` are out of `MIME_EXTENSIONS`, which is the
+> allowlist, so §7.2's begin-upload answers 415 for them.
+>
+> **The serving rule stays exactly as written above, and that is not redundancy.** It answers
+> for `mimeType` on a row that already exists, so it covers anything written before the
+> allowlist narrowed — the upload gate and the serving gate are independent defences, and
+> tests pin both.
+>
+> The cost was accepted rather than argued away: an SVG diagram is a legitimate attachment.
+> ```mermaid``` fences already cover the case that motivated allowing it, and a raster export
+> covers the rest.
+
 **Inline video does NOT widen the sanitiser.**
 
 > **Amended while writing the phase plan.** This section first proposed adding `<video>` to

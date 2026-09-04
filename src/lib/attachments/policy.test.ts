@@ -13,12 +13,28 @@ test("the allowlist admits rasters, video and documents", () => {
   }
 });
 
-test("SVG and HTML are allowed as UPLOADS but never served inline", () => {
-  // Refusing the upload outright would be a worse trade: an SVG diagram is a legitimate
-  // attachment. The safety comes from how it is SERVED, not from refusing to store it.
-  expect(isAllowedMime("image/svg+xml")).toBe(true);
+test("SVG and HTML are refused as uploads, because this app is not the only reader", () => {
+  // These were uploadable, on the reasoning that safety comes from how a file is SERVED — and
+  // that reasoning was sound about *this* application and incomplete about the system. The
+  // bytes live in a SharePoint document library, and **SharePoint's own web UI serves them
+  // too**, to anyone with access to the site, with none of this route's headers: no
+  // `nosniff`, no forced `octet-stream`, no permission predicate. An uploaded SVG or HTML
+  // file is script execution waiting on a URL we do not control and cannot add a header to.
+  //
+  // So the refusal moved to the only point that governs both readers: what may be stored at
+  // all. The cost is real and was accepted deliberately — an SVG diagram is a legitimate
+  // attachment, and Mermaid fences already cover the case that motivated it.
+  expect(isAllowedMime("image/svg+xml")).toBe(false);
+  expect(isAllowedMime("text/html")).toBe(false);
+});
+
+test("a stored SVG or HTML row is still never served inline", () => {
+  // Not redundant with the refusal above, and not dead code: `isInlineMime` is asked about the
+  // `mimeType` on a row that already EXISTS, so it answers for rows written before the
+  // allowlist narrowed. The upload gate and the serving gate are two independent defences and
+  // this is the second one — removing it would make the read route depend on the allowlist
+  // having always had its current contents.
   expect(isInlineMime("image/svg+xml")).toBe(false);
-  expect(isAllowedMime("text/html")).toBe(true);
   expect(isInlineMime("text/html")).toBe(false);
 });
 

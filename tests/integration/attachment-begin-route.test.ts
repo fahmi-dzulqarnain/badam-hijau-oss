@@ -64,6 +64,44 @@ test("415 for a mime off the allowlist, and no session is minted", async () => {
   expect(begin).not.toHaveBeenCalled();
 });
 
+test("415 for an SVG, which is the refusal a person will actually meet", async () => {
+  // The `.exe` above proves the route's rejection path; this proves the policy the rejection
+  // now exists for. `application/x-msdownload` was never plausible as an attachment — an SVG
+  // diagram is, so it is the type someone will drag in and the one whose refusal has to be a
+  // clean 415 with a message rather than a 500 or a silent nothing.
+  //
+  // Both executable types are checked, because they were dropped together and for one reason:
+  // the bytes land in a SharePoint library whose own web UI serves them with none of this
+  // application's headers, so refusing the upload is the only gate that governs both readers.
+  vi.resetModules();
+  vi.doMock("@/lib/auth/viewer", () => ({ loadViewer: async () => asEditor }));
+  // The stub RESOLVES rather than returning `undefined`, and that is about the failure message
+  // rather than about this test passing. Put either type back on the allowlist and the route
+  // gets past the 415 and calls this — a bare `vi.fn()` then hands it `undefined` and the
+  // mutant dies on `Cannot read properties of undefined`, which reads as "something broke".
+  // With a plausible result it dies on `expected 201 to be 415`, which names the policy that
+  // changed. Same reasoning as the git worker's claim mutant, which was made to fail as an
+  // assertion instead of hanging.
+  const begin = vi.fn(async () => ({
+    ok: true as const,
+    attachmentId: "a1",
+    uploadUrl: "http://localhost/api/attachments/dev-upload/tok",
+    expiresAt: new Date("2026-09-04T00:00:00.000Z"),
+  }));
+  vi.doMock("@/lib/attachments/repo", () => ({ beginUpload: begin }));
+  const { POST } = await import("@/app/api/attachments/route");
+
+  for (const [filename, mimeType] of [
+    ["diagram.svg", "image/svg+xml"],
+    ["page.html", "text/html"],
+  ]) {
+    const response = await POST(request({ pageId: "p", filename, mimeType, sizeBytes: 1 }));
+    expect(response.status, mimeType).toBe(415);
+    expect((await response.json()).message, mimeType).toContain(mimeType);
+  }
+  expect(begin, "no session may be minted for a type that cannot be stored").not.toHaveBeenCalled();
+});
+
 test("413 for a size over the cap, with the cap in the message", async () => {
   const POST = await routeAs(asEditor);
   const response = await POST(

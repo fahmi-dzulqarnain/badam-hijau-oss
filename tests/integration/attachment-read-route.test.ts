@@ -59,7 +59,7 @@ test("200 streams the bytes with the stored type, nosniff, and a PRIVATE immutab
   expect(response.headers.get("content-disposition")).toBe('inline; filename="shot.png"');
 });
 
-test("an SVG downloads instead of rendering", async () => {
+test("a stored SVG downloads instead of rendering, though none can be uploaded now", async () => {
   vi.resetModules();
   mockReadable("image/svg+xml");
   mockStore();
@@ -208,6 +208,11 @@ test("a non-inline type is served as an opaque stream, not as its own executable
   // `nosniff` does not help for text/html: it stops a browser guessing a DIFFERENT type, and
   // here the type is genuinely executable. That left Content-Disposition as the only thing
   // between an editor-uploaded file and same-origin script execution.
+  //
+  // Both executable types are now refused at upload, so this covers a row written before that
+  // and not a file anyone can add today — which is why it stays. The upload gate and this one
+  // are independent defences, and a test that only exercised the gate would let someone
+  // "simplify" this branch away on the grounds that nothing reaches it.
   for (const mimeType of ["text/html", "image/svg+xml", "application/pdf"]) {
     vi.resetModules();
     mockReadable(mimeType);
