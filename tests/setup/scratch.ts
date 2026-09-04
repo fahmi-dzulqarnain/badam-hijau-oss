@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
+import { removeScratchDirs, scratchUnder } from "./scratch-dirs";
 
 /**
- * A temporary directory for a test that runs `git`, **proved not to be inside this checkout**.
+ * The vitest suites' entry point to a temporary directory for a test that runs `git`, **proved
+ * not to be inside this checkout**.
  *
  * Phase 5 Task 5 wrote this inside `src/lib/git/repo.test.ts`; Task 6 needs the identical
  * guarantee from `tests/integration/git-worker.test.ts`, and this project's rule is that a rule
@@ -11,37 +11,26 @@ import { join, resolve } from "node:path";
  * deliberately **not** a `.test.ts` file: vitest's `include` globs collect those, and a test file
  * imported by another test file has its cases registered twice.
  *
- * The guard is the point rather than the `mkdtemp`. These are tests for code whose whole job is to
- * spawn `git` and write files, running *inside* a git repository, and a working directory that
- * quietly resolved to the project root would commit the suite's fixtures into the branch under
- * test. Task 5 measured the shape that makes that plausible: `git rev-parse --show-toplevel` run
- * in a subdirectory answers with the **ancestor's** root, so "am I in a repository?" is `true`
- * everywhere under this checkout.
+ * **Task 9 split the mechanism out into `./scratch-dirs`, and the reason is a module system rather
+ * than a design.** A Playwright spec needs the same directory and the same guard, and Playwright's
+ * TypeScript transform emits CommonJS, where the `import.meta.dirname` below is a *parse* error
+ * that takes the whole spec file out of the run without failing it. That module therefore holds
+ * the `mkdtemp`, the containment refusal and the removal list, and each runner states the project
+ * root in the spelling it supports. This file is the ESM half.
  *
  * `PROJECT_ROOT` is derived from this file's own location, so moving the file cannot silently
  * point the guard somewhere harmless.
  */
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 
-/**
- * Directories handed out and not yet removed. Module-level rather than per-file because
- * `fileParallelism: false` means one file runs at a time, and a leaked temporary tree from a
- * failed assertion is a directory nobody deletes.
- */
-const made: string[] = [];
-
 /** A fresh temporary directory, registered for {@link removeScratchDirs}. Absolute, symlinks kept. */
 export async function scratch(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `badam-git-${prefix}-`));
-  const real = resolve(dir);
-  if (real === PROJECT_ROOT || real.startsWith(PROJECT_ROOT + "/")) {
-    throw new Error(`Refusing to run git tests inside the project checkout: ${real}`);
-  }
-  made.push(dir);
-  return real;
+  return await scratchUnder(PROJECT_ROOT, prefix);
 }
 
-/** Remove everything {@link scratch} has handed out. Call from an `afterEach`. */
-export async function removeScratchDirs(): Promise<void> {
-  for (const dir of made.splice(0)) await rm(dir, { recursive: true, force: true });
-}
+/**
+ * Re-exported so the two vitest importers are unchanged by the split — and so the *state* stays
+ * single: `scratch-dirs` keeps one list of directories to remove, and a second copy of that list
+ * would be a directory nobody deletes.
+ */
+export { removeScratchDirs };
