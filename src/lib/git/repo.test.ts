@@ -636,6 +636,46 @@ test("a commit whose push fails is retried as a push, and produces exactly one c
   expect(await log(remote, "%H")).toBe(done.sha);
 });
 
+test("a failed push does not put the remote's credentials in the error a job stores", async () => {
+  /*
+   * The sharpest thing in Task 8, at the end where it can still be prevented rather than hidden.
+   *
+   * Task 5 deliberately does not assemble credentials, so `GIT_REMOTE_URL` may legitimately carry
+   * one — and `push`'s argv is `["push", "--", remoteUrl, …]`, which `failedRun` quotes whole into
+   * `Command:`. So this leak needs no help from git at all: it is this application writing the
+   * token into `GitJob.lastError`, which Task 8's page paints and `scripts/git-worker.ts` prints
+   * into cron mail.
+   *
+   * The URL points at a directory that does not exist, so git fails locally and no network is
+   * touched; the credentials are decoration on a path, which is exactly enough to prove the argv
+   * half. `redact.test.ts` covers the shapes git's own output takes.
+   */
+  const token = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+  const missing = join(await scratch("credentialed"), "nope.git");
+  const cfg = await tree({ remoteUrl: `https://badam:${token}@localhost${missing}` });
+
+  expect((await stageWrite(cfg, REF, "# body\n")).ok).toBe(true);
+  expect((await commit(cfg, { message: "one", author: PUBLISHER })).ok).toBe(true);
+
+  const failed = await push(cfg);
+  expect(failed.ok).toBe(false);
+  if (failed.ok) throw new Error("unreachable");
+
+  expect(failed.error.message).not.toContain(token);
+  expect(failed.error.message).not.toContain("badam:");
+  // Non-vacuity, three ways: the message still exists, it still says what was being attempted,
+  // and it still names the host — so a mutant that returned "" or dropped `Command:` entirely
+  // would fail here rather than passing the absence above.
+  expect(failed.error.message).toContain("Pushing to the content remote");
+  expect(failed.error.message).toContain("[redacted]@localhost");
+  expect(failed.error.message).toContain('"push","--"');
+
+  // The structured record keeps the real argv — it is never persisted or rendered, and a caller
+  // debugging a spawn needs what was actually run. Asserted so the redaction's scope is pinned as
+  // a decision rather than left to be discovered by whoever reads `error.run` next.
+  expect(failed.error.run?.argv.join(" ")).toContain(token);
+});
+
 // ── The timeout ───────────────────────────────────────────────────────────────────────────────
 
 test("a hung push is killed by the network timeout rather than hanging forever", async () => {

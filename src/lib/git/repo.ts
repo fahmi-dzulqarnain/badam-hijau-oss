@@ -3,6 +3,7 @@ import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { GitJobKind } from "@prisma/client";
 import { mirrorPathOf } from "@/lib/git/paths";
+import { redactCredentials } from "@/lib/git/redact";
 
 /**
  * The one place in this application that spawns `git`.
@@ -444,32 +445,53 @@ function clip(text: string): string {
  * **Both streams are quoted, and that is the measured half.** `git commit` writes "nothing to
  * commit, working tree clean" to *stdout* and leaves stderr empty, so an error message built from
  * stderr alone would be blank for one of the most common failures git has.
+ *
+ * **And every message goes out through `redactCredentials`, which Phase 5 Task 8 added.** This
+ * function is where a credential leaves the process, by two routes at once: `config.remoteUrl` is
+ * an argv element of `clone` and `push`, and it is quoted whole into `Command:` below — so *any*
+ * failed push writes the remote URL, credential and all, with no help from git; and git's own
+ * output echoes the URL it was handed, so `Output:` carries it a second time. Task 5's decision
+ * not to assemble credentials means `GIT_REMOTE_URL` may legitimately be
+ * `https://user:token@host/repo.git`, which makes this a certainty rather than a possibility.
+ *
+ * The message is what reaches `GitJob.lastError`, `scripts/git-worker.ts`'s stdout (cron mail) and
+ * Task 8's super-admin page. Redacting here means the secret never reaches any of the three; Task
+ * 8 redacts again on the way *out* of the column, for the rows this function did not write. See
+ * `src/lib/git/redact.ts` for why that is two transforms and not one predicate stated twice.
+ *
+ * `run` is attached unredacted, deliberately: it is the structured record of the invocation, it is
+ * never persisted or rendered — `worker.ts` reads `error.message` and `error.code` and nothing
+ * else — and a caller debugging a spawn needs the argv that was actually used.
  */
 function failedRun(run: GitRun, what: string): GitError {
   if (run.spawnError !== null) {
     return {
       code: "git-failed",
-      message: `${what}: could not run ${JSON.stringify(run.argv[0])} — ${run.spawnError}`,
+      message: redactCredentials(
+        `${what}: could not run ${JSON.stringify(run.argv[0])} — ${run.spawnError}`,
+      ),
       run,
     };
   }
   if (run.timedOut) {
     return {
       code: "timed-out",
-      message:
+      message: redactCredentials(
         `${what}: git did not finish within the configured timeout and was killed. ` +
-        `Command: ${JSON.stringify(run.argv)}.` +
-        (run.stderr.trim() ? ` Last output: ${clip(run.stderr)}` : ""),
+          `Command: ${JSON.stringify(run.argv)}.` +
+          (run.stderr.trim() ? ` Last output: ${clip(run.stderr)}` : ""),
+      ),
       run,
     };
   }
   const output = clip(`${run.stderr}\n${run.stdout}`);
   return {
     code: "git-failed",
-    message:
+    message: redactCredentials(
       `${what}: git exited ${run.code === null ? `on signal ${run.signal}` : String(run.code)}. ` +
-      `Command: ${JSON.stringify(run.argv)}.` +
-      (output ? ` Output: ${output}` : " It wrote nothing to stdout or stderr."),
+        `Command: ${JSON.stringify(run.argv)}.` +
+        (output ? ` Output: ${output}` : " It wrote nothing to stdout or stderr."),
+    ),
     run,
   };
 }
