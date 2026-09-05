@@ -736,13 +736,194 @@ build 0, `plan:check` 0 drifted, 119-check smoke passing, dev baseline unchanged
 
 ---
 
-## Task 5: `/admin/systems`
+## Task 5: `/admin/systems` ✅
 
-**Files:** routes, `src/lib/systems/admin.ts` + tests.
+**Files:** routes, `src/lib/systems/admin.ts` + tests. Plus three modules the plan did not name:
+`src/lib/admin/gate.ts` (the refusal, once, for four surfaces), `src/lib/systems/key.ts` (Task 1's
+deferred `validateSystemKey`) and `src/components/AdminSystems.tsx`.
 
-- [ ] **Step 1: Manage the list** — §7: "Admins manage the list."
-- [ ] **Step 2: Show the reference count**, so Task 1 Step 3's decision is visible before it acts.
-- [ ] **Step 3: The refusal survives deleting the guard it names** — mutation-verify it.
+- [x] **Step 1: Manage the list** — §7: "Admins manage the list."
+- [x] **Step 2: Show the reference count**, so Task 1 Step 3's decision is visible before it acts.
+- [x] **Step 3: The refusal survives deleting the guard it names** — mutation-verify it.
+
+**The gating is a seam and not a line, because three more surfaces copy it.** `refuseNonAdmin`
+lives in `src/lib/admin/gate.ts`, states `viewer.isSuperAdmin` **once** and returns the not-found
+value as well as the decision — a boolean helper would have stated the predicate once and the
+*answer* four times, and the answer (not-found, never forbidden) is the half this project keeps
+having to say out loud. Every entry point opens with the same two lines and
+`src/lib/admin/gate.test.ts` sweeps `src/lib/**/admin.ts` for one that forgets, with the
+non-vacuity companion the sweep discipline has now needed six times. `src/lib/git/failures.ts` is
+listed as a **named exemption** rather than rewritten: `/-/mirror` is Task 7's to fold in, and a
+task that moves another task's permission line without owning its tests is how a phase loses an
+afternoon.
+
+**Mutation-verified in both directions, which is what Task 4's finding demands.** With
+`if (viewer.isSuperAdmin) return null;` deleted, 15 of 18 tests in
+`tests/integration/systems-admin.test.ts` fail — including the super admin's own calls, e.g.
+`expected { ok: false, reason: 'not-found' } to deeply equal { ok: true, key: 'kiosk-bridge' }`.
+With the body replaced by `return null`, four fail the other way, including
+`expected { ok: true, …(1) } to deeply equal { ok: false, reason: 'not-found' }`. There is no
+second guard that could produce either answer: `listSystemsForAdmin` has no other filter at all,
+and `createSystem` genuinely inserts the row. The discriminating viewer is an **ADMIN of a real
+space** — the viewer `can(v, space, "MANAGE_SPACE")` says yes to — and not a stranger, because a
+member of nothing is refused by any predicate at all.
+
+**`can(viewer, space, "MANAGE_SPACE")` was not an option here, for a structural reason rather than
+a strict one:** §7 makes a system global, so `/admin/systems` administers rows with no `spaceId`
+for `can()` to be asked about. That is worth carrying to Task 6, where a space *is* to hand and the
+temptation will be real.
+
+**`validateSystemKey` borrows `validateSlug`'s rules and remaps only the sentences.** The character
+class is the same predicate — one lowercase URL segment — so a second regex here would be the
+untestable-duplicate failure this project keeps finding; what is new is the wording (two of
+`validateSlug`'s messages would be wrong on this field: `reserved-prefix` explains application
+routes, which is true of `/{space}/-/adrs` and irrelevant under `/systems/`) and **one rule**: no
+**trailing** hyphen, which Task 1's CHECK has and a slug does not. `validateSlug("hub-")` is
+`{ ok: true }` and `validateSystemKey("hub-")` is `hyphen-edge`; that pairing is the test that
+would fail if this module were replaced by a bare delegation.
+
+`SYSTEM_KEY_MAX_LENGTH = SLUG_MAX_LENGTH`, **derived and asserted as an identity rather than typed
+as 80** — the tie Task 1 refused to make in SQL. `src/lib/systems/key.test.ts` also re-types the
+migration's regex *on purpose* and runs both over the same corpus: a test whose job is to catch a
+divergence between two independent statements of a rule cannot share one of them. Task 3's
+measurement is restated as an assertion there: a 300-character key **passes the CHECK** and is
+refused here.
+
+**The credential fix's other end, and it reuses `repo-url.ts` rather than parsing again.**
+`repoField` calls `repoLinkOf` and refuses **every** `withheld` reason, not only `credentials` —
+the scheme allowlist matters as much on the way in, since a stored `javascript:` URL is script
+execution in an `href`. What is stored is `url.href`, the parsed form whose scheme and userinfo
+were just checked, so nothing inspected can differ from what is written. The sentences are this
+surface's own (`REPO_REFUSED_SENTENCE`, about a URL being typed) and not `REPO_WITHHELD_SENTENCE`'s
+(about one already stored): one predicate, two audiences.
+
+**The test and its non-vacuity companion are in one assertion** — the same repository, one
+component removed, is accepted and stored:
+`expected a field error, got {"ok":true,…}` is what the mutation produces when the `withheld`
+branch is deleted (4 tests die, including `expected [ 'key', 'name' ] to deeply equal [ 'key',
+'name', 'repoUrl' ]`). The message is asserted to contain neither the token, nor `oauth2`, nor the
+host: an error message is rendered, logged and screenshotted.
+
+**An edit is a `PATCH`, and `repoUrl` is what decided it.** A replacement form has to prefill every
+input, which would mean sending a stored — possibly credentialed — URL to the browser and undoing
+Task 3's half of the fix on the one page whose job is to repair it. So the field is never
+prefilled, its placeholder describes the column's state without quoting it, a checkbox clears it,
+and `an edit that does not mention repoUrl leaves a stored credentialed URL untouched` pins that an
+edit of the *name* neither clears nor prints it.
+
+**What a refused delete shows and offers.** The reference count is on **every row before anything
+is clicked** — that is the prediction half — and it counts every `PageSystem` row, soft-deleted and
+unpublished pages included, because every one of them is a row `Restrict` refuses over. It is
+therefore **not** the number `/systems/[key]` renders, which is smaller, and the module says so.
+The refusal itself states the count, the reason (a facet row is a projection of authored
+frontmatter) and the alternative, and the surface renders `Mark it sunsetting instead` in the place
+the refusal appeared. When the system is already sunsetting the sentence changes rather than
+repeating itself.
+
+**There is deliberately no pre-check before the delete.** `if (count > 0) return referenced` would
+be the same predicate stated twice with the copy that mattered untestable — deleting it changes
+nothing an assertion can see, because the `P2003` catch produces the identical answer — and it
+would still be wrong under a race. The count in the message is read **after** the refusal, where it
+describes the state that actually refused.
+
+**The rename: allowed, warned about with that same count, and audited on the row that changed.**
+Refusing would make a key immutable for ever the moment one page named it, with **no escape hatch
+behind it** — `Restrict` refuses the delete-and-recreate an admin would fall back on — so a typo
+noticed after the first publish would be permanent. The breakage a rename does cause is loud,
+bounded and already has a message: `resolveSystems` refuses the republish with a
+`PublishFieldError` on `systems:` that lists the catalogue. That is asserted end to end rather than
+from a comment — `after a rename, republishing a page that named the old key is refused and says
+so` drives a real `createPage`, `saveDraft`, `publishPage`, rename, `saveDraft`, `publishPage`,
+with the first publish as the non-vacuity companion. Nothing rewrites the author's frontmatter: a
+published version is what an author wrote and what the mirror committed.
+
+**`AuditEntry.spaceId` widened to `string | null`, which is the deliberate widening that type asked
+for.** Its own docstring said *"a future spaceless event should widen this deliberately rather than
+discover that `undefined` was allowed all along"*, and a system has no space. Required-and-nullable
+rather than optional, so the five page actions still cannot omit it by accident. Three actions join
+`AuditAction` — `system.create` (the only record of when a system was added, since Task 1 removed
+`createdAt` on precisely that argument), `system.update` (carrying `previousKey`, null and not
+absent, plus `strandedPages`), and `system.delete` (the only record left, the row being gone).
+**No audit row carries `repoUrl` by value**, only by name in `fields`: an audit row is a column, it
+is designed to outlive what it describes, and nothing redacts it.
+
+**Task 1's audit line, applied and mutation-verified.** *"Showing the number needs no audit; showing
+the titles does."* The count ships with every row and writes nothing; `listBlockingPages` is a
+separate endpoint behind a separate control and calls `auditSpaceAccess` once per space that
+produced a row. Asserted as a **discrimination**: one super admin, one `MEMBERS` space they do not
+belong to, two calls, one `space.access` row. Removing the loop fails it with
+`expected [] to have a length of 1`. `handbook` is `ALL_STAFF` and contributes none, which is
+`needsAccessAudit` being called rather than copied.
+
+**`readableSpace` and `visiblePage` are absent from this module, at the line, and the second
+absence is load-bearing.** `readableSpace` would be inert (`readableSpaceWhere` answers `{}` for a
+super admin — the `resolveRedirect` shape) *and* wrong, since a page in a space the admin is not a
+member of blocks the delete exactly as hard as one they can read. `visiblePage` would be plainly
+wrong: `PageSystem.pageId` cascades from `Page` and this product has no hard delete, so a
+soft-deleted page keeps its facet row and keeps blocking. Adding
+`page: { deletedAt: null }` fails `a soft-deleted page still blocks, is listed, and is flagged`
+with `expected [ [ 'Live note', false ] ] to deeply equal [ [ 'Gone note', true ], …(1) ]`. The
+test also asserts the list's length equals the refusal's count, which is the property the filter
+would break.
+
+**The route collision, measured the way Phase 5 Task 8 and Task 3 measured theirs — and it is the
+narrow shape.** A throwaway `badam_p7t5_probe`, `prisma migrate deploy`, a space genuinely keyed
+`admin` holding published pages at `systems`, `ordinary`, `deep` and `deep/page`, a real
+`next build` and `next start` on 3177, signed in through `test-login`:
+
+| URL | Answer | What served it (asserted on the `h1`) |
+|---|---|---|
+| `/admin` | 200 | **the space's landing page** — `Admin space` |
+| `/admin/systems` | 200 | this route — `Manage systems`, over the space's page at `systems` |
+| `/admin/ordinary` | 200 | the space's own page at depth one |
+| `/admin/deep/page` | 200 | the space's own page at depth two |
+| `/admin/no-such-page` | 404 | |
+
+`routes-manifest.json` puts `^/admin/systems(?:/)?$` in **`staticRoutes`** and adds **nothing** to
+`dynamicRoutes` — the contrast with `/systems/[key]`, which sits at index 14 of `dynamicRoutes`
+ahead of `/[space]` at 15, and therefore swallows every depth-one path in a space keyed `systems`,
+404ing rather than falling through. **So the window here is exactly one path**, the `/-/mirror`
+shape and not the `/systems` one, and that is a property of this route being fully static rather
+than of anything anyone chose. There is deliberately **no `/admin/page.tsx`**: a layout without a
+page creates no route, which is why `/admin` still resolves to `[space]`. Tasks 6, 7 and 8 each add
+one more leaf and one more path to the window; an `/admin` index is what would also take the
+landing page. No space is keyed `admin` today.
+
+**The overflow probe, injected and counter-checked.** `HOSTILE` into the name, owning team and
+description, a 300-character credentialed `repoUrl`, and a blocking page whose title is `HOSTILE`,
+with the row's listing **and** its edit form open before anything is measured — the non-vacuity
+half, because a probe over a page where the hostile strings never rendered reports 0px and means
+nothing. **0px at 1280, 860 and 380.** Counter-checked rather than trusted: setting
+`.adm-page-title` to `flex: none` reproduces **667px at 1280px**, which is Task 3's ninth shape
+arriving on this surface. The page reuses `.sys-row`, `.sys-key`, `.sys-team` and `.sys-repo`
+rather than growing parallel rules, so it inherits the guards that shape earned; `flex: none` here
+is reserved for `.sys-kind` (a `SystemKind`) and `.adm-refs` (an integer from a `_count`).
+
+**Two things the e2e suite found that no module test could**, and they are the useful part:
+
+- **A refusal must survive the button it invites.** "Which pages?" is what an admin presses after a
+  refused delete, and the request cleared the row's feedback — so pressing it deleted the
+  refusal's sentence *and* the sunsetting offer at the exact moment they acted on them. Found by
+  walking the loop in the order an admin walks it, not by asserting each step. The listing request
+  no longer clears; the four mutations still do.
+- **An assertion over `page.content()` is an assertion about the framework.** `not.toContain(
+  "forbidden")` fails on **every** page in this product, 200s included: Next 16 ships `forbidden()`
+  as an API and its name is in the client bundle. The assertion is now over rendered text, and over
+  the stronger claim — the refusal's visible text is **identical** to the 404 for a URL nobody
+  built a route for.
+
+**One thing in the brief turned out not to hold.** It said to measure the collision because
+`/admin/systems` is fully static and the cost should be measured "rather than assuming either
+precedent" — and the measurement lands squarely on the `/-/mirror` precedent, one path deep, with
+no third shape. The brief also implied `/admin` itself might be at stake; it is not, because
+nothing routes it. That is worth Task 6 knowing before it adds `/admin/spaces`.
+
+**Numbers:** 1456 vitest over 99 files (was 1400/95 — +56 tests, +4 files: `key.test.ts`,
+`gate.test.ts`, `systems-admin.test.ts`, `systems-admin-route.test.ts`, plus 2 from the new
+`visible.test.ts` registration, which `test.each`es twice), 90 Playwright (was 83), typecheck 0,
+build 0, `plan:check` **0 drifted** with every bucket unchanged (70 in sync · 13 fragment · 30
+superseded · 19 unmatched · 66 not code), 119-check smoke passing, dev baseline unchanged at
+2 spaces / 7 pages / 7 systems / 0 page systems and every seeded `reviewedAt` still `2026-08-18`.
 
 ---
 
