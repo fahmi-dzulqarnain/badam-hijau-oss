@@ -537,20 +537,164 @@ the overflow measurement, the credential in real HTML, and the affordance.
 
 **Files:** `src/lib/pages/review.ts`, the space landing, a confirm action + tests.
 
-- [ ] **Step 1: The interval is configuration**
+- [x] **Step 1: The interval is configuration**
 
 §17 lists "review interval in months" as an environment variable, default twelve. It is absent
 from `.env.example` — add it there too, or every other checkout breaks silently.
 
-- [ ] **Step 2: The list on `/[space]`**
+- [x] **Step 2: The list on `/[space]`**
 
 §11: the space landing shows modules, recently published, and due for review.
 
-- [ ] **Step 3: Confirming a review writes one column**
+- [x] **Step 3: Confirming a review writes one column**
 
 No version, no `GitJob`, and `Page.searchVector` **byte-identical** — asserted, with a companion
 proving `reviewedAt` moved. Who may confirm is a decision: §12 says "whose owner has not confirmed
 them", which is not the same as anyone with `EDIT`.
+
+**`REVIEW_INTERVAL_MONTHS` has a default in the CODE, and that is the opposite polarity from
+`BLOB_STORE`.** It is in `.env.example` and in this checkout's untracked `.env.test`, but an unset
+or empty value returns twelve rather than refusing to boot — because the failure this project
+actually had was a tracked template gaining a variable with no default and breaking 27 tests in
+another checkout the moment Phase 6 merged. `BLOB_STORE` refuses to guess because guessing wrong
+either loses uploads or breaks every laptop; guessing twelve months wrong nags somebody early.
+Zero **is** refused rather than clamped: it is the "a page is due the moment it is published"
+reading below, arriving through configuration instead of through code, and a validator that
+silently substituted the default would overrule a deployment that meant it.
+
+**The plan's central fact was right, and it decided the tests.** Measured before anything was
+written: all seven seeded pages carry an `ownerId` and a `reviewedAt` of `2026-08-18`, today is
+`2026-09-05`, so under twelve months **nothing in the seeded corpus is due** and the list renders
+its empty sentence in both spaces. Every due fixture in
+`tests/integration/review.test.ts` and `e2e/review.spec.ts` therefore backdates its own anchor and
+has a **not-due companion in the same assertion**; the one test that does assert an empty section
+(`handbook`, over HTTP) is placed after a test that has already shown a due page being listed.
+
+**The second measurement is the one the plan did not ask for, and it chose the rule.**
+`reviewedAt` is written by `prisma/seed.ts` and by nothing else — `createPage` sets neither
+`ownerId` nor `reviewedAt`, and `publishPage` sets neither either. So outside the seed **every
+page this product creates is unowned and has never been reviewed**, permanently. That makes null
+the ordinary case rather than the edge one and rules out two of the three answers:
+
+| Rule for a null `reviewedAt` | Consequence on this corpus |
+|---|---|
+| Not due | no page the product creates is ever listed; the feature is dead on arrival, silently |
+| Due immediately | literal §12, and a page published this morning heads a list called "due for review" |
+| **Measured from `publishedAt`** | a page never confirmed becomes due one interval after publication |
+
+The third, because publication is the last moment somebody asserted the document was correct and
+is a *stronger* assertion than a confirmation — an author read it and shipped it. It also makes
+the anchor **total**: every candidate row has a non-null date, so there is no third branch. The
+choice is unobservable on the seeded corpus (both `reviewedAt` and `publishedAt` are inside twelve
+months there), which is exactly why it needed a fixture pair rather than an inspection.
+
+**An unpublished page is never due, and `confirmReview` deliberately does not require one.** The
+list needs the bound — a draft has no reader, and it is what keeps the anchor total. The mutation
+does not, and adding a `publishedVersionId` clause there would be a guard that cannot fire: the
+list only offers published pages and the reader route only renders published pages, so no surface
+can reach a draft's control. Same shape as Task 1's declined repair clause.
+
+**Who may confirm: the owner, or `MANAGE_SPACE` — and not `EDIT`.** §12 names the owner, and an
+editor may rewrite what a page says without vouching that it is still true; if `EDIT` sufficed,
+the sentence the list is built on would be false of every row an editor had touched. The second
+arm is not a nicety — `Page.ownerId` is nullable and, per the measurement above, usually null, so
+with the owner arm alone an unowned page becomes due one interval after publication and then sits
+there for ever, unactionable by anybody. The same hole opens for an owner who has left, since
+offboarding here keeps the `User` row. `can()` folds `isSuperAdmin` in, so there is no third arm.
+The refusal's message names the rule, because "an editor is not enough" is the one thing nobody
+can guess: *"Only this page's owner, or an administrator of the space, can confirm a review."*
+**Mutation-verified** — with `mayConfirmReview` replaced by `can(viewer, space, "EDIT")` the test
+fails with `expected { ok: true, … } to deeply equal { ok: false, reason: 'forbidden', … }`, and
+the viewer that makes it discriminate is an `EDITOR` **of the page's own space** who does not own
+the page: refusing a non-member would have been the space filter talking.
+
+**Confirming is audited, and `page.review` joins `AuditAction`.** It is the clearest case in the
+product: the confirm writes no `PageVersion`, enqueues no `GitJob` and leaves the search vector
+byte-identical — all three deliberately — so it is the one mutation that would otherwise leave no
+trace at all. And `reviewedAt` is a single mutable column, so the *second* confirm destroys the
+record of the first; the test asserts two rows, the second carrying the value the first wrote.
+`detail` holds `by` (which arm allowed it, exactly as `space.access` records why a super admin's
+read was permitted) and `previousReviewedAt` (null and not absent, because an omitted key and a
+null one mean different things to anyone querying the column).
+
+**The byte-identity is a stronger claim than "we did not touch it".** `page_search_vector` is a
+`BEFORE INSERT OR UPDATE` trigger with **no `WHEN` clause**, so a `reviewedAt` update fires it and
+the vector is genuinely rebuilt from title, headings and body. The test drives a real
+`publishPage` so the vector under test is one the product built, asserts the lexemes are present
+before comparing (an empty `tsvector` is byte-identical to another empty one), and carries the
+non-vacuity companion in the same test: `reviewedAt` moved. Without that line every other
+assertion passes over a `confirmReview` that did nothing.
+
+**The control is in `.meta` and not in `PageInfoCard`**, for Phase 5 Task 7's reason: `.rail-r` is
+`display: none` below 1180px, so a control there would not exist on a laptop in a split window —
+Phase 1's bug dialog inside `.rail-l` is the same bug. The rail keeps **Last reviewed**, which is
+a fact; the row carries the action. It is on the page and not on the landing list, because
+confirming is a claim you can only make after reading the document and a button on a list clears
+the cycle without opening anything. Asserted as CSS at three widths in `e2e/review.spec.ts`, with
+the rail's own presence at 1280 and absence at 900 as the control.
+
+**The reader says nothing about whether a page is due, and that is deliberate.** A TypeScript
+`isDueForReview` beside the SQL `where` is the shape Phase 4 Task 3 measured, where a post-fetch
+filter left the SQL clause deletable with 24 tests green. The predicate lives in one `dueScope()`
+builder shared by the list and the count — the divergence `src/lib/systems/read.ts` argued for
+against `index-read.ts` — so there is exactly one place any of the four filters can be deleted
+from.
+
+**One claim in this task's own test file turned out to be wrong, and it is the useful finding.**
+`confirmReview` states `visiblePage()` twice, on the read and on the write, and the obvious test —
+"a soft-deleted page cannot be confirmed, and reads as not-found" — **stays green with the read's
+filter deleted**, because the write's predicate then produces the identical answer. That is the
+`resolveRedirect` shape arriving through a read/write pair. What separates them is §8: without the
+filter the deleted row is read, `mayConfirmReview` runs against it, and a non-owner is told
+*forbidden* — a soft-deleted page answering a question about itself. `a soft-deleted page reads as
+not-found even for a viewer who could not confirm it` is the only test that kills it. The write's
+own filter has the staged test with a held row lock, since a predicate on an `updateMany` is
+invisible to anything that cannot change the row underneath it.
+
+**`readableSpace` on that same write IS an equivalent mutant** — deleting it leaves all twenty
+tests green, because the read already refused every viewer it would refuse. Reported in the module
+rather than pinned by a manufactured test, per this project's rule, and kept for consistency with
+`publish.ts`, `move.ts` and `delete.ts`, which all restate both predicates on their writes.
+
+**A zero row count returns rather than throwing, which is the difference from `publishPage`.**
+Publish throws `PageNoLongerPublishable` because by that point it has inserted a version — the
+only way out of a transaction that has written is to abort it. Nothing has been written here (the
+audit row is deliberately below the update), so an empty commit and a rollback are the same
+observable event and the caller gets the ordinary not-found instead of a 500 for a page somebody
+legitimately deleted a millisecond ago. No lock either: the only competitor is another confirm of
+the same page, and the loser's value being overwritten is two legitimate confirmations a second
+apart, both audited.
+
+**The order is two tiers and says so, rather than approximating "most overdue".** Postgres could
+produce the strict order from `coalesce("reviewedAt", "publishedAt")` and Prisma has no expression
+for it, so the honest choices were raw SQL or an order that means what it says. Never-confirmed
+first (`nulls: "first"`), then longest since confirmation, oldest first within each tier, `id`
+breaking the final tie so the cut at `MAX_DUE_ROWS` cannot shuffle between requests. The third row
+in the ordering test has an older effective date than the first, which is the point.
+
+**The overflow probe found nothing, and was counter-checked rather than trusted.** The class has
+bitten nine times and only catches what it is shown, so a 300-character `HOSTILE` title goes onto
+a page that is *due* — with a non-vacuity assertion that it reached both routes before anything is
+measured. 0px at 1280, 860 and 380. With `.landing li { overflow-wrap: anywhere }` removed the
+same probe reports `Received: 1348` at 1280px, so it measures; the existing landing rule already
+covers the new rows, and `.doc-review` is deliberately **not** `flex: none`, which is Task 3's
+ninth shape.
+
+**`e2e/review.spec.ts` asserts one thing `snapshotCounts` structurally cannot see.** A confirm
+moves a column on a row rather than creating or deleting one, so the count contract is blind to
+it — the "too narrow, and silent about it" shape, met from a new direction. Its `afterAll`
+therefore also asserts that all seven seeded pages still carry
+`reviewedAt = 2026-08-18T00:00:00.000Z`.
+
+**Phase 1's whole-file fence for `src/app/(reader)/[space]/page.tsx` is annotated, not synced.**
+Direction 3 of the drift table: a later task changed the file. Syncing would have put a §12 review
+list inside Phase 1 Task 13's scaffold. `plan:check`: **0 drifted**, with `superseded` 29 → 30 and
+`in sync` and `unmatched` both unchanged — the counts, not just the drift line.
+
+**Numbers:** 1400 vitest over 95 files (was 1364/92 — +34 tests, plus 2 from the new
+`visible.test.ts` registration, which `test.each`es twice), 83 Playwright (was 76), typecheck 0,
+build 0, `plan:check` 0 drifted, 119-check smoke passing, dev baseline unchanged at
+2 spaces / 7 pages / 7 systems / 0 page systems.
 
 ---
 
