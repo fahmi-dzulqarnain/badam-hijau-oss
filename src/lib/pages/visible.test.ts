@@ -491,6 +491,46 @@ const MODULES: Record<string, Registration> = {
       "`visibility` (spec §7: systems carry no permissions of their own), so there is no " +
       "permission predicate to state either.",
   },
+  "src/lib/systems/read.ts": {
+    load: () => import("@/lib/systems/read"),
+    // Soft-delete tests: tests/integration/systems-read.test.ts. Phase 7 Task 3's two reads, and
+    // this is the first module in the project whose page query is **not** bounded to one space —
+    // §7's system page aggregates across every space the viewer can read, by design — so what is
+    // registered here is a different shape from every entry above it.
+    //
+    // `getSystemDocumentation` makes TWO page queries: the `findMany` behind the list and the
+    // `groupBy` behind the counts. Both get their `where` from one `pageScope()` call rather than
+    // each stating the predicates again, which is deliberate and is the one place this module
+    // diverges from `index-read.ts`: that module's registration has to say its two halves are
+    // asserted separately because "with the filter dropped from the aggregate alone, the list is
+    // right and the chip beside it counts a page nobody can open". One builder makes that
+    // divergence unrepresentable — there is exactly one place either predicate can be deleted.
+    //
+    //   `visiblePage()` owns the top level of that scope, covered by "a soft-deleted page
+    //   disappears from a system's page, having been on it" — which fails in both directions,
+    //   because its first half is the non-vacuity companion.
+    //
+    //   `readableSpace` is nested as the `space` relation filter and is NOT derived the way
+    //   `src/lib/search/query.ts` derives it; that derivation is a raw-SQL workaround with a
+    //   stated cause, and these queries are Prisma. Covered by "two viewers, one URL, two
+    //   different lists", which is a **discrimination and not an absence**: both viewers see
+    //   something, neither sees the other's page, and the assertion is on the titles rather than
+    //   on a count of zero. Phase 4's non-member search was near-vacuous until it became one.
+    //
+    //   `publishedVersionId: { not: null }` is the third exclusion and the state it excludes is
+    //   unreachable from the product — `PageSystem` rows only exist because a publish wrote them,
+    //   and nothing unsets the column. It is reachable from the SCHEMA:
+    //   `Page_publishedVersionId_fkey` is `ON DELETE SET NULL`, so deleting the version row nulls
+    //   it while the facet rows survive. Covered by "a page whose published version has gone is
+    //   not listed", which constructs exactly that row shape with a direct write and says so.
+    //
+    // `listSystems` is `exempt`: it reads `System` and nothing else. That table has no
+    // `deletedAt`, no `spaceId` and no `visibility` — §7 makes a system global and
+    // permissionless — so there is neither a soft-delete filter nor a permission predicate to
+    // state, which is the same claim `src/lib/systems/resolve.ts` is registered on.
+    covered: ["getSystemDocumentation"],
+    exempt: ["listSystems"],
+  },
   "src/lib/git/worker.ts": {
     load: () => import("@/lib/git/worker"),
     // Soft-delete tests: tests/integration/git-worker.test.ts —

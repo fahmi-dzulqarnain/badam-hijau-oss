@@ -70,6 +70,45 @@ const RESERVED = "-";
 export const MIRROR_FAILURES_PATH = `/${RESERVED}/mirror` as Route;
 
 /**
+ * The systems catalogue — `/systems`, Phase 7 Task 3, spec §7 and §11.
+ *
+ * A constant for the reason `MIRROR_FAILURES_PATH` is one: three files name it (the two routes'
+ * own `requireViewer` return paths and the top bar's link), and a route address written out in
+ * four places is a route address that disagrees with itself after the next move.
+ *
+ * ## It is a top-level static segment, and it therefore shadows a space keyed `systems`
+ *
+ * The same debt `/search` already carries and `/-/mirror` measured: `Space.key` is a bare
+ * `String @unique` with no validation until Task 6, so nothing stops a space being created with
+ * this key, and Next resolves a static segment ahead of a dynamic one.
+ *
+ * **Measured, not reasoned about** — see `src/app/(reader)/systems/page.tsx` for the
+ * `routes-manifest.json` ordering and the `next start` probe against a space actually keyed
+ * `systems`. The shadow is exactly two paths wide, and Task 6 closes the window going forward.
+ *
+ * `-/systems` was available and was not taken. `/-/mirror` reserved that prefix for surfaces that
+ * are *not* space-scoped and are also not part of the product a reader navigates; §11 lists
+ * `/systems` beside `/search` as a top-level destination in the product's own navigation, and
+ * `/search` is the precedent that decides the address. Hiding a documented product surface behind
+ * the reserved punctuation to dodge a debt Task 6 pays three tasks later would trade a legible URL
+ * for two weeks of safety.
+ */
+export const SYSTEMS_PATH = "/systems" as Route;
+
+/**
+ * One system's generated page — `/systems/{key}`.
+ *
+ * `System.key` is lowercase, digits and hyphens by CHECK constraint (Task 1), so
+ * `encodeURIComponent` is the identity for every key the database can hold. It is applied anyway,
+ * for `pageHref`'s reason: the guarantee lives in a constraint this function cannot see, and a
+ * link builder that relies on a promise made elsewhere is how `Page.path` produced broken links
+ * three times before every site was routed through one function.
+ */
+export function systemHref(key: string): Route {
+  return `${SYSTEMS_PATH}/${encodeURIComponent(key)}` as Route;
+}
+
+/**
  * A page's version history — `/{space}/-/history/{path}`, spec §10.
  *
  * Built here rather than at the two call sites for the reason `pageHref` exists: this project

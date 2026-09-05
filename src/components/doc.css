@@ -1231,3 +1231,262 @@
   color: var(--ink-3);
   max-width: 66ch;
 }
+
+/*
+ * The systems catalogue and a system's generated page (Phase 7 Task 3), on `/systems` and
+ * `/systems/[key]`.
+ *
+ * In `doc.css` for the reason `.del-*`, `.rel-*`, `.q-*`, `.ver-*` and `.mir-*` all state: Phase
+ * 1 measured that a route importing its own stylesheet makes `.doc` compute `max-width: none` on
+ * a hard load and `820px` on a soft navigation to the same route, so the sheet is imported by a
+ * layout and every selector for a surface inside `.doc` lives here. Every selector is prefixed
+ * `sys-` and defined in exactly one place.
+ *
+ * `overflow-wrap: anywhere` is on every element that paints stored text, and this surface brings
+ * the overflow class its **ninth** shape: a repository URL. `.sys-repo` is an admin-typed
+ * absolute URL with `/` and `.` as its only break opportunities — `https://` plus a long GitLab
+ * group path is routinely 80+ characters with no space in it — painted in a flex row outside
+ * `.body`. Beside it the page paints a system name, a description and an owning team from the
+ * same admin, and on `/systems/[key]` a title, a path and a space name from an author in a space
+ * this viewer may never have opened. `min-width: 0` on each flex container keeps the track honest
+ * and does nothing about inline content overflowing its box — two different jobs, both needed, as
+ * `.idx-row`, `.q-row` and `.ver-row` each record.
+ */
+.sys-lead {
+  margin: 4px 0 18px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.sys-code { font-family: var(--mono); font-size: 11.5px; }
+
+.sys-empty {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.sys-back { margin: 0 0 4px; font-size: 12.5px; }
+.sys-back > a { color: var(--ink-3); text-decoration: none; }
+.sys-back > a:hover { color: var(--accent-ink); text-decoration: underline; }
+
+.sys-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.sys-list > li { border-bottom: 1px solid var(--line); }
+
+.sys-row {
+  min-width: 0;
+  padding: 13px 2px;
+  overflow-wrap: anywhere;
+}
+
+.sys-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sys-kind {
+  flex: none;
+  min-width: 10ch;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+/* `flex: 1 1 0` and not `1 1 auto`, for the fourth time in this file: an `auto` basis is the
+   content width, which for an unbreakable 300-character name is wider than the row and pushes
+   the page sideways. */
+.sys-name {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.sys-name:hover { color: var(--accent-ink); text-decoration: underline; }
+
+/* Amber, matching `.retired` and `.ver-stuck`: sunsetting is a fact to notice about the
+   documentation, not a failure. */
+.sys-sunset {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+}
+
+.sys-sunset-note {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+  max-width: 66ch;
+}
+
+.sys-desc {
+  margin: 5px 0 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 78ch;
+  overflow-wrap: anywhere;
+}
+
+.sys-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.sys-key { flex: none; font-family: var(--mono); font-size: 11px; }
+
+.sys-team { flex: none; }
+.sys-none { font-style: italic; }
+
+/*
+ * The repository. Its own line, like `.q-path` and `.idx-path`, because a URL is the longest
+ * string on the row — and `flex: 1 1 100%` with `min-width: 0` is what keeps a long one from
+ * setting the row's width.
+ *
+ * `.sys-repo-held` is the sentence rendered *instead of* a URL that embeds credentials or is not
+ * an http address. There is no URL in it: `repo-url.ts` withholds rather than redacts, so nothing
+ * here has to be styled to hide part of a string.
+ */
+.sys-repo {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+a.sys-repo:hover { text-decoration: underline; }
+
+.sys-repo-none,
+.sys-repo-held {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+.sys-group { margin: 26px 0 0; }
+
+.sys-h {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.sys-blurb {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+
+.sys-none-row {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.sys-docs {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.sys-doc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 9px 0;
+  font-size: 13.5px;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.sys-status {
+  flex: none;
+  min-width: 8.5ch;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+.sys-title {
+  flex: 1 1 0;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.sys-title:hover { color: var(--accent-ink); text-decoration: underline; }
+
+/* The space a row came from. Not a link: this page crosses spaces, and the useful destination is
+   the page itself — the space name is here so a reader knows which corpus they are being sent
+   into, which is the one thing a cross-space list has to say. */
+.sys-space {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.sys-when { flex: none; font-size: 11.5px; color: var(--ink-3); }
+
+.sys-path {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.sys-count {
+  margin: 9px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}

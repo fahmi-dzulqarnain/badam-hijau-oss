@@ -269,8 +269,19 @@
 
 /* The top bar's search link. `margin-left: auto` pushes it and the compact bug button to the
    right of the brand; `flex-shrink: 0` so a long brand can never squeeze it out of reach. */
-.topbar-search {
+/*
+ * The cross-space destinations, as a group. `margin-left: auto` moved off the link and onto this
+ * wrapper when Phase 7 added a second one: two links each claiming the far end put a gap between
+ * them that widened with the bar, and the pair is one control group rather than two placements.
+ */
+.topbar-nav {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
   margin-left: auto;
+}
+
+.topbar-search {
   flex-shrink: 0;
   padding: 5px 11px;
   border: 1px solid var(--line);
