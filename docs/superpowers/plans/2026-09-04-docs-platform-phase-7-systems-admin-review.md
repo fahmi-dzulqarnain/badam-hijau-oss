@@ -1480,16 +1480,223 @@ place to look is whatever guard derives itself from the filesystem.
 
 ---
 
-## Task 8: `/admin/bugs`
+## Task 8: `/admin/bugs` ✅
 
-**Files:** routes, `src/lib/bugs/admin.ts` + tests.
+**Files:** routes, `src/lib/bugs/admin.ts` + tests. Plus five the plan did not name:
+`src/app/api/admin/bugs/[id]/route.ts`, `src/components/AdminBugs.tsx`, an `AuditAction` value,
+`ADMIN_BUGS_PATH` and `adminBugsHref` in `src/lib/pages/href.ts`, and the `.rep-*` block in
+`src/components/doc.css`.
 
-- [ ] **Step 1: Triage over the existing vocabulary** — `BugStatus` already exists.
-- [ ] **Step 2: A report's captured context may dangle by design**
+- [x] **Step 1: Triage over the existing vocabulary** — `BugStatus` already exists.
+- [x] **Step 2: A report's captured context may dangle by design**
 
 `BugReport` deliberately holds `spaceId`/`pageId`/`versionId` **without** foreign keys, because
 their value is highest when the referenced page is gone. So this surface must render a dangling id
 without throwing, and `routePath` is the durable breadcrumb. A test with a deleted page.
+
+**`BugStatus` is not widened, and the argument that decided it is in the spec rather than in the
+schema.** §18.2 says, two paragraphs above the enum, *"This is a signal channel, not a support
+system: no threading, no replies, no notifications in alpha."* The fourth value anybody would
+reach for splits `CLOSED` into *fixed*, *won't fix* and *duplicate* — which is a resolution
+taxonomy, which is the first column of a support system. Task 1's precedent binds the same way
+(`SystemKind` was left too narrow rather than widened unilaterally), and the third reason is that
+the fourth value would not answer the question it looks like it answers: *why* a report was closed
+is prose — "duplicate of which one", "won't fix because" — and prose is a nullable `resolution`
+column, which is a migration this task was told not to make. **Stated as a gap at the module
+rather than half-built**: the durable record of a closure today is the `bug.triage` audit row, and
+it carries no reason.
+
+There is deliberately **no transition graph** either. The one-way `NEW → TRIAGED → CLOSED` somebody
+would write makes a mis-clicked `CLOSED` permanent on a table with no other repair surface —
+Task 5's argument for allowing a `System.key` rename, on a column with even less behind it. A
+reopen is one press, and `a closed report can be reopened, and every step records what it moved
+from` walks `NEW → CLOSED → TRIAGED → NEW` as a sequence rather than as three calls from `NEW`,
+because a state machine is exactly what three independent calls would not notice.
+
+**How a dangling id renders, and how it differs from a soft-deleted one.** Three kinds, and the
+middle and last are the pair the surface exists to separate — one is a `restorePage` away from
+being back, the other is the last trace a page existed. Over HTTP, in one list:
+
+| Captured `pageId` | What renders | Link |
+|---|---|---|
+| a live published page | its **title**, `engineering/<path>`, and the reader link | `href="/engineering/e2e-bug-live"` |
+| a **soft-deleted** page | its title, the path, a `Deleted` chip, and *"This page is soft-deleted, not gone: the row is still there, and restoring it brings the page, its URL and this link back."* | none |
+| an **absent** id | *"No page with this id exists any more, so the route above is the only breadcrumb left."* plus the id itself, with `routePath` above it reading `/engineering/architecture/mqtt-contracts` | none |
+
+The e2e assertion closes it from both sides: the absent row is asserted **not** to contain
+`soft-deleted, not gone`, so the two are different sentences and not one string that happens to
+fit both.
+
+**The absent case is reachable in a fixture and not through the UI, and the plan should say so
+rather than imply otherwise.** Nothing in this product hard-deletes a `Page`, a `Space` or a
+`PageVersion` — `deletePage` sets `deletedAt`, and Task 6 declined to build a space delete at all.
+So both the integration fixture and the e2e spec construct the state with an id that names no row,
+and both say why at the line. It is worth having anyway: the ids are unconstrained by
+construction, and a partial restore, a hand-run `DELETE` or a future hard delete each produce it —
+which is what the schema comment is instructing readers to tolerate.
+
+**`visiblePage` is absent and load-bearing, which is a stronger claim than Tasks 5, 6 and 7 could
+make about their own absences.** Theirs would have hidden a row; this one would **change what a
+shown row means**. `deletedAt` is *selected* and never filtered on, so mutating the resolution to
+`{ id: { in: pageIds }, deletedAt: null }` drops every soft-deleted page out of the `IN` lookup and
+reports it as **absent** — the recoverable case rendering as the lost one, which is the direction
+that loses information. Measured: `expected 'absent' to be 'found'`, one test, with the live page
+in the same assertion as the non-vacuity companion. `readableSpace` is absent for
+`src/lib/spaces/admin.ts`'s pair of reasons — inert (`readableSpaceWhere` answers `{}` for the only
+viewer past the gate) *and* wrong (an inbox with a blind spot over a closed space is one nobody can
+trust to be empty).
+
+**`versionId` is carried and deliberately not resolved.** A `PageVersion` cascades from its `Page`
+and nothing deletes one on its own, so *is the captured version still on record* has the same
+answer as *is the captured page still on record* — a second query whose result is implied by the
+first is the untestable duplicate. `the captured version id is carried through even when its page
+is absent` is what pins the id surviving; the resolution that would have been the duplicate is not
+written.
+
+**`reporterId` got no guard, and the test asserts the database rather than restating it.** It is
+the one captured identifier with a foreign key — `ON DELETE RESTRICT`, dropped and re-added by the
+Phase 1 `bug_report_retention` migration — so a null-guard on `report.reporter` would be a branch
+no state can reach, which is Task 1's ground for declining one. `the database refuses to delete a
+reporter, which is why nothing here guards for one` asserts the rejection, with a user who has
+filed nothing deleting cleanly beside it so the refusal is the reference and not a `User` row that
+can never be removed at all.
+
+**The audit decisions, and the discrimination that pins them.** Task 7 drew the line as *containers
+and integers need no row; titles and paths do*, and asserted it as one page where the reconcile
+report over a `MEMBERS` space writes 0 rows and the failures list over the same space writes 1.
+This surface lands on the failures list's side, and more heavily than it does:
+{@link listBugReports} paints a **route inside a space**, the **title** of a page in it, and the
+**name and email of the person who was reading it** — the first two are `listMirrorFailures`'s
+observable and the third is `listSpaceMembers`'s, so **one row covers both**. `setBugStatus` names
+one report by id and enumerates nothing, which is `mirror.reconcile`'s standing exactly: the
+triager read the route on the list, where the row was already written.
+
+Asserted as the same shape of discrimination, in one test: one super admin, one `MEMBERS` space
+they do not belong to and one `ALL_STAFF` space, two reports, one listing → **1** `space.access`
+row (`{key: "engineering", visibility: "MEMBERS", by: "super-admin"}`), and then a triage of that
+same report → still **1**. `handbook` contributing none is `needsAccessAudit` being called rather
+than copied. Removing the loop fails both audit tests with `expected [] to have a length of 1 but
+got +0`. A report whose captured space resolves to nothing writes none either — there is no space
+to have been read into — with the live report in the same call as the non-vacuity half.
+
+The one place it over-reports is a report captured against a space **root**, where no page title is
+painted and a row is written anyway. Left that way at the line: the rule is *a space produced a
+listed report*, and `src/lib/audit/log.ts` is explicit that over-reporting is the only direction an
+audit may fail in.
+
+**`bug.triage` is spaceless and pageless, and the reason is the missing foreign keys rather than
+`system.*`'s "there is no space".** It earns its place on `page.review`'s test — the mutation leaves
+no other trace, `BugReport.status` being one mutable column whose next write destroys the record of
+this one, and `updatedAt` saying only *when*. It would have been easy to copy `BugReport.spaceId`
+into `AuditLog.spaceId`, and **`AuditLog.spaceId` has no foreign key either, so the database would
+have accepted it** — which is the thing worth knowing, because it means nothing but this decision
+was stopping it. What it would put in the column an auditor filters by is a *different kind of
+value*: eleven actions fill it with a `Space.id` read in the same transaction, and this one would
+fill it with an unverified capture that may name nothing. `pageId` is out for the sharper version:
+everywhere else it means *this happened to that page*, and a triage happens to a report. The detail
+carries `reportId`, which resolves to a row nothing deletes.
+
+One action and not three — the opposite call from `space.member.*`, and for that decision's own
+reason. Those three are different questions asked at different moments; these are three values of
+one column moved by one control, and the question is always *what happened to this report*.
+`previousStatus` is never absent, `previousReviewedAt`'s distinction, and a reopen is legible as
+`CLOSED → TRIAGED` without an action of its own. Re-asserting the same status **still writes a
+row** (`mirror.sweep`'s standing) and is reachable only from the endpoint, because the current
+status is not a pressable control — said at the button rather than left to be discovered.
+
+**Whether a report links to its page: yes, and only when the link works** — live **and**
+`publishedVersionId`, never `publishedAt`. A link to a soft-deleted or absent page is a dead end
+the reader route answers 404 for, and a dead end offered by an admin surface is worse than no link,
+because the triager cannot tell a broken product from a taken-down page. The unpublished case is
+real rather than defensive: `resolveReportContext` sets `pageId` only through `getPublishedPage`,
+so every captured page *was* published when the report was filed, and an unpublish since is exactly
+what a bug report outlives — the row says so in its own sentence.
+
+**And the link is built by `pageHref` from the resolved page, never from `routePath` — which is a
+security line and not a style one.** `routePath` is the one field on this row the **client**
+supplies, and `src/lib/bugs/schema.ts` bounds it by a length and nothing else
+(`z.string().min(1).max(2000)`), so `javascript:…` is a storable value and an `href` would be
+script execution in an administrator's browser. That is `repoField`'s shape — the reason its
+refusal covers every `withheld` reason and not only credentials — arriving on a column nobody has
+looked at since Phase 1.
+
+**`refuseNonAdmin` reused, mutation-verified in both directions, and the sweep saw the module
+without being told.** Nine entry points across five modules now. With
+`if (viewer.isSuperAdmin) return null;` deleted, **18 of 21** in `tests/integration/bugs-admin.test.ts`
+fail, the named one being `a space ADMIN is refused by both entry points, and the super admin is
+not` → `listBugReports refused: not-found`. With the body replaced by the refusal, **2** fail the
+other way: `expected { ok: true, …(4) } to deeply equal { ok: false, reason: 'not-found' }` and
+`expected { ok: true, …(3) } to deeply equal { ok: false, reason: 'not-found' }`. Two rather than
+eighteen is the honest number — those two tests are the only ones about the guard, and there is no
+second guard that could produce their answer, because `listBugReports` has no other filter at all
+and `setBugStatus` genuinely writes the row. Dropping the *call* is caught separately by
+`src/lib/admin/gate.test.ts`: `open the function with … expected [ Array(1) ] to deeply equal []`.
+
+**The overflow probe, at a scale none of the nine shapes before it had.** `consoleError` is bounded
+at **5000 characters** and is pasted console output, so a single unbroken 5000-character line is a
+realistic value rather than a contrived one — sixteen times the 300-character `HOSTILE` every
+earlier probe used. Injected with a hostile `summary`, `routePath`, `versionId` and page title
+beside it, with the non-vacuity half asserted first (the strings are genuinely on the screen):
+**0px at 1280, 1024, 800 and 375**, page-level and then per element over `.rep-summary`,
+`.rep-route`, `.rep-console`, `.rep-ua`, `.rep-page`, `.rep-file`, `.rep-version` and `.adm-email`.
+**Counter-checked rather than trusted**, and the counter-check is inside the test rather than in
+this document: `flex: none` on `.rep-summary` reproduces **32,989px at 1280px**, seven times the
+4,660px reader overflow that started the class.
+
+`.rep-console` deliberately has **no `max-height` and no `overflow`**, which is `.mir-err`'s call
+and needed restating at this length: capping the height makes the element its own scroll container,
+`overflow-y: auto` computes `overflow-x` to `auto` with it, and a failure of the wrap would then
+show up as a scrollbar inside the box instead of as a wider document — reading 0px for the wrong
+reason, which is the exact tripwire the per-element probe exists for.
+
+**The route collision, from this build's own manifest.** `^/admin/bugs(?:/)?$` is in
+`staticRoutes`; the only addition to `dynamicRoutes` is `/api/admin/bugs/[id]`, which lives under
+`api`, and `/systems/[key]` is still ahead of `/[space]` (18 and 19, both up one). Task 5's class,
+confirmed rather than re-measured with a probe database. `searchParams` are not segments, so the
+`?status=` filter changes nothing about it. There is still no `/admin/page.tsx`; the fourth
+cross-link lives in the layout, and `e2e/admin-bugs.spec.ts` walks it and asserts `/admin` is still
+a 404.
+
+**The filter is a query string and not a segment**, which is the decision that kept the window at
+one path: three status segments would have been three more routes, three more paths, and a 404 for
+a value that is merely unknown. `parseBugStatusFilter` therefore **ignores** what it does not
+recognise — `?status=banana` is a 200 showing the whole list, asserted over HTTP.
+
+**Two things worth flagging beyond the design.**
+
+- **`raw in BugStatus` is wrong and reads best**, which is why the first version of the filter was
+  written that way. Prisma's generated enum is an ordinary object literal, so it inherits
+  `Object.prototype` and `"toString" in BugStatus` is `true` — `?status=toString` would have
+  reached Prisma as `where: { status: "toString" }`. Caught by the assertion that was written for
+  it before the code was run, and the parser is now a membership test over the values. The
+  assertion stayed, with `constructor` beside it.
+- **`routePath`, `appVersion` and `userAgent` do not go through `stripControl` and `summary`,
+  `expected`, `gitSha` and `consoleError` do.** Measured through the real schema:
+  `PROBE {"summary":"ab","routePath":"/eng\u0007ineering","appVersion":"0.1\u00070","userAgent":"Moz\u0007illa"}`.
+  That is a Phase 1 gap and not this task's — React escapes all of it and this surface renders
+  every one as text — but it has one consequence worth recording: a **NUL** in any of those three
+  is refused by Postgres (`ERROR: null character not permitted`), so `POST /api/bugs` would answer
+  500 for a report nobody could file twice. Nothing here can be blinded by a stored control
+  character, because the column cannot hold the byte that does the blinding.
+
+**Numbers:** **1574 vitest over 106 files** (was 1546/104 — +28 tests, +2 files:
+`tests/integration/bugs-admin.test.ts`, `tests/integration/bugs-admin-route.test.ts`, plus the two
+`visible.test.ts` registration cases that `test.each` twice), **109 Playwright** (was 100, +9),
+typecheck 0, build 0, `plan:check` **0 drifted** with every bucket unchanged (70 in sync · 13
+fragment · 30 superseded · 19 unmatched · 66 not code), **119-check smoke passing** and unextended —
+Task 9 owns `counts()`, and this task added no table. Dev baseline unchanged at 2 spaces / 7 pages /
+7 systems / 0 page systems / 0 git jobs / 0 bug reports, and every seeded `reviewedAt` still
+`2026-08-18`.
+
+**What in the brief turned out wrong.** One thing, and it is small: the brief's two measured facts
+both held exactly as stated (`reporterId` is `ON DELETE RESTRICT` from the retention migration, and
+`consoleError` is capped at 5000 by `src/lib/bugs/schema.ts`). What did not hold was an assumption
+this task made from them rather than from the brief — that `AuditLog.spaceId` has a foreign key,
+which would have made copying a dangling `BugReport.spaceId` into it *throw*. It does not: that
+column is a bare `String?` with no relation, so the database would have accepted the dangling id
+without complaint and the decision to leave it null is carried entirely by the argument about what
+the column means. Checked before it was written down, which is the only reason the docstring does
+not now assert a constraint that is not there.
 
 ---
 
