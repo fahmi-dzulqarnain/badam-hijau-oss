@@ -1907,3 +1907,248 @@ a.sys-repo:hover { text-decoration: underline; }
   color: var(--ink-2);
   overflow-wrap: anywhere;
 }
+
+/*
+ * The bug-report triage inbox (Phase 7 Task 8), on `/admin/bugs`.
+ *
+ * In `doc.css` for the reason `.del-*`, `.rel-*`, `.q-*`, `.ver-*`, `.mir-*`, `.sys-*`, `.adm-*`
+ * and `.git-*` all state: Phase 1 measured that a route importing its own stylesheet makes `.doc`
+ * compute `max-width: none` on a hard load and `820px` on a soft navigation to the same route, so
+ * the sheet is imported by a layout and every selector for a surface inside `.doc` lives here.
+ * Every selector is prefixed `rep-` and defined in exactly one place. The prefix is `rep-` and not
+ * `bug-` because `shell.css` already owns `.bugbtn`, `.bugdim` and `.bugcard` for the *reporting*
+ * dialog, and two surfaces about one table sharing a prefix is how a rule meant for one silently
+ * restyles the other.
+ *
+ * The buttons, notes, messages, counts and the deleted chip are `.adm-*`, reused rather than
+ * re-declared: they are the same controls doing the same job on a sibling page, and they carry the
+ * guards Task 3's ninth overflow shape earned.
+ *
+ * **This surface holds more user-controlled text than any other in the product, and one field is
+ * an order of magnitude longer than anything the class has been measured against.** `summary` and
+ * `expected` are 5000 characters each, `routePath` 2000, `userAgent` 1000 — and `consoleError` is
+ * 5000 characters of *pasted console output*, which is line-oriented text that routinely carries a
+ * single line with no break opportunity anywhere in it. `.rep-console` therefore pairs `pre-wrap`
+ * (for the newlines, which collapsing makes a stack trace unreadable) with `overflow-wrap:
+ * anywhere` (for the line that has none) — `.mir-err`'s pairing, and `pre-wrap` alone is the trap:
+ * it preserves the newlines and lets the one long line push the document sideways.
+ *
+ * So `flex: none` is reserved for values something other than a person bounds. On this page that
+ * is `.rep-status` (a `BugStatus`), `.rep-label` (four fixed words), `.rep-viewport` (a
+ * `\d+x\d+` the wire schema pins) and `.adm-refs` (an integer). Every other child of a flex row
+ * here is `flex: 1 1 auto; min-width: 0` with `overflow-wrap: anywhere`.
+ */
+.rep-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 0 0 18px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rep-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  text-decoration: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+.rep-tab:hover { color: var(--accent-ink); border-color: var(--accent); }
+.rep-on { color: var(--ink); background: var(--surface-2); border-color: var(--accent); }
+
+.rep-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.rep-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.rep-list > li { border-bottom: 1px solid var(--line); }
+
+.rep-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 2px;
+  overflow-wrap: anywhere;
+}
+
+.rep-head,
+.rep-expected,
+.rep-who,
+.rep-env,
+.rep-route-line,
+.rep-page-line,
+.rep-space-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  align-items: baseline;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rep-where {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* A `BugStatus`, which the database bounds — one of the four things on this page allowed not to
+   shrink. */
+.rep-status {
+  flex: none;
+  padding: 1px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+/* Amber for the untriaged one, matching `.retired`, `.ver-stuck` and `.mir-kind`: something is
+   waiting, and nothing is broken. */
+.rep-new { background: var(--amber-wash); border-color: var(--amber); }
+.rep-closed { color: var(--ink-3); }
+
+.rep-summary {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.rep-expected {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+/* Four fixed words this application chose — `Route`, `Page`, `Space`, `Expected`. */
+.rep-label {
+  flex: none;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.rep-route,
+.rep-file,
+.rep-version,
+.rep-id,
+.rep-space,
+.rep-build,
+.rep-ua {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.rep-version,
+.rep-id { color: var(--ink-3); }
+
+.rep-page {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+a.rep-page:hover { color: var(--accent-ink); text-decoration: underline; }
+
+.rep-gone-text,
+.rep-space-name,
+.rep-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.rep-gone .rep-gone-text { color: var(--ink-3); font-style: italic; }
+
+.rep-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+.rep-who,
+.rep-env {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* A `\d{1,5}x\d{1,5}`, pinned by a regex in `src/lib/bugs/schema.ts`. */
+.rep-viewport {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.rep-when { font-size: 11.5px; color: var(--ink-3); }
+
+/*
+ * The reporter's pasted console output — 5000 characters of it, which is the ninth overflow shape
+ * at a scale none of the eight before it had.
+ *
+ * `pre-wrap` because it is line-oriented and collapsing it makes a stack trace unreadable;
+ * `anywhere` because one of those lines routinely has no break opportunity at all and `pre-wrap`
+ * on its own would widen the document by the length of it. Exactly `.mir-err`'s pairing, and for
+ * exactly its reason.
+ */
+.rep-console {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  /*
+   * **No `max-height` and no `overflow`, deliberately**, which is `.mir-err`'s call over git's
+   * stderr and is worth restating because 5000 characters is a taller box than that one.
+   *
+   * Capping the height would make this element its own scroll container, and `overflow-y: auto`
+   * computes `overflow-x` to `auto` with it — so a failure of the wrap above would show up as a
+   * scrollbar inside the box instead of as a wider document, and `e2e/admin-bugs.spec.ts`'s
+   * measurement would read 0 for the wrong reason. That is exactly the tripwire that spec's own
+   * per-element probe exists for. A tall admin page is the cost of a guard that can still fail
+   * visibly.
+   */
+}

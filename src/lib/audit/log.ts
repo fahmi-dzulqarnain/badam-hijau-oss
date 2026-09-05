@@ -150,7 +150,39 @@ export type AuditAction =
    * with ids in the range this row records, which is the join that answers it honestly.
    */
   | "mirror.sweep"
-  | "mirror.reconcile";
+  | "mirror.reconcile"
+  /**
+   * Triage on `/admin/bugs` — spec §18.2's `NEW | TRIAGED | CLOSED`, Phase 7 Task 8. **The first
+   * audited mutation on `BugReport`**, and the last action this phase adds.
+   *
+   * It earns its place on `page.review`'s test, which is the strictest one in this union: the
+   * mutation leaves **no other trace**. `BugReport.status` is a single mutable column, so the next
+   * triage overwrites the record of this one, and `updatedAt` moves with it while saying only
+   * *when* — never *who*, and never *from what*. PROGRESS records bug reporting as "the one
+   * mutation in the product that writes no audit row"; that stays true of the *report*, which is
+   * an act by its own subject, and stops being true of the triage, which is an administrator
+   * deciding something about somebody else's report.
+   *
+   * One action rather than three (`bug.triage`, not `.new`/`.triaged`/`.closed`), which is the
+   * opposite call from `space.member.*` and for that decision's own reason. Those three are
+   * different *questions* asked at different moments — who was granted access, who lost it, who
+   * was promoted — and collapsing them makes each a JSON predicate over an unindexed column. These
+   * are three values of one column moved by one control, and the question an auditor asks is
+   * always the same one: *what happened to this report*. `status` and `previousStatus` are on the
+   * detail, both always present, and a reopen is legible as `CLOSED → TRIAGED` rather than needing
+   * an action of its own.
+   *
+   * **Spaceless and pageless, and here the reason is the missing foreign keys rather than
+   * `system.*`'s "there is no space".** A report *does* capture a `spaceId` and a `pageId` — and
+   * captures them deliberately **without foreign keys**, so either may name a row that is not
+   * there. `AuditLog.spaceId` has no foreign key either, so copying one across would be accepted
+   * by the database and would put a different *kind* of value in the column an auditor filters
+   * by: every other action fills it with a `Space.id` read in the same transaction, and this one
+   * would fill it with an unverified capture. `pageId` is worse — everywhere else it means *this
+   * happened to that page*, and a triage happens to a report. The detail carries `reportId`
+   * instead, which resolves to a row nothing deletes and which holds every captured value.
+   */
+  | "bug.triage";
 
 /**
  * Whatever can write the row. Structural on purpose, so the same helper serves the five

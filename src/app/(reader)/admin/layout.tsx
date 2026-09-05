@@ -2,11 +2,17 @@ import Link from "next/link";
 import "@/components/shell.css";
 import "@/components/doc.css";
 import { buildInfo } from "@/lib/version/build";
-import { ADMIN_GIT_PATH, ADMIN_SPACES_PATH, ADMIN_SYSTEMS_PATH } from "@/lib/pages/href";
+import {
+  ADMIN_BUGS_PATH,
+  ADMIN_GIT_PATH,
+  ADMIN_SPACES_PATH,
+  ADMIN_SYSTEMS_PATH,
+} from "@/lib/pages/href";
 import { TopBar } from "@/components/TopBar";
 
 /**
- * The shell for `/admin/*` — Phase 7's four administration surfaces, spec §11.
+ * The shell for `/admin/*` — Phase 7's four administration surfaces, spec §11, all four of them
+ * built by Tasks 5 to 8.
  *
  * A layout and not the page, because that is where a stylesheet may be imported: Phase 1 measured
  * that a route importing its own CSS makes `.doc` compute `max-width: none` on a hard load and
@@ -33,8 +39,8 @@ import { TopBar } from "@/components/TopBar";
  *
  * ## The cross-links are here, and they are the affordance an `/admin` index would otherwise be
  *
- * Task 6 added the second leaf and Task 7 the third, and two surfaces with nothing linking between
- * them is how the second one gets found by nobody — this project has shipped a feature with no way
+ * Task 6 added the second leaf, Task 7 the third and Task 8 the fourth, and two surfaces with
+ * nothing linking between them is how the second one gets found by nobody — this project has shipped a feature with no way
  * to reach it twice (`movePage`, `/search`), and Task 3 added `/systems` to the top bar in the task
  * that built it rather than discovering the gap a third time. An `/admin` index page would be the
  * obvious home for these links and is deliberately still not built: **a layout without a page creates no
@@ -59,6 +65,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             history, which is where Phase 5's one affordance lived: an operator who wants to know
             whether the mirror is behind should not have to find a page that is. */}
         <Link href={ADMIN_GIT_PATH}>Git mirror</Link>
+        {/* Task 8, and the fourth leaf. Phase 1 shipped the rail's Report bug button with nowhere
+            for the reports to be read; this link is the other end of it, and it is in the nav for
+            the same reason the mirror's is — a triage inbox nobody can find is an inbox that is
+            always empty. */}
+        <Link href={ADMIN_BUGS_PATH}>Bug reports</Link>
       </nav>
       {children}
     </>

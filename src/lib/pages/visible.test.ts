@@ -804,6 +804,44 @@ const MODULES: Record<string, Registration> = {
   "src/lib/auth/config.ts": { reachesPage: false, why: "queries User only, to resolve a sign-in" },
   "src/lib/users/upsert.ts": { reachesPage: false, why: "upserts User from an OIDC profile" },
   "src/lib/users/viewer.ts": { reachesPage: false, why: "reads User and its memberships" },
+  "src/lib/bugs/admin.ts": {
+    load: () => import("@/lib/bugs/admin"),
+    // Soft-delete tests: tests/integration/bugs-admin.test.ts. Phase 7 Task 8's `/admin/bugs`, and
+    // the registration is `src/lib/systems/admin.ts`'s and `src/lib/spaces/admin.ts`'s shape —
+    // **this module reads `Page` rows with NO soft-delete filter, deliberately** — but the reason
+    // is the sharpest of the three, because here the filter would not merely hide a row, it would
+    // change what a *shown* row means.
+    //
+    //   `listBugReports` resolves `BugReport.pageId` with `db.page.findMany({ where: { id: { in:
+    //   … } } })`. The captured ids carry **no foreign keys** (the schema says at length why: they
+    //   are worth most when the page is gone), so this resolution has three legal answers — a live
+    //   page, a soft-deleted one, and no row at all — and the surface's whole job in Step 2 is to
+    //   tell the last two apart. `deletedAt` is therefore SELECTED and never filtered on.
+    //
+    //   `visiblePage()` here would be WRONG in the direction that loses information: every
+    //   soft-deleted page would drop out of the `IN` lookup and be reported as **absent**, so a
+    //   document one `restorePage` away from being back would read identically to one that no
+    //   longer exists. Covered by "a soft-deleted page and an absent one are two different
+    //   answers", which asserts both kinds in one call with a live page beside them as the
+    //   non-vacuity companion — mutating in `deletedAt: null` fails it on the middle row.
+    //
+    //   `readableSpace` is absent from the whole module and would be inert AND wrong, the pair
+    //   `src/lib/spaces/admin.ts` states: inert because `readableSpaceWhere` answers `{}` for the
+    //   only viewer that gets past `refuseNonAdmin`, and wrong because a report filed against a
+    //   space the administrator does not belong to is still a bug in this installation — an inbox
+    //   with a blind spot is one nobody can trust to be empty.
+    //
+    //   `setBugStatus` reaches no `Page` row at all: it reads and writes one `BugReport` by id.
+    //   It is listed as covered rather than exempt because this registration is per MODULE and the
+    //   per-export list below has no third bucket; what pins its own absences is the audit
+    //   discrimination in the same file (the triage writes no `space.access` row while the list
+    //   over the same fixture writes one).
+    //
+    //   `parseBugStatusFilter` and `bugTriageBody` are pure — a query-string parse and a Zod
+    //   object — and are exempt below.
+    covered: ["listBugReports", "setBugStatus"],
+    exempt: ["parseBugStatusFilter"],
+  },
   "src/lib/bugs/create.ts": {
     reachesPage: false,
     why:

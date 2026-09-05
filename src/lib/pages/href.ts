@@ -1,4 +1,5 @@
 import type { Route } from "next";
+import type { BugStatus } from "@prisma/client";
 
 /**
  * The single place a reader link is built from a space key and a `Page.path`.
@@ -157,6 +158,44 @@ export const ADMIN_SPACES_PATH = "/admin/spaces" as Route;
 export const ADMIN_GIT_PATH = "/admin/git" as Route;
 
 /**
+ * The bug-report triage surface — `/admin/bugs`, Phase 7 Task 8, spec §11 and §18.2's *"listed for
+ * admins at `/admin/bugs`"*.
+ *
+ * A constant for `ADMIN_SYSTEMS_PATH`'s reason: the route's own `requireViewer` return path, the
+ * layout's cross-links and the endpoint below it all name this address.
+ *
+ * **The fourth and last leaf**, so this is where the `admin` window stops widening for this phase.
+ * Fully static, two literal segments, so `routes-manifest.json` puts it in `staticRoutes` and adds
+ * nothing to `dynamicRoutes` — Task 5's measured class, and one more path lost by a hypothetical
+ * space keyed `admin`, whose landing page still survives because there is still no
+ * `/admin/page.tsx`. Four leaves now index each other from the layout, which creates no route; an
+ * `/admin` index would be the fifth path and would take the landing page with it, and Task 9 is
+ * where a decision about one belongs.
+ *
+ * The page reads a `?status=` filter, which changes none of that: `searchParams` are not segments,
+ * so nothing about the manifest or the collision depends on them.
+ */
+export const ADMIN_BUGS_PATH = "/admin/bugs" as Route;
+
+/**
+ * `/admin/bugs`, optionally filtered to one status.
+ *
+ * A function rather than a template literal at each of the four call sites, for `pageHref`'s
+ * reason: **every link to a thing goes through one function**, because the moment there are two
+ * they disagree — the draft-is-inert rule and the path-encoding rule were each honoured by two
+ * link sites and quietly dropped by the third. Here the divergence waiting to happen is the
+ * *unfiltered* case, which is `ADMIN_BUGS_PATH` with no query string at all and not `?status=`.
+ *
+ * `BugStatus` is an enum of three uppercase words, so nothing needs encoding — and it is encoded
+ * anyway, for the reason `pageHref` states: the guarantee lives in a Prisma enum this function
+ * cannot see.
+ */
+export function adminBugsHref(status: BugStatus | null): Route {
+  if (status === null) return ADMIN_BUGS_PATH;
+  return `${ADMIN_BUGS_PATH}?status=${encodeURIComponent(status)}` as Route;
+}
+
+/**
  * **Every top-level static route segment in this application**, and therefore every word a
  * `Space.key` must not be — Phase 7 Task 6.
  *
@@ -168,7 +207,7 @@ export const ADMIN_GIT_PATH = "/admin/git" as Route;
  * | Segment | What a space keyed this loses | Measured by |
  * |---|---|---|
  * | `systems` | its landing page **and every depth-one path**, each 404ing rather than falling through — `/systems/[key]` sits in `dynamicRoutes` ahead of `/[space]`, and `[key]` matches any single segment. Depth two and below survive. | Task 3 |
- * | `admin` | exactly one path per leaf below it (`systems`, `spaces`, `git`, and Task 8's one) — fully static, nothing in `dynamicRoutes`, and no `/admin` index, so the landing page survives | Task 5 |
+ * | `admin` | exactly one path per leaf below it (`systems`, `spaces`, `git`, `bugs`) — all four fully static, nothing in `dynamicRoutes`, and no `/admin` index, so the landing page survives | Task 5 |
  * | ~~`-`~~ | ~~one path (`mirror`)~~ — **no longer a top-level segment**: Task 7 absorbed `/-/mirror` into `/admin/git` and deleted the directory, so this row is history and the entry is gone from the list below | Phase 5 Task 8 |
  * | `search`, `new`, `edit`, `api` | not separately measured; `search` and `new` are the `-` shape (a static leaf, or a static segment with a dynamic child in `edit`'s case) | — |
  *
@@ -235,7 +274,7 @@ export const RESERVED_TOP_LEVEL_SEGMENTS: readonly string[] = [
   // that `validateSlug` refused, so with it gone a slug rule closes **none** of the six that
   // remain. Phase 5's "one rule" promise is not merely off by six now; it is off by all of them.
   //
-  // `src/app/(reader)/admin` — `/admin/systems`, `/admin/spaces`, `/admin/git`, and Task 8.
+  // `src/app/(reader)/admin` — `/admin/systems`, `/admin/spaces`, `/admin/git`, `/admin/bugs`.
   "admin",
   // `src/app/api` — every endpoint in the product.
   "api",
