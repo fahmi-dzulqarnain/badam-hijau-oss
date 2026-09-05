@@ -127,6 +127,102 @@ export const SYSTEMS_PATH = "/systems" as Route;
 export const ADMIN_SYSTEMS_PATH = "/admin/systems" as Route;
 
 /**
+ * The space administration surface — `/admin/spaces`, Phase 7 Task 6, spec §11.
+ *
+ * `ADMIN_SYSTEMS_PATH`'s reasons, and it is the **fifth** path in the window a space keyed `admin`
+ * would lose: `/admin/systems` was the first, this is the second leaf, and Tasks 7 and 8 add two
+ * more. Fully static, so the cost is one path each and the landing page survives — there is still
+ * no `/admin/page.tsx`.
+ *
+ * That window is now closed **going forward** by {@link RESERVED_TOP_LEVEL_SEGMENTS} below, which
+ * `validateSpaceKey` refuses against. It is not closed retroactively; see `src/lib/spaces/key.ts`
+ * for exactly what a key created before Task 6 can still do.
+ */
+export const ADMIN_SPACES_PATH = "/admin/spaces" as Route;
+
+/**
+ * **Every top-level static route segment in this application**, and therefore every word a
+ * `Space.key` must not be — Phase 7 Task 6.
+ *
+ * A `Space.key` is the first segment of `/{space}` and `/{space}/{...path}`. Next matches a static
+ * segment ahead of a dynamic one, so a space whose key is one of these words loses paths to the
+ * route that owns the word. Three phases measured the cost against a real `next build` and
+ * `next start` rather than reasoning about it, and it is **not uniform**:
+ *
+ * | Segment | What a space keyed this loses | Measured by |
+ * |---|---|---|
+ * | `systems` | its landing page **and every depth-one path**, each 404ing rather than falling through — `/systems/[key]` sits in `dynamicRoutes` ahead of `/[space]`, and `[key]` matches any single segment. Depth two and below survive. | Task 3 |
+ * | `admin` | exactly one path per leaf below it (`systems`, `spaces`, and Tasks 7–8's two) — fully static, nothing in `dynamicRoutes`, and no `/admin` index, so the landing page survives | Task 5 |
+ * | `-` | one path (`mirror`) | Phase 5 Task 8 |
+ * | `search`, `new`, `edit`, `api` | not separately measured; `search` and `new` are the `-` shape (a static leaf, or a static segment with a dynamic child in `edit`'s case) | — |
+ *
+ * ## Phase 5 objected to exactly this list, and the objection does not survive being made concrete
+ *
+ * `MIRROR_FAILURES_PATH` above argues that reserving `-` "costs that phase one rule, where
+ * reserving `admin`, `mirror`, `search` and whatever comes next costs it a list that grows with
+ * every route". Three things are wrong with that, and only the first is obvious:
+ *
+ * 1. **The measurement it rests on is off by six.** The claim was that reserving `-` makes the fix
+ *    "a rule the product already states — `validateSlug` refuses a leading `-`". Run over the
+ *    seven segments that actually exist, `validateSlug` **accepts six of them**: `admin`, `api`,
+ *    `search`, `systems`, `edit` and `new` are all legal slugs, and only `-` is refused. So a slug
+ *    rule closes one collision in seven. `src/lib/spaces/key.test.ts` asserts that count rather
+ *    than repeating this sentence, so it cannot rot.
+ * 2. **The list does not grow with every route; it grows with every top-level *segment*.** A space
+ *    key is exactly one segment, so `/admin/spaces` and `/systems/[key]` cannot shadow one at all —
+ *    only a new directory directly under `src/app` can. There have been seven in six phases, and
+ *    each one was already a decision somebody wrote a docstring about (this file holds three of
+ *    them). The true rate is about one per phase, not one per route.
+ * 3. **"A list that grows" is only a cost if it is maintained by attention**, and this project
+ *    stopped maintaining rules that way six widenings ago. `src/lib/spaces/key.test.ts` derives
+ *    the segments from the `src/app` directory and fails when this constant disagrees, exactly as
+ *    `src/lib/admin/gate.test.ts` sweeps for an admin module that forgot `refuseNonAdmin` and
+ *    `src/lib/pages/visible.test.ts` sweeps for an unregistered query. Adding a top-level route
+ *    without deciding about the collision is therefore a **failing test**, not a thing to
+ *    remember — which is the only form in which a growing list is affordable, and the form Phase 5
+ *    did not consider.
+ *
+ * The alternatives were weighed against the same three surfaces and lost. *Moving the routes*
+ * under `-/` was already refused for `/systems` on §11 grounds ("hiding a documented product
+ * surface behind the reserved punctuation"), and it cannot move `api`. *Accepting the collision*
+ * means a published page that exists in Postgres and in the git mirror answers 404 — Task 3
+ * measured a whole depth-one level of a space disappearing that way. *Delegating to `validateSlug`*
+ * is the measurement in (1).
+ *
+ * ## What this is not
+ *
+ * **It is not in the database.** `Space_key_shape` constrains the character class, because that is
+ * a property of the column that every writer must obey and that `mirrorPathOf` and the folded
+ * `@unique` both stand on. A route list is a property of *this application's URL space*, it
+ * changes when a directory is added, and encoding it in SQL would be a predicate stated twice with
+ * the copy that mattered untestable — the split `validateSystemKey` makes against
+ * `System_key_shape`, one rule further along.
+ *
+ * The consequence, stated rather than left to be found: a key written by a hand-run `UPDATE`, a
+ * future importer, or a row that predates Task 6 can still be a reserved word. The CHECK stops
+ * none of that, and this list stops only what goes through `validateSpaceKey`.
+ */
+export const RESERVED_TOP_LEVEL_SEGMENTS: readonly string[] = [
+  // `src/app/(reader)/-` — refused by shape long before it reaches this list (a leading hyphen is
+  // `validateSlug`'s `reserved-prefix` and the CHECK anchors both ends on an alphanumeric). Listed
+  // anyway, because this constant's job is to be the truth about the routes rather than the
+  // shortest list that happens to work today, and the sweep compares it against the directory.
+  RESERVED,
+  // `src/app/(reader)/admin` — `/admin/systems`, `/admin/spaces`, and Tasks 7 and 8.
+  "admin",
+  // `src/app/api` — every endpoint in the product.
+  "api",
+  // `src/app/(editor)/edit` — `/edit/[pageId]`.
+  "edit",
+  // `src/app/(editor)/new`.
+  "new",
+  // `src/app/(reader)/search` — Phase 4, and the first shadowing route in the product.
+  "search",
+  // `src/app/(reader)/systems` — Phase 7 Task 3, and the widest of the seven.
+  "systems",
+];
+
+/**
  * One system's generated page — `/systems/{key}`.
  *
  * `System.key` is lowercase, digits and hyphens by CHECK constraint (Task 1), so

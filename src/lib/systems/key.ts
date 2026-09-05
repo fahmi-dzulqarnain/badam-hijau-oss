@@ -1,8 +1,7 @@
 import {
   SLUG_MAX_LENGTH,
-  validateSlug,
-  type PathErrorCode,
-  type SlugErrorCode,
+  validateUrlSegment,
+  type UrlSegmentErrorCode,
 } from "@/lib/pages/slug";
 
 /**
@@ -51,8 +50,18 @@ import {
  *
  * `validateSlug` permits `adrs-`; the CHECK does not, because `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
  * anchors both ends on an alphanumeric. That asymmetry is not an accident of this task — it is
- * Task 1's, and it is why this cannot simply *be* `validateSlug`. The extra check runs after the
- * delegation, so everything `validateSlug` classifies more specifically still wins.
+ * Task 1's, and it is why this cannot simply *be* `validateSlug`.
+ *
+ * **That rule moved out of this file in Task 6, and only the sentences stayed.** It is now
+ * `validateUrlSegment` in `src/lib/pages/slug.ts`, because `Space.key` obeys the identical
+ * predicate — `Space_key_shape` is `System_key_shape`'s regex, character for character — and needs
+ * a different set of sentences. Leaving it here would have meant a *space* key asking a
+ * *system*-key function for a decision that has nothing to do with systems, or one rule written
+ * out twice; this project moved `stripControl` out of `src/lib/bugs/schema.ts` on the same
+ * grounds. Nothing about the decision changed: `validateUrlSegment` is this file's old body with
+ * the sentences removed, and `src/lib/systems/key.test.ts` still runs the migration's own
+ * re-typed regex over the same corpus, so a divergence between the two independent statements of
+ * the rule is still what that test is for.
  */
 
 /**
@@ -82,12 +91,13 @@ export const SYSTEM_KEY_MAX_LENGTH = SLUG_MAX_LENGTH;
  *
  * Every `SlugErrorCode` is reachable through the delegation below except `reserved-prefix`, which
  * is folded into `hyphen-edge` — a leading hyphen and a trailing one are one rule here and get
- * one sentence. `hyphen-edge` is this module's own, and it is the rule Task 1's CHECK has that a
- * slug does not.
+ * one sentence. `hyphen-edge` is the rule Task 1's CHECK has that a slug does not.
+ *
+ * `path-too-long` is excluded here and handled in `messageFor` below: it belongs to `validatePath`
+ * over an assembled path, `validateUrlSegment` cannot produce it, and folding it into the length
+ * sentence is what keeps that switch exhaustive without a cast.
  */
-export type SystemKeyErrorCode =
-  | Exclude<SlugErrorCode, "reserved-prefix">
-  | "hyphen-edge";
+export type SystemKeyErrorCode = Exclude<UrlSegmentErrorCode, "path-too-long">;
 
 export type SystemKeyError = {
   field: "key";
@@ -119,7 +129,7 @@ const reject = (code: SystemKeyErrorCode, message: string): SystemKeyValidation 
  * gets quietly given up: it folds into the length sentence, which is the true thing to say about
  * a value too long for a segment however the length was measured.
  */
-function messageFor(code: SlugErrorCode | PathErrorCode, key: string): SystemKeyValidation {
+function messageFor(code: UrlSegmentErrorCode, key: string): SystemKeyValidation {
   switch (code) {
     case "empty":
       return reject(
@@ -127,10 +137,10 @@ function messageFor(code: SlugErrorCode | PathErrorCode, key: string): SystemKey
         "Enter a key. It is the URL segment at /systems/… and the token authors write in " +
           "`systems:` frontmatter.",
       );
-    // Folded with the trailing case below: one rule, one sentence. `validateSlug` calls this
-    // `reserved-prefix` and explains application routes, which is a different reason for a
-    // different surface.
-    case "reserved-prefix":
+    // One rule, one sentence, and `validateUrlSegment` has already folded the leading-hyphen case
+    // into it — `validateSlug` calls that `reserved-prefix` and explains application routes, which
+    // is a different reason for a different surface.
+    case "hyphen-edge":
       return hyphenEdge();
     case "too-long":
     case "path-too-long":
@@ -192,14 +202,10 @@ function hyphenEdge(): SystemKeyValidation {
  * itself is authored here and is held to the column's own shape.
  */
 export function validateSystemKey(key: string): SystemKeyValidation {
-  const asSlug = validateSlug(key);
-  if (!asSlug.ok) return messageFor(asSlug.error.code, key);
-
-  // The one rule the slug vocabulary does not carry, and the reason this is not simply
-  // `validateSlug` under another name. Last, so every more specific classification above wins:
-  // `-` alone is `reserved-prefix` (folded to this same sentence) rather than reaching here, and
-  // `a b-` is `whitespace`.
-  if (key.endsWith("-")) return hyphenEdge();
+  // The whole decision, in `src/lib/pages/slug.ts` where `Space.key` reaches it too. Everything
+  // below this line is wording.
+  const segment = validateUrlSegment(key);
+  if (!segment.ok) return messageFor(segment.code, key);
 
   return { ok: true, key };
 }

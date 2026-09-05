@@ -148,6 +148,71 @@ export function validateSlug(slug: string): SlugValidation {
 }
 
 /**
+ * Why a **URL segment** was rejected — the shape two database CHECK constraints already state.
+ *
+ * `reserved-prefix` is gone and `hyphen-edge` replaces it: `validateSlug` refuses a *leading*
+ * hyphen because `/{space}/-/adrs` is a real route, which is a fact about page paths and about
+ * nothing else. `System_key_shape` and `Space_key_shape` both anchor **both** ends on an
+ * alphanumeric, so for a key the leading and the trailing hyphen are one rule and get one code.
+ *
+ * `PathErrorCode` stays in the union rather than being excluded, because `FieldError.code` is
+ * declared over both vocabularies: callers that switch exhaustively (`src/lib/systems/key.ts`,
+ * `src/lib/spaces/key.ts`) handle it rather than casting it away, and a cast is how an
+ * exhaustiveness guarantee gets quietly given up.
+ */
+export type UrlSegmentErrorCode =
+  | Exclude<SlugErrorCode, "reserved-prefix">
+  | PathErrorCode
+  | "hyphen-edge";
+
+export type UrlSegmentValidation = { ok: true } | { ok: false; code: UrlSegmentErrorCode };
+
+/**
+ * **One lowercase URL segment, both ends alphanumeric** — the predicate behind every `key` column
+ * a person types into, and the decision *without a sentence*.
+ *
+ * Extracted here when the second caller arrived, which is Phase 7 Task 6. Task 5 wrote this rule
+ * inside `src/lib/systems/key.ts` as `validateSlug` plus one trailing-hyphen check, and said in as
+ * many words why it could not simply *be* `validateSlug`: the slug vocabulary permits `adrs-` and
+ * the CHECK does not. `Space.key` needs the identical rule and a different set of sentences, so
+ * leaving it in the systems module would have meant either a space key asking a *system*-key
+ * function for a decision that has nothing to do with systems, or the rule written out twice. This
+ * project's answer to the second is on record — the control-character strip lived in
+ * `src/lib/bugs/schema.ts` until a second caller needed it and moved it to `src/lib/text/control.ts`.
+ *
+ * It lives in `slug.ts` rather than in a module of its own because it is `validateSlug`'s
+ * character class with one rule added, and splitting the class from its one extra clause across
+ * two files is how the two drift. `validateSlug` itself is untouched: page slugs still permit a
+ * trailing hyphen, which is the asymmetry this function exists to express rather than to erase.
+ *
+ * **No message, deliberately.** The whole reason there are two callers is that the same rule needs
+ * two vocabularies — a system key is "the URL segment at /systems/… and the token authors write in
+ * `systems:` frontmatter", a space key is the first segment of every URL in a space — so a
+ * sentence written here would be wrong on at least one of the surfaces. Each caller maps the code
+ * to its own sentence over a `switch` with no `default`, so a rule added to `validateSlug` is a
+ * compile error at both of them.
+ *
+ * **Not trimmed**, `validateSlug`'s standing rule: `" order-hub"` answers `whitespace` rather than
+ * silently becoming a key the person never typed.
+ */
+export function validateUrlSegment(value: string): UrlSegmentValidation {
+  const asSlug = validateSlug(value);
+  // The fold. A leading hyphen reaches here as `reserved-prefix`, whose sentence is about
+  // application routes under a space — true of `/{space}/-/adrs`, and not what is wrong with a
+  // key. It is the same rule as the trailing case below and gets the same code.
+  if (!asSlug.ok) {
+    const { code } = asSlug.error;
+    return { ok: false, code: code === "reserved-prefix" ? "hyphen-edge" : code };
+  }
+
+  // Last, so every more specific classification above wins: `-` alone is `reserved-prefix` (folded
+  // to this same code) rather than reaching here, and `a b-` is `whitespace`.
+  if (value.endsWith("-")) return { ok: false, code: "hyphen-edge" };
+
+  return { ok: true };
+}
+
+/**
  * The path a new child page gets: `slug` at the top level, `parent.path + "/" + slug`
  * beneath one.
  *
