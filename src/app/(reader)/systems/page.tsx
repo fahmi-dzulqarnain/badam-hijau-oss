@@ -20,22 +20,28 @@ import { SystemRepo } from "@/components/SystemRepo";
  * `/-/mirror` and this task measured it the same way, against a real `next build` and
  * `next start` with a space actually keyed `systems` holding two published pages:
  *
- * - `routes-manifest.json` lists `^/systems(?:/)?$` and `^/systems/([^/]+?)(?:/)?$` **before**
- *   `^/([^/]+?)(?:/)?$` and `^/([^/]+?)/(.+?)(?:/)?$`.
- * - `/systems` answered `200` with this page — the catalogue, not the space landing.
- * - `/systems/store-ios` answered `200` with the system page, shadowing that space's page at
- *   `store-ios`.
- * - `/systems/deep/page` answered `200` with the **space's** page, because `[key]` matches one
- *   segment and `[...path]` catches the rest.
- * - `/systems/no-such-system` answered `404`, and a page genuinely at that path in the space is
- *   unreachable — the shadow does not fall through to the dynamic route on a miss.
+ * - `routes-manifest.json` puts `^/systems(?:/)?$` in **`staticRoutes`**, which is matched ahead
+ *   of every dynamic route, and `/systems/[key]` at index 11 of `dynamicRoutes` — **before**
+ *   `/[space]` at 12 and `/[space]/[...path]` at 17.
+ * - `/systems` → `200`, this catalogue. The space's landing page is unreachable.
+ * - `/systems/store-ios` → `200`, the system page, over that space's published page at `store-ios`.
+ * - `/systems/ordinary` → **`404`**, for a published page that genuinely exists at `ordinary` in
+ *   that space. So does `/systems/deep`, whose page has children.
+ * - `/systems/no-such-system` → `404`.
+ * - `/systems/deep/page` → `200`, the **space's** own page at depth two.
  *
- * **So the window is exactly two paths deep, not one**, which is where this differs from
- * `/-/mirror`: `/systems` costs such a space its landing page, and `/systems/<one segment>` costs
- * it every page at depth one — including, and this is the part worth stating, pages that *exist*,
- * which answer 404 rather than falling through. Anything deeper is untouched. Task 6 validates
- * `Space.key` and makes new collisions unreachable; it does not retro-validate, so a space keyed
- * `systems` created before it still loses these paths, and no space is keyed `systems` today.
+ * **The window is wider than `/-/mirror`'s and the difference is the shape, not the depth.** That
+ * route cost a space keyed `-` exactly one URL, because `/-/welcome` still answered with the
+ * space's page. Here the shadowing segment is `[key]`, which matches *any* single segment — so a
+ * space keyed `systems` loses its landing page and **every page at depth one**, while everything
+ * at depth two and below is untouched. The part worth stating separately is the `404`: a shadowed
+ * path does **not** fall through to the dynamic route when the system key misses, so those pages
+ * are not merely outranked, they are gone.
+ *
+ * Task 6 validates `Space.key` and makes new collisions unreachable; it does not retro-validate,
+ * so a space keyed `systems` created before it would still lose those paths. **No space is keyed
+ * `systems` today** — the two that exist are `engineering` and `handbook` — so the window is
+ * empty in practice and closes for good three tasks from now.
  */
 export default async function SystemsCataloguePage() {
   await requireViewer(SYSTEMS_PATH);

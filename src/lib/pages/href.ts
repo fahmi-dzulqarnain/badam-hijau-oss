@@ -84,7 +84,10 @@ export const MIRROR_FAILURES_PATH = `/${RESERVED}/mirror` as Route;
  *
  * **Measured, not reasoned about** — see `src/app/(reader)/systems/page.tsx` for the
  * `routes-manifest.json` ordering and the `next start` probe against a space actually keyed
- * `systems`. The shadow is exactly two paths wide, and Task 6 closes the window going forward.
+ * `systems`. The shadow costs such a space its landing page and **every path at depth one**,
+ * which is wider than `/-/mirror`'s one URL because `[key]` matches any single segment; depth two
+ * and below is untouched, and a shadowed path 404s rather than falling through. Task 6 closes the
+ * window going forward, and no space is keyed `systems` today.
  *
  * `-/systems` was available and was not taken. `/-/mirror` reserved that prefix for surfaces that
  * are *not* space-scoped and are also not part of the product a reader navigates; §11 lists

@@ -1368,9 +1368,29 @@
   overflow-wrap: anywhere;
 }
 
-.sys-key { flex: none; font-family: var(--mono); font-size: 11px; }
+/*
+ * **None of these three is `flex: none`, and that is the ninth shape of the overflow class —
+ * caught by the injection probe, at 515px on a 1280px viewport, before this file said any of
+ * this.** `overflow-wrap: anywhere` cannot break a token inside a box that is not allowed to
+ * shrink: `flex: none` is `0 0 auto`, so the basis is the content width and a 300-character
+ * owning team sets the row's width and the document's with it. The rule the row above them
+ * already follows for `.sys-name` — `flex: 1 1 0`, never `1 1 auto` — is the same lesson from
+ * the other end, and `.q-space` next door survives only because it never declared `flex` at all.
+ *
+ * So `flex: none` here is reserved for the values the *database* bounds: `.sys-kind` is a
+ * `SystemKind` enum, `.sys-status` a `DocStatus`, `.sys-when` a formatted date. Everything a
+ * person typed shrinks. `.sys-key` is in this group and not the bounded one deliberately —
+ * Task 1's CHECK constrains `System.key`'s character class and explicitly **defers its length
+ * cap to Task 5**, so today it is an unbounded lowercase string.
+ */
+.sys-key {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
 
-.sys-team { flex: none; }
+.sys-team { min-width: 0; overflow-wrap: anywhere; }
 .sys-none { font-style: italic; }
 
 /*
@@ -1467,7 +1487,7 @@ a.sys-repo:hover { text-decoration: underline; }
    the page itself — the space name is here so a reader knows which corpus they are being sent
    into, which is the one thing a cross-space list has to say. */
 .sys-space {
-  flex: none;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--ink-3);
   overflow-wrap: anywhere;

@@ -36,10 +36,16 @@ import { SystemRepo } from "@/components/SystemRepo";
  * Every string on this page is typed by a person: the system's name, description and owning team
  * by an admin, and each row's title, path and space name by an author, in a space this viewer may
  * be reading for the first time. All of them are painted **outside** `.body`, which is the shape
- * that widened the reader by 4,321px before `.doc > h1` was fixed and has now caught this project
- * eight times. The guards are the `.sys-*` rules in `doc.css`; this file's job is to keep every
- * such string inside an element that carries one rather than interpolating it into a neighbouring
- * text node, and `e2e/systems.spec.ts` measures it with `HOSTILE` rather than with the seeds.
+ * that widened the reader by 4,321px before `.doc > h1` was fixed.
+ *
+ * **The ninth shape was real and this page had it.** Measured by the injection probe before any
+ * of this was written: **515px of overflow on a 1280px viewport**, from a 300-character owning
+ * team in a `flex: none` box — `overflow-wrap: anywhere` cannot break a token inside a box that
+ * is not allowed to shrink, and `flex: none` is `0 0 auto`. The fix is in `doc.css` beside
+ * `.sys-key`, not here. `e2e/systems.spec.ts` measures the class with `HOSTILE` rather than with
+ * the seeded corpus, because a guard that asserts a class over a fixed corpus is testing the
+ * corpus. This file's job is to keep every such string inside an element that carries a guard,
+ * rather than interpolating it into a neighbouring text node.
  */
 export default async function SystemPage({ params }: { params: Promise<{ key: string }> }) {
   const { key } = await params;
