@@ -23,13 +23,15 @@ import { AdminSpaces } from "@/components/AdminSpaces";
  * `/admin/spaces` is **fully static** — two literal segments, no dynamic one — so
  * `routes-manifest.json` puts it in `staticRoutes` and adds nothing to `dynamicRoutes`. That is
  * Task 5's measured shape: a space keyed `admin` loses **exactly this one further path** and keeps
- * its landing page and everything else, which is the `/-/mirror` shape rather than
+ * its landing page and everything else, which is the `/-/mirror` shape — Phase 5 Task 8's
+ * measurement, on a route Task 7 has since absorbed into `/admin/git` — rather than
  * `/systems/[key]`'s, where a dynamic segment ahead of `/[space]` swallowed every depth-one path
  * and 404ed rather than falling through.
  *
  * The difference from every route before it is that this one is where the window shuts.
- * `validateSpaceKey` refuses `admin`, `api`, `edit`, `new`, `search`, `systems` and `-` for any key
- * typed from here on, and `Space_key_shape` makes the character class the column's own. Neither is
+ * `validateSpaceKey` refuses `admin`, `api`, `edit`, `new`, `search` and `systems` for any key
+ * typed from here on — and `-`, by shape rather than by that list, which is where Task 7 left it
+ * when absorbing `/-/mirror` gave the segment back —, and `Space_key_shape` makes the character class the column's own. Neither is
  * retroactive: see `src/lib/spaces/key.ts` for exactly what a key created earlier can still do. No
  * space is keyed `admin` today, and there is still deliberately no `/admin/page.tsx` — the
  * cross-links live in the layout, which creates no route.

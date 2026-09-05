@@ -86,25 +86,39 @@ test(`a key over ${SLUG_MAX_LENGTH} characters is refused, and the cap is not ty
  *
  * `src/lib/pages/href.ts` argued that reserving `-` at the top level "does not remove the
  * collision, it makes the fix a rule the product already states — `validateSlug` refuses any slug
- * beginning with `-`". That is true of `-` and of nothing else this application serves: six of the
- * seven segments are perfectly legal slugs.
+ * beginning with `-`". That was true of `-` and of nothing else this application serves: six of the
+ * seven segments were perfectly legal slugs — **and Phase 7 Task 7 removed the seventh**, absorbing
+ * `/-/mirror` into `/admin/git` and deleting the only top-level route under `-`. Over the six that
+ * remain the rule closes none.
  *
  * This is the assertion the argument against that objection rests on, so it lives in a test rather
- * than in the docstring that makes the argument. If a future route arrives whose name `validateSlug`
- * happens to refuse, this number moves and somebody has to look at the sentence again.
+ * than in the docstring that makes the argument. That was not decoration: the number moved one
+ * task later, and this line is where it was noticed.
  */
-test("validateSlug alone closes one of the seven collisions, and validateSpaceKey closes all seven", () => {
+test("validateSlug alone closes none of the six collisions, and validateSpaceKey closes all six", () => {
   const acceptedBySlug = RESERVED_TOP_LEVEL_SEGMENTS.filter((segment) => validateSlug(segment).ok);
   expect(acceptedBySlug.sort()).toEqual(["admin", "api", "edit", "new", "search", "systems"]);
-  expect(RESERVED_TOP_LEVEL_SEGMENTS.length - acceptedBySlug.length).toBe(1);
+  // **The count moved, and this assertion is what said so.** Task 6 measured six of seven accepted
+  // — `-` being the one `validateSlug` refused — and wrote the number here rather than in a
+  // docstring so it could not rot. Task 7 then absorbed `/-/mirror` into `/admin/git`, which
+  // deleted `src/app/(reader)/-` and took `-` off the list the sweep below derives from disk. So
+  // the delegation Phase 5 offered the next phase now closes **zero** of the six that remain, and
+  // the failing assertion is how that was noticed rather than discovered later in a docstring.
+  expect(RESERVED_TOP_LEVEL_SEGMENTS.length - acceptedBySlug.length).toBe(0);
 
-  // And every one of them is refused here. The `-` case arrives as `hyphen-edge` rather than
-  // `reserved`, because the shape check runs first — the ordering `validateSpaceKey` states.
+  // And every one of them is refused here.
   for (const segment of RESERVED_TOP_LEVEL_SEGMENTS) {
     expect(accepted(segment), `${segment} must not be a legal space key`).toBe(false);
   }
   expect(refusal("systems").code).toBe("reserved");
+
+  // `-` is no longer on the list and is still not a legal key: the shape check runs first and
+  // refuses it as `hyphen-edge`, which is the rule that always did the work for this one. Asserted
+  // outside the loop precisely because the loop no longer reaches it — a rule whose only coverage
+  // was a list it has been removed from is a rule with no coverage.
+  expect(accepted("-")).toBe(false);
   expect(refusal("-").code).toBe("hyphen-edge");
+  expect(RESERVED_TOP_LEVEL_SEGMENTS).not.toContain("-");
 });
 
 /**
@@ -182,7 +196,7 @@ test("the sweep sees the real routes, skips route groups, and would notice a new
   expect(found).toContain("admin");
   expect(found).toContain("systems");
   expect(found).toContain("api");
-  expect(found.length).toBeGreaterThanOrEqual(7);
+  expect(found.length).toBeGreaterThanOrEqual(6);
   // A route group is not a URL segment; `[space]` is not a static one.
   expect(found).not.toContain("(reader)");
   expect(found).not.toContain("[space]");

@@ -16,7 +16,8 @@ import { AdminSystems } from "@/components/AdminSystems";
  *
  * `requireViewer` refuses *nobody* — it redirects an unauthenticated visitor. The permission
  * predicate is `refuseNonAdmin` in `src/lib/admin/gate.ts`, stated once for every admin surface
- * there will be, and this route only translates its answer. That split is `/-/mirror`'s and it is
+ * there will be, and this route only translates its answer. That split is `/-/mirror`'s — Phase 5
+ * Task 8's, now this route's sibling at `/admin/git` — and it is
  * what makes each guard separately killable: delete the redirect and a signed-out visitor gets a
  * crash instead of a sign-in page; delete the gate and every signed-in person reads the catalogue's
  * administration. `tests/integration/systems-admin.test.ts` and `e2e/admin-systems.spec.ts` assert
@@ -44,7 +45,9 @@ import { AdminSystems } from "@/components/AdminSystems";
  * ahead of every dynamic route, and adds **no** entry to `dynamicRoutes` — the contrast with
  * `/systems/[key]`, which sits in `dynamicRoutes` ahead of `/[space]` and therefore swallows every
  * depth-one path in a space keyed `systems`, 404ing rather than falling through. **So the window
- * here is exactly one path**, the `/-/mirror` shape rather than the `/systems` one, and a space
+ * here is exactly one path**, the `/-/mirror` shape rather than the `/systems` one (that
+ * measurement stands; Task 7 has since moved the route it was taken on to `/admin/git`, which is
+ * the same shape one segment along), and a space
  * keyed `admin` keeps its landing page and everything else it has.
  *
  * Tasks 6, 7 and 8 each add one more leaf and therefore one more path to that window. An `/admin`

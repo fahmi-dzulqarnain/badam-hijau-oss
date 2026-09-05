@@ -24,7 +24,8 @@ import type { Viewer } from "@/lib/authz/types";
  *
  * - **No `readableSpace`.** `readableSpaceWhere` answers `{}` for a super admin, so nesting it on
  *   `listBlockingPages`'s query would be a predicate that cannot fail — `src/lib/git/failures.ts`
- *   wrote this down for `/-/mirror`, and `resolveRedirect` is the project's measured case of a
+ *   wrote this down for `/-/mirror` (now `/admin/git`), and `resolveRedirect` is the project's
+ *   measured case of a
  *   filter nobody can delete a test with. It would also be **wrong**, not merely inert: the job of
  *   that listing is to name the pages that block a delete, and a page in a space the admin is not
  *   a member of blocks it exactly as hard as one they can read. A filtered list would disagree

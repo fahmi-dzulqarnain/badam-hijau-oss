@@ -26,7 +26,10 @@ import {
  *   one directory** on a Mac and two directories on Linux, and it declined to fold because *"a
  *   collision is a property of two space keys and this function sees one"*.
  * - `src/lib/pages/href.ts`, twice: `/search`, `/-/mirror`, `/systems` and `/admin/*` are all
- *   top-level static segments, and a static segment beats every dynamic one.
+ *   top-level static segments, and a static segment beats every dynamic one. (Phase 7 Task 7
+ *   absorbed `/-/mirror` into `/admin/git` and gave the `-` segment back, so the list this
+ *   function refuses against is six words rather than seven — and `-` is now refused by shape
+ *   alone, which it always also was.)
  *
  * Two of those three are closed by the **column shape** and one by the **route list**, and they
  * are enforced in different places for a reason given below.

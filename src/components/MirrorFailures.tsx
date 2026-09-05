@@ -6,13 +6,20 @@ import type { MirrorFailure, MirrorReport } from "@/lib/git/failures";
 /**
  * The failed-jobs list — spec §10's *"persistent failures surface on an admin page"*.
  *
- * ## A component and not the route's own markup, for Task 7's reason
+ * **A `<section>` and not the page.** Phase 5 shipped it as the whole of `/-/mirror`, with its own
+ * `<h1>`; Phase 7 Task 7 moved it under `/admin/git`, which is *the git mirror* rather than *its
+ * failures* and carries two operator actions beside this list. So the page owns the `h1` and this
+ * owns an `h2` — one `h1` per page is what `e2e/admin-systems.spec.ts` and its siblings assert on,
+ * and a component that kept its own would have made this page the only admin surface with two.
+ *
+ * ## A component and not the route's own markup, for Phase 5 Task 7's reason
  *
  * A route is an async Server Component that reads the database, so nothing short of a browser can
  * render one. A pure component taking a {@link MirrorReport} renders under vitest with
  * `renderToStaticMarkup` — which is how the thing this task is mostly about, the **words**, gets
  * executable evidence rather than a Playwright assertion that only runs when the browsers are
- * installed. `e2e/mirror.spec.ts` carries the overflow *measurement*, which needs a layout engine.
+ * installed. `e2e/admin-git.spec.ts` carries the overflow *measurement*, which needs a layout
+ * engine.
  *
  * ## Everything painted here came from somewhere a person types
  *
@@ -41,8 +48,8 @@ export function MirrorFailures({ report }: { report: MirrorReport }) {
   const { failures, truncated, retrying } = report;
 
   return (
-    <main className="doc">
-      <h1>Mirror failures</h1>
+    <section className="mir-failures">
+      <h2>Mirror failures</h2>
 
       <p className="mir-lead">
         Changes the content repository refused, which the worker has stopped retrying. A failure
@@ -86,7 +93,7 @@ export function MirrorFailures({ report }: { report: MirrorReport }) {
       )}
 
       <section className="mir-gap">
-        <h2>What this list does not cover</h2>
+        <h3>What this list does not cover</h3>
         <ul>
           <li>
             <strong>Pages published before the mirror existed.</strong> They carry no commit and
@@ -117,7 +124,7 @@ export function MirrorFailures({ report }: { report: MirrorReport }) {
           </li>
         </ul>
       </section>
-    </main>
+    </section>
   );
 }
 

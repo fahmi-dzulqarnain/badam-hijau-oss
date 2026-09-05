@@ -27,7 +27,8 @@ import type { Viewer } from "@/lib/authz/types";
  * ## `isSuperAdmin` and nothing else, said at the line
  *
  * `readableSpace` and `editableSpace` are **absent from every admin module on purpose**, and
- * `src/lib/git/failures.ts` already wrote down why for `/-/mirror`: `readableSpaceWhere` answers
+ * `src/lib/git/failures.ts` wrote down why one phase early, for the `/-/mirror` that Task 7 has
+ * since folded into `/admin/git`: `readableSpaceWhere` answers
  * `{}` for a super admin, so a `readableSpace(viewer)` on a surface only super admins reach is a
  * predicate that cannot fail — a filter no test can be written against. The falsifiable predicate
  * is this one, and deleting it is what a test kills.

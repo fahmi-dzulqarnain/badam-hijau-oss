@@ -1,5 +1,6 @@
 import type { GitJobKind } from "@prisma/client";
 import { db } from "@/lib/db";
+import { refuseNonAdmin, type AdminRefusal } from "@/lib/admin/gate";
 import { auditSpaceAccess } from "@/lib/audit/log";
 import { redactCredentials } from "@/lib/git/redact";
 import type { Viewer } from "@/lib/authz/types";
@@ -8,12 +9,25 @@ import type { Viewer } from "@/lib/authz/types";
  * The mirror jobs that gave up — spec §10: *"persistent failures surface on an admin page rather
  * than only in logs."*
  *
- * Phase 7 owns `/admin` and will fold this in. This is one read-only list, which is what §10 asks
- * for and the whole of what this phase ships: no clearing, no retrying, no queue surgery. A button
- * that re-queued a job would be a mutation with its own audit row, its own permission argument and
- * its own concurrency question against a running worker, and none of that is Phase 5's.
+ * Phase 5 Task 8 shipped this at `/-/mirror` as explicitly provisional; **Phase 7 Task 7 folded it
+ * into `/admin/git`**, which is a move of the route and not of the query — what this module
+ * selects, redacts and audits is unchanged, and its tests were written against the module rather
+ * than the address. It is still one read-only list: no clearing, no retrying, no queue surgery.
+ * The two *mutations* that surface gained are separate modules with separate audit rows
+ * (`src/lib/git/retention.ts` and `src/lib/git/reconcile.ts`), because neither is a way of reading
+ * this list and a button that re-queued a failed job is still nobody's yet — it would need its own
+ * concurrency argument against a running worker.
  *
- * ## The permission is `isSuperAdmin`, stated here, and neither helper is used
+ * ## The permission comes from `refuseNonAdmin`, and this module no longer states its own
+ *
+ * It used to. Phase 5 Task 8 predated `src/lib/admin/gate.ts` and wrote
+ * `if (!viewer.isSuperAdmin) return { ok: false, reason: "not-found" };` inline with its own
+ * argument, and Task 5 then listed this file as a **named exemption** in `gate.test.ts`'s sweep
+ * rather than rewriting it — *"a task that moves another task's permission line without owning its
+ * tests is how a phase loses an afternoon"*. This task owns them, so the exemption is gone and the
+ * predicate is the shared one. The exemption is not merely deleted: this module is now listed in
+ * that sweep's `ALSO_GATED`, so what was a claim that a file is *not* checked is a claim that it
+ * **is**.
  *
  * `readableSpace` and `visiblePage` are **absent from this module on purpose**, and both absences
  * are load-bearing rather than convenient. Stating that at the line, as the project's rule
@@ -165,15 +179,23 @@ export type MirrorReport = {
 
 export type MirrorFailuresResult =
   | { ok: true; report: MirrorReport }
-  /** Not a super admin. The same answer as "no such route", deliberately — see the docstring. */
-  | { ok: false; reason: "not-found" };
+  /**
+   * Not a super admin. The same answer as "no such route", deliberately — see the docstring.
+   *
+   * `AdminRefusal` and not a second spelling of the same object literal: the *answer* is the half
+   * `src/lib/admin/gate.ts` exists to state once, and a structurally identical type declared here
+   * would be a second place to get it wrong.
+   */
+  | AdminRefusal;
 
 export async function listMirrorFailures(viewer: Viewer): Promise<MirrorFailuresResult> {
-  // The only permission predicate in this module, and the only one there is: this surface is not
-  // space-scoped, so there is no space whose readability could be the question. Delete this line
-  // and any signed-in person reads every space's page titles — which is the mutation
-  // `tests/integration/git-failures.test.ts` runs.
-  if (!viewer.isSuperAdmin) return { ok: false, reason: "not-found" };
+  // The only permission predicate on this surface, stated once for every `/admin` route in
+  // `src/lib/admin/gate.ts`: this list is not space-scoped, so there is no space whose readability
+  // could be the question. Delete the line inside `refuseNonAdmin` and any signed-in person reads
+  // every space's page titles — which is the mutation `tests/integration/git-failures.test.ts`
+  // runs, and `src/lib/admin/gate.test.ts` is what notices if this call is ever dropped.
+  const refused = refuseNonAdmin(viewer);
+  if (refused !== null) return refused;
 
   const rows = await db.gitJob.findMany({
     where: { state: "FAILED" },

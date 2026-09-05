@@ -59,9 +59,9 @@ const ROOT = join(SRC, "..");
 /**
  * Every admin module. `admin.ts` under `src/lib/`, which is the file the plan names for each of
  * the four surfaces: `src/lib/systems/admin.ts` (Task 5), `src/lib/spaces/admin.ts` (Task 6),
- * `src/lib/bugs/admin.ts` (Task 8). Task 7's `/admin/git` absorbs `/-/mirror` and may keep
- * `src/lib/git/failures.ts`'s name instead — which this sweep would not see, so it is registered
- * by hand below rather than left to the pattern.
+ * `src/lib/bugs/admin.ts` (Task 8). Task 7's `/admin/git` kept the three names Phase 5 and the
+ * plan gave its modules, which this pattern cannot see — they are listed in {@link ALSO_GATED}
+ * below rather than left to it.
  */
 function adminModules(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -73,21 +73,23 @@ function adminModules(dir: string, found: string[] = []): string[] {
 }
 
 /**
- * Admin entry points that do **not** live in an `admin.ts`, listed by hand.
+ * Admin entry points that do **not** live in an `admin.ts`, swept anyway.
  *
- * `listMirrorFailures` predates this module — Phase 5 Task 8 shipped `/-/mirror` as explicitly
- * provisional, with its own `if (!viewer.isSuperAdmin)` and its own argument for it. It is not
- * rewritten here, because Task 7 owns folding that surface into `/admin/git` and a task that
+ * **This list replaced an exemption, and the direction is the point.** Task 5 listed
+ * `src/lib/git/failures.ts` here as `NOT_YET_GATED` — a claim that one file was *not* checked,
+ * because `/-/mirror` was provisional and Task 7 owned folding it into `/admin/git`: *"a task that
  * changes another task's permission line without owning its tests is how a phase loses an
- * afternoon. It is named so the exemption is a **claim** rather than an omission — the standard
- * `visible.test.ts` sets with its `reachesPage: false` entries.
+ * afternoon."* Task 7 owns them, so the file now calls `refuseNonAdmin` like everything else and
+ * the entry inverted: from "this one is exempt" to "this one is checked even though the pattern
+ * cannot see it". An exemption that outlives its reason is how a sweep quietly stops covering
+ * something, so the list a reader meets here is a list of *additional* coverage and there is no
+ * exemption list left to grow.
+ *
+ * It is `/admin/git`'s, and it is not called `admin.ts` because it is Phase 5's file under Phase
+ * 5's name — renaming a module to satisfy a test's pattern is writing the code to fit its guard.
+ * Task 7's two operator actions join it here as they land.
  */
-const NOT_YET_GATED: Record<string, string> = {
-  "src/lib/git/failures.ts":
-    "Phase 5 Task 8's provisional `/-/mirror`, which Task 7 folds into `/admin/git`. It states " +
-    "its own `viewer.isSuperAdmin` check with its own tests; moving it to `refuseNonAdmin` is " +
-    "part of that move, not of this task.",
-};
+const ALSO_GATED: readonly string[] = ["src/lib/git/failures.ts"];
 
 /**
  * One exported function per chunk, split on the `export` keyword at column zero.
@@ -113,11 +115,36 @@ function ungatedExports(file: string): string[] {
 }
 
 test("every admin entry point states the refusal through refuseNonAdmin", () => {
-  const modules = adminModules(SRC).filter((file) => !(file in NOT_YET_GATED));
+  const modules = [...adminModules(SRC), ...ALSO_GATED];
   expect(
     modules.flatMap(ungatedExports),
     "open the function with `const refused = refuseNonAdmin(viewer); if (refused !== null) return refused;`",
   ).toEqual([]);
+});
+
+/**
+ * The hand-listed modules are real files with real entry points, which is the half a list of
+ * strings cannot promise on its own.
+ *
+ * Without this, a typo in {@link ALSO_GATED} — or a file renamed out from under it — would make
+ * the sweep above pass by reading nothing, the "guard pattern that matches nothing looks exactly
+ * like a clean codebase" shape this project has now written a companion for **eight** times.
+ * `ungatedExports` throws on a missing file, so the first assertion is that the list resolves at
+ * all; the second is that each one actually contains a gated entry point taking a viewer, which is
+ * what the sweep is looking for.
+ */
+test("the hand-listed modules exist and each has a gated entry point", () => {
+  for (const file of ALSO_GATED) {
+    const source = readFileSync(join(ROOT, file), "utf8");
+    const gated = source
+      .split(/^export /m)
+      .filter(
+        (chunk) =>
+          /^(?:async )?function \w+\(\s*\n?\s*viewer: Viewer/.test(chunk) &&
+          /refuseNonAdmin\(viewer\)/.test(chunk),
+      );
+    expect(gated.length, `${file} states no refusal`).toBeGreaterThanOrEqual(1);
+  }
 });
 
 /**

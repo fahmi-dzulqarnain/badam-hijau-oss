@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { MIRROR_FAILURES_PATH, pageHistoryHref, pageHref } from "./href";
+import {
+  ADMIN_GIT_PATH,
+  ADMIN_SPACES_PATH,
+  ADMIN_SYSTEMS_PATH,
+  pageHistoryHref,
+  pageHref,
+} from "./href";
 import { validateSlug } from "./slug";
 
 test("keeps the separators of a multi-segment path and encodes nothing else", () => {
@@ -89,18 +95,44 @@ test("no slug can shadow the reserved segment", () => {
 });
 
 /**
- * The failures page's address, and the two halves of the argument for it.
+ * The mirror's admin address, asserted as a literal because five files name it and the route
+ * directory has to agree with the constant — a mismatch is a 404 nothing else in the suite catches.
  *
- * The path is asserted as a literal because two files name it and the route directory has to
- * agree with the constant — a mismatch is a 404 nothing else in the suite would catch.
+ * ~~It is built from the same `RESERVED` constant as the history URL~~ — **superseded by Phase 7
+ * Task 7**, which moved this surface out from under `-` and into `/admin`. The tie it asserted is
+ * gone on purpose: the surface is an administration page, so it belongs beside the other three,
+ * and the `-` segment it vacated is no longer a top-level route at all
+ * (`RESERVED_TOP_LEVEL_SEGMENTS` no longer lists it, and `src/lib/spaces/key.test.ts` enforces
+ * that against the directory). What replaces the tie is the assertion that this constant is under
+ * the same first segment as its siblings, which is now the invariant that would break if a leaf
+ * wandered off.
  */
-test("the mirror failures page lives under the same reserved segment, one level up", () => {
-  expect(MIRROR_FAILURES_PATH).toBe("/-/mirror");
-  // It is built from the same `RESERVED` constant as the history URL, so the two cannot drift
-  // into disagreeing about which character the product reserves.
-  expect(pageHistoryHref("engineering", "welcome").split("/")[2]).toBe(
-    MIRROR_FAILURES_PATH.split("/")[1],
-  );
+test("the mirror's admin page lives under /admin, beside the other admin leaves", () => {
+  expect(ADMIN_GIT_PATH).toBe("/admin/git");
+  expect(ADMIN_GIT_PATH.split("/")[1]).toBe(ADMIN_SPACES_PATH.split("/")[1]);
+  expect(ADMIN_GIT_PATH.split("/")[1]).toBe(ADMIN_SYSTEMS_PATH.split("/")[1]);
+  // The reserved segment is still what a page path lives under, and it is still the same
+  // character — the move took a route off the top level, not the reservation inside a space.
+  expect(pageHistoryHref("engineering", "welcome").split("/")[2]).toBe("-");
+});
+
+/**
+ * The old address, and the claim that nothing in this application still builds it.
+ *
+ * A move is only a move if the copy is gone. `/-/mirror` was a route file and a constant; both
+ * were deleted, and the sweep that would have caught a survivor is this one — a literal search of
+ * the built `href` module for the old path, which is where every link in the product comes from.
+ */
+test("nothing builds the old /-/mirror address any more", () => {
+  const built = [
+    ADMIN_GIT_PATH,
+    pageHref("engineering", "welcome"),
+    pageHistoryHref("engineering", "welcome"),
+  ];
+  for (const href of built) expect(href).not.toContain("/-/mirror");
+  // Non-vacuity: the reserved character is still produced by this module, so the absence above is
+  // about the route and not about a builder that has stopped emitting anything.
+  expect(pageHistoryHref("engineering", "welcome")).toContain("/-/");
 });
 
 /**

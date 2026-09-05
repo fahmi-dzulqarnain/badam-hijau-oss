@@ -4,7 +4,7 @@ import { VersionHistory } from "./VersionHistory";
 import { TITLE_MAX_LENGTH } from "@/lib/drafts/schema";
 import type { PageHistory, PageVersionRow } from "@/lib/pages/history";
 import { NOT_MIRRORED } from "@/lib/version/labels";
-import { MIRROR_FAILURES_PATH } from "@/lib/pages/href";
+import { ADMIN_GIT_PATH } from "@/lib/pages/href";
 
 /**
  * The version history list, rendered.
@@ -290,30 +290,30 @@ test("a stuck mirror offers the failures page when the viewer may read it", () =
     <VersionHistory
       spaceKey="engineering"
       history={history({ mirror: { queued: 0, failed: 1 } })}
-      failuresHref={MIRROR_FAILURES_PATH}
+      failuresHref={ADMIN_GIT_PATH}
     />,
   );
-  expect(html).toContain('href="/-/mirror"');
+  expect(html).toContain('href="/admin/git"');
   expect(html).toContain("What failed");
 });
 
 test("the link is absent for a viewer who cannot read it, and absent when nothing is stuck", () => {
   /*
-   * Two absences and one shared companion. `/-/mirror` is super-admin only and 404s for everybody
+   * Two absences and one shared companion. `/admin/git` is super-admin only and 404s for everybody
    * else, so a link rendered unconditionally would be a dead end shown to precisely the readers
    * who cannot follow it — and a link on a healthy page would point at a list with nothing on it.
    * The route decides the first; the notice's own condition decides the second.
    */
   const notAdmin = render(history({ mirror: { queued: 0, failed: 1 } }));
   expect(notAdmin).toContain("mirror is stuck");
-  expect(notAdmin).not.toContain("/-/mirror");
+  expect(notAdmin).not.toContain("/admin/git");
 
   const nothingWrong = renderToStaticMarkup(
     <VersionHistory
       spaceKey="engineering"
       history={history({ mirror: { queued: 0, failed: 0 } })}
-      failuresHref={MIRROR_FAILURES_PATH}
+      failuresHref={ADMIN_GIT_PATH}
     />,
   );
-  expect(nothingWrong).not.toContain("/-/mirror");
+  expect(nothingWrong).not.toContain("/admin/git");
 });

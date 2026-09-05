@@ -14,7 +14,7 @@ import type { MirrorFailure, MirrorReport } from "@/lib/git/failures";
  * and specifically the words about what the page does *not* show — executable evidence instead of
  * a Playwright assertion. `next/link` degrades to a plain `<a>` outside a Next request.
  *
- * `e2e/mirror.spec.ts` carries what needs a layout engine: the horizontal-overflow measurement.
+ * `e2e/admin-git.spec.ts` carries what needs a layout engine: the horizontal-overflow measurement.
  */
 
 /** 300 characters with no break opportunity — `TITLE_MAX_LENGTH`, so a real publish can store it. */

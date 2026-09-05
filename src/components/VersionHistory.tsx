@@ -38,7 +38,8 @@ export function VersionHistory({
   spaceKey: string;
   history: PageHistory;
   /**
-   * `/-/mirror`, when the viewer may read it — Phase 5 Task 8's affordance.
+   * `/admin/git`, when the viewer may read it — Phase 5 Task 8's affordance, at the address
+   * Phase 7 Task 7 moved it to.
    *
    * **The reason this is a prop and not a constant** is that the failures page is super-admin
    * only and 404s for everybody else, so a link rendered unconditionally would be a dead end

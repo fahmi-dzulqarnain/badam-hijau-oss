@@ -2,7 +2,7 @@ import Link from "next/link";
 import "@/components/shell.css";
 import "@/components/doc.css";
 import { buildInfo } from "@/lib/version/build";
-import { ADMIN_SPACES_PATH, ADMIN_SYSTEMS_PATH } from "@/lib/pages/href";
+import { ADMIN_GIT_PATH, ADMIN_SPACES_PATH, ADMIN_SYSTEMS_PATH } from "@/lib/pages/href";
 import { TopBar } from "@/components/TopBar";
 
 /**
@@ -10,9 +10,11 @@ import { TopBar } from "@/components/TopBar";
  *
  * A layout and not the page, because that is where a stylesheet may be imported: Phase 1 measured
  * that a route importing its own CSS makes `.doc` compute `max-width: none` on a hard load and
- * `820px` on a soft navigation to the same route. `/search`, `/-/mirror` and `/systems` all say
- * the same and are the precedent this copies — an admin route is not inside a space, so it cannot
- * borrow the space layout's import.
+ * `820px` on a soft navigation to the same route. `/search` and `/systems` say the same and are
+ * the precedent this copies — an admin route is not inside a space, so it cannot borrow the space
+ * layout's import. `/-/mirror` was the third such precedent and is now one of these children:
+ * Task 7 absorbed it, and its own layout was deleted rather than moved, because this file already
+ * does what it did for three siblings.
  *
  * **No nav rail**, for `/search`'s reason: `NavRail` names the pages of one space and takes a
  * space key, and these surfaces are about the installation. `.shell`'s grid goes with it; `.doc`
@@ -31,11 +33,11 @@ import { TopBar } from "@/components/TopBar";
  *
  * ## The cross-links are here, and they are the affordance an `/admin` index would otherwise be
  *
- * Task 6 added the second leaf, and two surfaces with nothing linking between them is how the
- * second one gets found by nobody — this project has shipped a feature with no way to reach it
- * twice (`movePage`, `/search`), and Task 3 added `/systems` to the top bar in the task that built
- * it rather than discovering the gap a third time. An `/admin` index page would be the obvious
- * home for these links and is deliberately still not built: **a layout without a page creates no
+ * Task 6 added the second leaf and Task 7 the third, and two surfaces with nothing linking between
+ * them is how the second one gets found by nobody — this project has shipped a feature with no way
+ * to reach it twice (`movePage`, `/search`), and Task 3 added `/systems` to the top bar in the task
+ * that built it rather than discovering the gap a third time. An `/admin` index page would be the
+ * obvious home for these links and is deliberately still not built: **a layout without a page creates no
  * route**, so `/admin` continues to resolve to `[space]` and a space keyed `admin` keeps its
  * landing page. Putting the nav in the layout buys the affordance at a cost of zero paths.
  *
@@ -53,6 +55,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <nav className="adm-nav" aria-label="Administration">
         <Link href={ADMIN_SPACES_PATH}>Spaces</Link>
         <Link href={ADMIN_SYSTEMS_PATH}>Systems</Link>
+        {/* Task 7. It is in the nav for every admin surface rather than only from a stuck page's
+            history, which is where Phase 5's one affordance lived: an operator who wants to know
+            whether the mirror is behind should not have to find a page that is. */}
+        <Link href={ADMIN_GIT_PATH}>Git mirror</Link>
       </nav>
       {children}
     </>

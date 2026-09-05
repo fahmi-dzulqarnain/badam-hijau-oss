@@ -12,19 +12,23 @@ import {
 } from "./support";
 
 /**
- * Phase 5 Task 8 — the failures a super admin can see, at `/-/mirror`.
+ * `/admin/git` — Phase 5 Task 8's failures list, at the address Phase 7 Task 7 moved it to.
  *
  * What this file is for, given that `src/components/MirrorFailures.test.tsx` already renders the
- * same component and asserts the same words under vitest: three things that a server-rendered
- * component cannot show, and that are exactly the ones this task's decisions rest on.
+ * same component and asserts the same words under vitest: four things that a server-rendered
+ * component cannot show, and that are exactly the ones these tasks' decisions rest on.
  *
- * 1. **The route resolves where it is claimed to.** `/-/mirror` is a static segment at `[space]`'s
- *    own depth, and a space keyed `-` is the collision. The manifest ordering and a driven
- *    `next start` were measured while building this (see the route's docstring); this spec is what
- *    keeps it measured.
+ * 1. **The route resolves where it is claimed to, and the old one no longer does.** `/-/mirror`
+ *    was a static segment at `[space]`'s own depth; `/admin/git` is a static leaf beside
+ *    `/admin/spaces` and `/admin/systems`. The move is only a move if the old URL is gone, so this
+ *    file asserts the 404 rather than assuming the directory deletion took.
  * 2. **The refusal, over HTTP, by two different people.** A member is 404'd and a signed-out
  *    visitor is sent to sign in — two guards refusing two people, and the pair is the point.
- * 3. **The overflow measurement**, which needs a layout engine. This surface brings the class its
+ * 3. **The two operator actions, walked in the order an operator walks them** — a count, then the
+ *    button that acts on it, then the count again. Task 5 and Task 6 each found a defect that no
+ *    module test could see by doing exactly that, and both were "a refusal (or a sentence) must
+ *    survive the button it invites".
+ * 4. **The overflow measurement**, which needs a layout engine. This surface brings the class its
  *    **eighth** shape: git's stderr with a JSON argv quoted into it is a single unbroken line of
  *    several hundred characters with no space anywhere, which is not a shape any of the seven
  *    before it had.
@@ -40,7 +44,7 @@ let baseline: Counts;
 
 test.beforeAll(async () => {
   baseline = await snapshotCounts();
-  console.log(`[e2e] dev DB before mirror: ${formatCounts(baseline)}`);
+  console.log(`[e2e] dev DB before admin-git: ${formatCounts(baseline)}`);
 });
 
 test.beforeEach(sweep);
@@ -48,8 +52,8 @@ test.beforeEach(sweep);
 test.afterAll(async () => {
   await sweep();
   const after = await snapshotCounts();
-  console.log(`[e2e] dev DB after mirror:  ${formatCounts(after)}`);
-  expect(after, "the mirror suite did not leave the dev database as it found it").toEqual(baseline);
+  console.log(`[e2e] dev DB after admin-git:  ${formatCounts(after)}`);
+  expect(after, "the admin-git suite did not leave the dev database as it found it").toEqual(baseline);
   await db.$disconnect();
 });
 
@@ -93,7 +97,7 @@ async function failedJob(
 /* The route, and the collision it sits on                                    */
 /* -------------------------------------------------------------------------- */
 
-test("a super admin reaches the failures page at /-/mirror", async ({ page }) => {
+test("a super admin reaches the failures page at /admin/git", async ({ page }) => {
   const fixture = await seedPublishedPage({
     slug: "e2e-mirror-stuck",
     title: "Stuck page",
@@ -102,33 +106,37 @@ test("a super admin reaches the failures page at /-/mirror", async ({ page }) =>
   await failedJob(fixture.id, { path: fixture.path });
 
   await signIn(page, "admin@example.com");
-  await page.goto("/-/mirror");
+  await page.goto("/admin/git");
 
-  await expect(page.locator("h1")).toHaveText("Mirror failures");
+  await expect(page.locator("h1")).toHaveText("Git mirror");
   await expect(page.locator(".mir-list")).toContainText("Stuck page");
   // The mirror address as the job captured it, which is where the file was going.
   await expect(page.locator(".mir-file").first()).toHaveText(`engineering/${fixture.path}.md`);
 });
 
-test("the reserved segment resolves to this route and not to a space's catch-all", async ({
-  page,
-}) => {
+test("the old /-/mirror address is a 404, and this one is the 200", async ({ page }) => {
   /*
-   * The collision, asserted rather than reasoned about. `/-/mirror` also matches
-   * `[space]/[...path]` with `space = "-"`, and Next resolves the static route first — measured
-   * against `routes-manifest.json`, where `^/\-/mirror(?:/)?$` is a **static** route and static
-   * routes are matched ahead of every dynamic one, and against a driven `next start` with a space
-   * genuinely keyed `-` in the database.
+   * **The move, asserted as a move.** Task 7 absorbed `/-/mirror` rather than copying it, and
+   * deleted the route directory — so the old URL now falls through to `[space]/[...path]` with
+   * `space = "-"`, finds no such space, and answers not-found. That is the decision this pair
+   * pins: a redirect would have been a route answering *every* visitor from an address that is
+   * otherwise a 404, which is the shape of the system this surface's refusal exists to withhold.
    *
-   * The seeded database has no such space, so what this asserts is the half that is checkable
-   * here: the URL answers with this page and not with the catch-all's 404. If precedence ever
-   * inverted, `[space]/[...path]` would look for a space keyed `-` and 404 — so this test fails
-   * closed either way.
+   * The two assertions are one discrimination rather than two absences: the same signed-in super
+   * admin gets the 200 from the new address in the same test, so the 404 is the old route being
+   * gone and not a session that never worked.
    */
   await signIn(page, "admin@example.com");
-  const response = await page.goto("/-/mirror");
-  expect(response?.status()).toBe(200);
-  await expect(page.locator("h1")).toHaveText("Mirror failures");
+
+  const moved = await page.goto("/admin/git");
+  expect(moved?.status()).toBe(200);
+  await expect(page.locator("h1")).toHaveText("Git mirror");
+
+  const old = await page.goto("/-/mirror");
+  expect(old?.status()).toBe(404);
+  // And it is the ordinary not-found, not a redirect that happens to land somewhere: the URL did
+  // not change.
+  await expect(page).toHaveURL(/\/-\/mirror$/);
 });
 
 /* -------------------------------------------------------------------------- */
@@ -148,7 +156,7 @@ test("a member of a space cannot reach it, and gets not-found rather than forbid
    */
   await signIn(page, "aisyah@example.com");
 
-  const refused = await page.goto("/-/mirror");
+  const refused = await page.goto("/admin/git");
   expect(refused?.status()).toBe(404);
 
   const allowed = await page.goto("/engineering/architecture/mqtt-contracts");
@@ -160,8 +168,8 @@ test("a signed-out visitor is sent to sign in, and comes back to this page", asy
   // `isSuperAdmin` check, and each has to be shown refusing on its own — a refusal that survives
   // deleting the guard it names is a test of the other one.
   await page.context().clearCookies();
-  await page.goto("/-/mirror");
-  await expect(page).toHaveURL(/\/api\/auth\/signin\?callbackUrl=%2F-%2Fmirror/);
+  await page.goto("/admin/git");
+  await expect(page).toHaveURL(/\/api\/auth\/signin\?callbackUrl=%2Fadmin%2Fgit/);
 });
 
 /* -------------------------------------------------------------------------- */
@@ -177,7 +185,7 @@ test("a credential in a stored error never reaches the browser", async ({ page }
   await failedJob(fixture.id, { path: fixture.path });
 
   await signIn(page, "admin@example.com");
-  await page.goto("/-/mirror");
+  await page.goto("/admin/git");
 
   const body = await page.content();
   expect(body).not.toContain(TOKEN);
@@ -199,7 +207,7 @@ test("a credential in a stored error never reaches the browser", async ({ page }
 
 test("an empty list says nothing has given up, and says what it cannot see", async ({ page }) => {
   await signIn(page, "admin@example.com");
-  await page.goto("/-/mirror");
+  await page.goto("/admin/git");
 
   await expect(page.locator(".mir-empty")).toHaveText("No mirror job has given up.");
   const gap = page.locator(".mir-gap");
@@ -269,7 +277,7 @@ test("a change queued behind a failure is counted on it, and a retrying one is c
   });
 
   await signIn(page, "admin@example.com");
-  await page.goto("/-/mirror");
+  await page.goto("/admin/git");
 
   await expect(page.locator(".mir-blocked")).toContainText(
     "2 changes to this page are queued behind this",
@@ -288,7 +296,9 @@ test("a stuck page's history offers the failures page to an admin and to nobody 
   page,
 }) => {
   /*
-   * The one link into `/-/mirror`. Shipping a feature with nothing pointing at it has happened
+   * The one link into the mirror's admin surface, which is also why the old URL needs no
+   * redirect: it is generated from `ADMIN_GIT_PATH` and moved with it. Shipping a feature with
+   * nothing pointing at it has happened
    * twice on this project and cost a whole extra task both times, and an unconditional link would
    * be a 404 offered to exactly the readers who cannot follow it.
    */
@@ -309,7 +319,7 @@ test("a stuck page's history offers the failures page to an admin and to nobody 
   await signIn(page, "admin@example.com");
   await page.goto(`/engineering/-/history/${fixture.path}`);
   await page.locator(".ver-failures").click();
-  await expect(page.locator("h1")).toHaveText("Mirror failures");
+  await expect(page.locator("h1")).toHaveText("Git mirror");
 });
 
 /* -------------------------------------------------------------------------- */
@@ -343,7 +353,7 @@ test("no viewport is widened by a hostile title, a hostile path or git's stderr"
 
   for (const width of [1280, 1024, 800, 375]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto("/-/mirror");
+    await page.goto("/admin/git");
 
     const measured = await measureOverflow(page);
     // The tripwire `measureOverflow` documents: a zero-width viewport makes the subtraction come
@@ -351,7 +361,7 @@ test("no viewport is widened by a hostile title, a hostile path or git's stderr"
     expect(measured.width, `viewport ${width} reported no width`).toBeGreaterThan(0);
     expect(
       measured.overflow,
-      `the seeded 300-character title and error widen /-/mirror at ${width}px`,
+      `the seeded 300-character title and error widen /admin/git at ${width}px`,
     ).toBe(0);
 
     // And each element that paints stored text, probed directly — the page-level measurement

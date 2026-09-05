@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
 import { listPageVersions } from "@/lib/pages/history";
-import { MIRROR_FAILURES_PATH, pageHistoryHref } from "@/lib/pages/href";
+import { ADMIN_GIT_PATH, pageHistoryHref } from "@/lib/pages/href";
 import { VersionHistory } from "@/components/VersionHistory";
 
 /**
@@ -68,8 +68,11 @@ export default async function PageHistoryRoute({
       spaceKey={spaceKey}
       history={result.history}
       /*
-       * The one affordance that reaches `/-/mirror` (Phase 5 Task 8). Decided here because this
-       * is where the viewer is, and offered only to the reader who can act on it: that page is
+       * The one affordance that reaches the mirror's admin surface — `/-/mirror` when Phase 5
+       * Task 8 built it, `/admin/git` since Task 7 absorbed it, and this link is why the old URL
+       * needs no redirect: it is generated from the constant and moved in the same commit, so
+       * nothing this product ever handed anybody points at the old address. Decided here because
+       * this is where the viewer is, and offered only to the reader who can act on it: that page is
        * super-admin only and 404s for everyone else, so an unconditional link would be a dead end
        * shown to precisely the people who cannot follow it. `VersionHistory` renders it inside the
        * stuck notice and nowhere else — see its `failuresHref` prop.
@@ -77,7 +80,7 @@ export default async function PageHistoryRoute({
        * No query pays for it: `Viewer.isSuperAdmin` is already loaded, the same rule the space
        * layout's `manageHref` and the reader route's Edit link both follow.
        */
-      failuresHref={viewer.isSuperAdmin ? MIRROR_FAILURES_PATH : null}
+      failuresHref={viewer.isSuperAdmin ? ADMIN_GIT_PATH : null}
     />
   );
 }

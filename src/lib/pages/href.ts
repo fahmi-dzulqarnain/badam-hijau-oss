@@ -27,6 +27,12 @@ export function pageHref(spaceKey: string, path?: string): Route {
  * a page can never take a path under `-/` and shadow one of these routes. `-/adrs`, `-/rfcs` and
  * `-/deleted` already stand on that guarantee; `-/history` is the fourth.
  *
+ * **It is no longer a *top-level* segment**, and that is Phase 7 Task 7's doing: `/-/mirror` was
+ * the only route directly under `-`, and absorbing it into {@link ADMIN_GIT_PATH} deleted the
+ * directory. So `-` is absent from {@link RESERVED_TOP_LEVEL_SEGMENTS} below — the sweep in
+ * `src/lib/spaces/key.test.ts` reads that list off `src/app` and would fail if it were still
+ * there — while every use here, all of them one level *inside* a space, is untouched.
+ *
  * It is **not** percent-encoded, deliberately: it is a literal route segment, not data, and
  * `encodeURIComponent("-")` happens to be the identity today — a fact this would be relying on
  * silently. Written out here once so the two builders below cannot disagree about it.
@@ -34,55 +40,9 @@ export function pageHref(spaceKey: string, path?: string): Route {
 const RESERVED = "-";
 
 /**
- * The mirror's failed jobs — `/-/mirror`, Phase 5 Task 8, spec §10.
- *
- * A constant and not a literal because two files name it (the route's own `requireViewer` return
- * path and the version-history link that reaches it), and because the reservation below is the
- * whole argument for the address.
- *
- * ## Why the same `-` one level up
- *
- * This surface is **not space-scoped** — a wedged mirror is a property of the mirror, and the
- * failures in it belong to whichever spaces happen to have one — so `/{space}/-/mirror` is the
- * wrong shape: it would either filter to one space, hiding failures, or paint other spaces' pages
- * under a space's heading. That leaves a top-level route, and a top-level static segment sits at
- * the same depth as `[space]`, so it **shadows** any space whose key it matches.
- *
- * Nothing prevented that for any word: `Space.key` was a bare `String @unique` with no validation
- * anywhere (`src/lib/git/paths.ts` measured this — the seed and the fixtures were the only
- * writers, one of which used `"eng ops"`), and `/search` already shadows a space keyed `search`.
- * Task 7 called that existing debt and declined to extend it, which is right.
- *
- * So `-` is chosen over `admin` or `mirror`, and the honest claim is narrow: **it does not remove
- * the collision, it makes the fix a rule the product already states.** ~~`validateSlug` refuses
- * any slug beginning with `-`, with `reserved-prefix` as its own error code and its own test, and
- * it is the function a Phase 7 space-key validator would reuse — so reserving one character at the
- * top level costs that phase one rule, where reserving `admin`, `mirror`, `search` and whatever
- * comes next costs it a list that grows with every route.~~ **Superseded by Phase 7 Task 6, and
- * the measurement is what supersedes it:** run over the seven top-level segments this application
- * actually has, `validateSlug` accepts six — `admin`, `api`, `search`, `systems`, `edit` and
- * `new` are all legal slugs — so the rule the product already states closes one collision in
- * seven, and the "one rule" this sentence promised the next phase was never available. The
- * argument that replaces it, including why a growing list is affordable when a sweep maintains it,
- * is on {@link RESERVED_TOP_LEVEL_SEGMENTS} below; the six-of-seven count is asserted in
- * `src/lib/spaces/key.test.ts` rather than restated here.
- *
- * The *choice* of `-` is untouched by that: it is still the address a non-space-scoped surface
- * should take, and it is still the one segment a page slug could never shadow from below. `-` is
- * also not a word anybody would name a space, which is not an argument but is worth a line.
- *
- * Phase 7 owns `/admin` and folds this in. Taking `/admin` now would squat on that namespace with
- * a single list and reserve an English word for it, which is the debt above, twice.
- *
- * The collision was **measured, not reasoned about**: see the route's own docstring for the
- * `routes-manifest.json` ordering and the `next start` probe against a space actually keyed `-`.
- */
-export const MIRROR_FAILURES_PATH = `/${RESERVED}/mirror` as Route;
-
-/**
  * The systems catalogue — `/systems`, Phase 7 Task 3, spec §7 and §11.
  *
- * A constant for the reason `MIRROR_FAILURES_PATH` is one: three files name it (the two routes'
+ * A constant for the reason {@link ADMIN_GIT_PATH} is one: three files name it (the two routes'
  * own `requireViewer` return paths and the top bar's link), and a route address written out in
  * four places is a route address that disagrees with itself after the next move.
  *
@@ -113,7 +73,7 @@ export const SYSTEMS_PATH = "/systems" as Route;
 /**
  * The systems administration surface — `/admin/systems`, Phase 7 Task 5, spec §7 and §11.
  *
- * A constant for `MIRROR_FAILURES_PATH`'s reason: the route's own `requireViewer` return path, the
+ * A constant for {@link ADMIN_GIT_PATH}'s reason: the route's own `requireViewer` return path, the
  * affordance on `/systems`, and the three endpoints under it all name this address.
  *
  * ## `/admin` is taken here, and the collision is narrower than `/systems`'s — measured
@@ -154,6 +114,49 @@ export const ADMIN_SYSTEMS_PATH = "/admin/systems" as Route;
 export const ADMIN_SPACES_PATH = "/admin/spaces" as Route;
 
 /**
+ * The git mirror's administration surface — `/admin/git`, Phase 7 Task 7, spec §10 and §11.
+ *
+ * A constant for `ADMIN_SYSTEMS_PATH`'s reason: the route's own `requireViewer` return path, the
+ * version-history link that reaches it, the two endpoints under it and the layout's cross-links
+ * all name this address.
+ *
+ * ## It replaces `/-/mirror`, and the old URL is a 404 rather than a redirect
+ *
+ * Phase 5 Task 8 shipped the failures list at `/-/mirror` as **explicitly provisional** — *"Phase
+ * 7 owns `/admin` and will fold this in"* — and this task folds it in. It is a **move and not a
+ * copy**: two surfaces for one thing is how one of them goes stale, and the second one would be
+ * the one nobody links to.
+ *
+ * `/-/mirror` now answers **not-found**, because the route it named is gone and `/-` is not a
+ * space. That is a decision and not a leftover; a redirect was the alternative and loses on three
+ * counts:
+ *
+ * 1. **A redirect is itself a route, and this one would answer every visitor.** The refusal on
+ *    this surface is not-found precisely so that an ordinary member learns nothing about the shape
+ *    of the system (§8, `src/lib/admin/gate.ts`) — and a `308` to `/admin/git` tells them a git
+ *    administration surface exists, from a URL that is otherwise a 404. Gating the redirect
+ *    instead would mean a second statement of the admin predicate on a route whose whole purpose
+ *    is to be obsolete.
+ * 2. **Nothing external holds the old URL.** Phase 5 Task 8 measured that the failures page had
+ *    exactly **one** affordance — the version-history page's stuck notice, shown only to a super
+ *    admin — and it is generated from this constant, so it moves in the same commit. There is no
+ *    published link, no email, no bookmark this product handed anybody.
+ * 3. **Keeping it alive keeps the collision.** A route under `-` is a top-level static segment,
+ *    and {@link RESERVED_TOP_LEVEL_SEGMENTS} below is a list of exactly those. Deleting the
+ *    directory hands the segment back: `-` is no longer a top-level route at all, which is why it
+ *    is no longer on that list — the sweep in `src/lib/spaces/key.test.ts` compares the constant
+ *    against the directory and would fail if it were.
+ *
+ * ## The window a space keyed `admin` loses, and this leaf's share of it
+ *
+ * Fully static, two literal segments, so `routes-manifest.json` puts it in `staticRoutes` and adds
+ * nothing to `dynamicRoutes`: the cost is exactly **one more path**, and the landing page survives
+ * — Task 5's measured shape, which was itself measured as `/-/mirror`'s. There is still no
+ * `/admin/page.tsx`. The move is therefore net **zero** paths: `/-/mirror` gave one back.
+ */
+export const ADMIN_GIT_PATH = "/admin/git" as Route;
+
+/**
  * **Every top-level static route segment in this application**, and therefore every word a
  * `Space.key` must not be — Phase 7 Task 6.
  *
@@ -165,27 +168,31 @@ export const ADMIN_SPACES_PATH = "/admin/spaces" as Route;
  * | Segment | What a space keyed this loses | Measured by |
  * |---|---|---|
  * | `systems` | its landing page **and every depth-one path**, each 404ing rather than falling through — `/systems/[key]` sits in `dynamicRoutes` ahead of `/[space]`, and `[key]` matches any single segment. Depth two and below survive. | Task 3 |
- * | `admin` | exactly one path per leaf below it (`systems`, `spaces`, and Tasks 7–8's two) — fully static, nothing in `dynamicRoutes`, and no `/admin` index, so the landing page survives | Task 5 |
- * | `-` | one path (`mirror`) | Phase 5 Task 8 |
+ * | `admin` | exactly one path per leaf below it (`systems`, `spaces`, `git`, and Task 8's one) — fully static, nothing in `dynamicRoutes`, and no `/admin` index, so the landing page survives | Task 5 |
+ * | ~~`-`~~ | ~~one path (`mirror`)~~ — **no longer a top-level segment**: Task 7 absorbed `/-/mirror` into `/admin/git` and deleted the directory, so this row is history and the entry is gone from the list below | Phase 5 Task 8 |
  * | `search`, `new`, `edit`, `api` | not separately measured; `search` and `new` are the `-` shape (a static leaf, or a static segment with a dynamic child in `edit`'s case) | — |
  *
  * ## Phase 5 objected to exactly this list, and the objection does not survive being made concrete
  *
- * `MIRROR_FAILURES_PATH` above argues that reserving `-` "costs that phase one rule, where
+ * Phase 5 Task 8's `/-/mirror` argued that reserving `-` "costs that phase one rule, where
  * reserving `admin`, `mirror`, `search` and whatever comes next costs it a list that grows with
  * every route". Three things are wrong with that, and only the first is obvious:
  *
- * 1. **The measurement it rests on is off by six.** The claim was that reserving `-` makes the fix
- *    "a rule the product already states — `validateSlug` refuses a leading `-`". Run over the
- *    seven segments that actually exist, `validateSlug` **accepts six of them**: `admin`, `api`,
- *    `search`, `systems`, `edit` and `new` are all legal slugs, and only `-` is refused. So a slug
- *    rule closes one collision in seven. `src/lib/spaces/key.test.ts` asserts that count rather
- *    than repeating this sentence, so it cannot rot.
+ * 1. **The measurement it rests on is off by six — and Task 7 has since made it off by all of
+ *    them.** The claim was that reserving `-` makes the fix "a rule the product already states —
+ *    `validateSlug` refuses a leading `-`". Run over the seven segments that existed when Task 6
+ *    measured it, `validateSlug` **accepted six**: `admin`, `api`, `search`, `systems`, `edit` and
+ *    `new` are all legal slugs, and only `-` was refused. Task 7 then absorbed `/-/mirror` into
+ *    `/admin/git` and deleted the `-` directory, so the one segment that rule closed is not a
+ *    top-level route any more: over the **six** that remain it closes **none**.
+ *    `src/lib/spaces/key.test.ts` asserts that count rather than repeating this sentence, so it
+ *    cannot rot — and it did not: the count moved under it and the assertion is what said so.
  * 2. **The list does not grow with every route; it grows with every top-level *segment*.** A space
  *    key is exactly one segment, so `/admin/spaces` and `/systems/[key]` cannot shadow one at all —
- *    only a new directory directly under `src/app` can. There have been seven in six phases, and
- *    each one was already a decision somebody wrote a docstring about (this file holds three of
- *    them). The true rate is about one per phase, not one per route.
+ *    only a new directory directly under `src/app` can. There have been seven in six phases — six
+ *    now, Task 7 having given `-` back — and each one was already a decision somebody wrote a
+ *    docstring about (this file holds four of them). The true rate is about one per phase, not one
+ *    per route, and it is not monotonic.
  * 3. **"A list that grows" is only a cost if it is maintained by attention**, and this project
  *    stopped maintaining rules that way six widenings ago. `src/lib/spaces/key.test.ts` derives
  *    the segments from the `src/app` directory and fails when this constant disagrees, exactly as
@@ -216,12 +223,19 @@ export const ADMIN_SPACES_PATH = "/admin/spaces" as Route;
  * none of that, and this list stops only what goes through `validateSpaceKey`.
  */
 export const RESERVED_TOP_LEVEL_SEGMENTS: readonly string[] = [
-  // `src/app/(reader)/-` — refused by shape long before it reaches this list (a leading hyphen is
-  // `validateSlug`'s `reserved-prefix` and the CHECK anchors both ends on an alphanumeric). Listed
-  // anyway, because this constant's job is to be the truth about the routes rather than the
-  // shortest list that happens to work today, and the sweep compares it against the directory.
-  RESERVED,
-  // `src/app/(reader)/admin` — `/admin/systems`, `/admin/spaces`, and Tasks 7 and 8.
+  // `-` USED to be here, and Phase 7 Task 7 is why it is not: `/-/mirror` was the only route
+  // directly under `src/app/(reader)/-`, so absorbing it into `/admin/git` deleted the directory
+  // and the segment with it. The sweep in `src/lib/spaces/key.test.ts` compares this list against
+  // `src/app`, so leaving the entry in would be a failing test rather than harmless caution — and
+  // nothing is lost, because a leading hyphen is refused by shape (`hyphen-edge` here,
+  // `reserved-prefix` in `validateSlug`) and by the CHECK, which anchors both ends on an
+  // alphanumeric. That is asserted in `key.test.ts` rather than trusted from this comment.
+  //
+  // It also moves the measurement Task 6 rested an argument on: `-` was the ONE segment of seven
+  // that `validateSlug` refused, so with it gone a slug rule closes **none** of the six that
+  // remain. Phase 5's "one rule" promise is not merely off by six now; it is off by all of them.
+  //
+  // `src/app/(reader)/admin` — `/admin/systems`, `/admin/spaces`, `/admin/git`, and Task 8.
   "admin",
   // `src/app/api` — every endpoint in the product.
   "api",
