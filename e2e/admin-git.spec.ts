@@ -289,6 +289,150 @@ test("a change queued behind a failure is counted on it, and a retrying one is c
 });
 
 /* -------------------------------------------------------------------------- */
+/* The two operator actions, walked in the order an operator walks them       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The retention sweep: read the count, press the button, read the count again.
+ *
+ * **Walked rather than asserted step by step**, which is the lesson Tasks 5 and 6 each paid for —
+ * both found a defect (a control that deleted the sentence it was answering) only by doing the
+ * loop in order. The three things this pins that no module test can: the count reaches the button's
+ * label, the press reaches the endpoint, and the page an operator is left looking at agrees with
+ * what they were told.
+ *
+ * The fixture job is 200 days old because the served build reads `GIT_JOB_RETENTION_DAYS` from the
+ * environment and falls back to 90 — so this is outside any window the deployment can be in, and
+ * the test does not depend on which.
+ */
+test("the sweep counts finished jobs, deletes them, and says what it did", async ({ page }) => {
+  const fixture = await seedPublishedPage({
+    slug: "e2e-mirror-retention",
+    title: "Retention page",
+    markdown: "# Retention page\n\nOne paragraph.",
+  });
+  // `seedPublishedPage` publishes, and a publish enqueues — so the page arrives with a PENDING job
+  // of its own. Cleared, so the counts below are about the row this test wrote.
+  await db.gitJob.deleteMany({ where: { pageId: fixture.id } });
+  const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
+  await db.gitJob.create({
+    data: {
+      pageId: fixture.id,
+      kind: "PUBLISH",
+      state: "DONE",
+      spaceKey: "engineering",
+      path: fixture.path,
+      attempts: 1,
+      createdAt: old,
+      updatedAt: old,
+    },
+    select: { id: true },
+  });
+
+  await signIn(page, "admin@example.com");
+  await page.goto("/admin/git");
+
+  // The count first: the button says how much it is about to do, which is the prediction half.
+  const sweepButton = page.getByRole("button", { name: /Sweep 1 finished job$/ });
+  await expect(sweepButton).toBeEnabled();
+
+  await sweepButton.click();
+
+  // What happened, not what was predicted.
+  const message = page.locator(".git-retention .adm-message");
+  await expect(message).toContainText("1 finished job deleted");
+  await expect(message).toContainText("Failures and queued changes were not touched.");
+
+  // And the page an operator is left on agrees: the row is gone and the button has nothing to do.
+  await expect(page.getByRole("button", { name: "Nothing to sweep" })).toBeDisabled();
+  expect(await db.gitJob.count({ where: { pageId: fixture.id } })).toBe(0);
+});
+
+/**
+ * The reconcile pass, walked the same way — and it is the one that writes rows for **seeded**
+ * pages, so it cleans up after itself inside the test rather than leaning on `sweep()`.
+ *
+ * `sweep()` deletes `e2e-` pages and the audit rows this run wrote; a `GitJob` queued for a seeded
+ * page is neither, and the suite's closing count equality is what would report it. Every job with
+ * an id above the one taken before the press is deleted here, which is exact rather than
+ * pattern-matched.
+ *
+ * The seeded corpus is the fixture: seven published pages, none of them mirrored (no worker runs in
+ * this suite), which is precisely the shape this pass exists for — published before anything
+ * queued them.
+ */
+test("the reconcile pass counts unmirrored pages, queues them, and empties its own count", async ({
+  page,
+}) => {
+  const maxBefore = (await db.gitJob.aggregate({ _max: { id: true } }))._max.id ?? 0;
+
+  await signIn(page, "admin@example.com");
+  await page.goto("/admin/git");
+
+  const counts = page.locator(".git-reconcile .git-counts");
+  await expect(counts).toContainText("no commit and");
+  // The breakdown: containers and integers, which is why this read writes no audit row.
+  await expect(page.locator(".git-space-key").first()).toContainText(/engineering|handbook/);
+
+  const queueButton = page.getByRole("button", { name: /^Queue \d+ pages?$/ });
+  await expect(queueButton).toBeEnabled();
+  const label = await queueButton.textContent();
+  const expected = Number(/\d+/.exec(label ?? "")?.[0] ?? 0);
+  expect(expected).toBeGreaterThan(0);
+
+  await queueButton.click();
+
+  const message = page.locator(".git-reconcile .adm-message");
+  await expect(message).toContainText(`${expected} pages queued for the mirror.`);
+  await expect(message).toContainText("Nothing published is unmirrored and unqueued any more.");
+
+  // Pressing again is what a bounded pass invites, so the state it leaves has to make that safe:
+  // every page it queued now has an unfinished job and is no longer its business.
+  await expect(page.getByRole("button", { name: "Nothing to reconcile" })).toBeDisabled();
+
+  const queued = await db.gitJob.findMany({
+    where: { id: { gt: maxBefore } },
+    select: { id: true, kind: true, state: true },
+  });
+  expect(queued).toHaveLength(expected);
+  expect(queued.every((row) => row.kind === "PUBLISH" && row.state === "PENDING")).toBe(true);
+
+  await db.gitJob.deleteMany({ where: { id: { gt: maxBefore } } });
+});
+
+test("a member cannot press either button, because the endpoints answer them not-found", async ({
+  page,
+}) => {
+  /*
+   * The refusal has to survive the *endpoint*, not only the page: a surface that 404s while its
+   * two POST routes answer anybody would be a permission check on the wrong side of the fetch.
+   * Driven as real requests from a real signed-in member's browser, so the session is genuine and
+   * the answer is the route's.
+   *
+   * A **discrimination**: the same member reads a page they are entitled to in the line below, so
+   * the two 404s are refusals rather than a session that never worked.
+   */
+  await signIn(page, "aisyah@example.com");
+
+  for (const url of ["/api/admin/git/retention", "/api/admin/git/reconcile"]) {
+    const response = await page.request.post(url);
+    expect(response.status(), url).toBe(404);
+    // Not-found, never forbidden — and asserted on the body this endpoint returns rather than on
+    // the page's rendered text, because `not.toContain("forbidden")` fails on every page in this
+    // product: Next 16 ships `forbidden()` and its name is in the client bundle.
+    expect(await response.json()).toEqual({
+      error: "not-found",
+      message: "That page does not exist.",
+    });
+  }
+
+  const allowed = await page.goto("/engineering/architecture/mqtt-contracts");
+  expect(allowed?.status()).toBe(200);
+  // Nothing was queued or deleted by the two refused requests.
+  expect(await db.gitJob.count()).toBe(0);
+});
+
+/* -------------------------------------------------------------------------- */
 /* The affordance                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -366,7 +510,7 @@ test("no viewport is widened by a hostile title, a hostile path or git's stderr"
 
     // And each element that paints stored text, probed directly — the page-level measurement
     // above passes if a long string happens to land in a container that scrolls internally.
-    for (const selector of [".mir-title", ".mir-file", ".mir-err"]) {
+    for (const selector of [".mir-title", ".mir-file", ".mir-err", ".git-space-key"]) {
       const overflow = await page.evaluate(
         ({ selector, token }) => {
           const target = document.querySelector(selector);

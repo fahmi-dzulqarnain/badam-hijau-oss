@@ -134,7 +134,7 @@ export function AdminGit({
   };
 
   const retentionSection = (
-    <section className="git-ops">
+    <section className="git-ops git-retention">
       <h2>Finished jobs</h2>
 
       <p className="git-lead">
@@ -185,7 +185,7 @@ export function AdminGit({
   );
 
   const reconcileSection = (
-    <section className="git-ops">
+    <section className="git-ops git-reconcile">
       <h2>Versions the mirror never heard about</h2>
 
       <p className="git-lead">
