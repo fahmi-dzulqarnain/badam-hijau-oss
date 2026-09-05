@@ -533,7 +533,7 @@ the overflow measurement, the credential in real HTML, and the affordance.
 
 ---
 
-## Task 4: Due for review
+## Task 4: Due for review ✅
 
 **Files:** `src/lib/pages/review.ts`, the space landing, a confirm action + tests.
 
@@ -549,8 +549,46 @@ from `.env.example` — add it there too, or every other checkout breaks silentl
 - [x] **Step 3: Confirming a review writes one column**
 
 No version, no `GitJob`, and `Page.searchVector` **byte-identical** — asserted, with a companion
-proving `reviewedAt` moved. Who may confirm is a decision: §12 says "whose owner has not confirmed
-them", which is not the same as anyone with `EDIT`.
+proving `reviewedAt` moved.
+
+**The byte-identity assertion is stronger than "we did not touch it", and the reason is measured.**
+`page_search_vector_refresh` is `BEFORE INSERT OR UPDATE` with **no `WHEN` clause** — confirmed
+against `pg_get_triggerdef` — so a `reviewedAt` write *does* fire it and the vector is genuinely
+rebuilt. The test therefore drives a real publish and asserts the lexemes are present **first**,
+because an empty tsvector equals another empty one.
+
+**Outside the seed, every page is unowned and never reviewed — permanently.** `createPage` writes
+neither `ownerId` nor `reviewedAt`, and neither does `publishPage`; the only writes in `src/` are
+the seed's. That measurement rules out two of the three readings of a null `reviewedAt`: "not due"
+means no page the product creates is ever listed, dead on arrival and silently, while "due
+immediately" puts a page published this morning at the head of the list. So **due is measured from
+`publishedAt`** — publication is the stronger assertion — which also makes an unpublished page
+never due, there being no anchor and no reader.
+
+**Who may confirm: the owner, or `MANAGE_SPACE` — and the second arm is forced, not decorative.**
+Not `EDIT`, because an editor may rewrite a page without vouching for it, and if `EDIT` sufficed
+the list's own sentence would be false of half its rows. But `ownerId` is usually null, so the
+owner arm alone would leave every unowned page on the list for ever. The discriminating viewer in
+the refusal test is an **editor of the page's own space**; refusing a non-member would have been
+the space filter talking.
+
+**Confirming is audited as `page.review`** — the clearest case in the product, since it writes no
+version, no job and no vector change, and `reviewedAt` is a single mutable column, so the *second*
+confirm destroys the first's only record.
+
+**Two of this task's own tests did not kill what they named, and mutation is what said so.** The
+soft-delete test survived deleting `visiblePage()` from the read, because the write's predicate
+produces an identical `not-found` — the `resolveRedirect` read/write-pair shape. What separates
+them is §8: without the read's filter the row *is* read, `mayConfirmReview` runs on it, and a
+non-owner is told **forbidden** — a soft-deleted page answering a question about itself. And
+`readableSpace` on that write is a genuine **equivalent mutant**, reported in the module rather
+than pinned by a manufactured test.
+
+**The confirm control lives in `.meta`, never `PageInfoCard`** — `.rail-r` is `display: none`
+below 1180px, the shape that took Phase 1's bug dialog and the user's typed text with it. It is on
+the page rather than the landing list, because confirming is a claim you can only make after
+reading; and the reader deliberately says nothing about due-ness, a TypeScript copy of the SQL
+`where` being Phase 4 Task 3's trap.
 
 **`REVIEW_INTERVAL_MONTHS` has a default in the CODE, and that is the opposite polarity from
 `BLOB_STORE`.** It is in `.env.example` and in this checkout's untracked `.env.test`, but an unset
