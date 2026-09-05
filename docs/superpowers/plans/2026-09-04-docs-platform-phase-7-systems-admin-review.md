@@ -927,27 +927,280 @@ superseded · 19 unmatched · 66 not code), 119-check smoke passing, dev baselin
 
 ---
 
-## Task 6: `/admin/spaces`, and the key that was never validated
+## Task 6: `/admin/spaces`, and the key that was never validated ✅
 
-**Files:** routes, `src/lib/spaces/admin.ts`, `src/lib/spaces/key.ts` + tests.
+**Files:** routes, `src/lib/spaces/admin.ts`, `src/lib/spaces/key.ts` + tests. Plus four the plan
+did not name: `prisma/migrations/20260905150800_space_key_shape` (the CHECK), a
+`RESERVED_TOP_LEVEL_SEGMENTS` constant in `src/lib/pages/href.ts`, `validateUrlSegment` extracted
+into `src/lib/pages/slug.ts` when the second caller arrived, and `src/components/AdminSpaces.tsx`.
 
-- [ ] **Step 1: Spaces and memberships**
+- [x] **Step 1: Spaces and memberships**
 
 The first surface that creates a `Space`; until now only the seed did.
 
-- [ ] **Step 2: Validate `Space.key` — the debt Phase 5 named three times**
+- [x] **Step 2: Validate `Space.key` — the debt Phase 5 named three times**
 
-It is a bare `String @unique` with no validation anywhere, and that single fact is why
-`mirrorPathOf` needs a containment guard, why `/-/mirror` and `/admin/*` are shadowable, and why
-`Engineering` and `engineering` are two rows sharing one directory on a case-insensitive
-filesystem. Reuse `validateSlug`'s rules — it already refuses a leading `-`, uppercase, dots and
-anything outside `[a-z0-9-]` — and add the **folded uniqueness** a slug rule cannot express.
+~~Reuse `validateSlug`'s rules — it already refuses a leading `-`, uppercase, dots and anything
+outside `[a-z0-9-]` — and add the **folded uniqueness** a slug rule cannot express.~~ **Superseded
+in one half and confirmed in the other**: the rules are reused, and delegating the route collision
+to them closes one of seven — see the first closing note.
 
-- [ ] **Step 3: Say what the window was**
+- [x] **Step 3: Say what the window was**
 
-Validation closes this going forward; it does not retro-validate the two existing rows, both of
-which are already legal. State that, and state that a key created before this task could still
-shadow a route.
+**`validateSlug` accepts six of the seven segments a space key can shadow, so a slug rule does not
+close route shadowing.** The seven top-level static segments this application serves are `api`,
+`admin`, `search`, `systems`, `edit`, `new` and `-`. Run against `validateSlug`:
+
+```
+  admin ACCEPTED · search ACCEPTED · systems ACCEPTED
+  api   ACCEPTED · new    ACCEPTED · edit    ACCEPTED
+  -     refused (reserved-prefix)
+```
+
+So Phase 5 Task 8's promise — *"it does not remove the collision, it makes the fix a rule the
+product already states"*, offered as costing this phase "one rule" where a list would cost "a list
+that grows with every route" — was measuring one case and generalising. That fence in
+`src/lib/pages/href.ts` is annotated as superseded rather than rewritten, and the six-of-seven
+count is now an **assertion** in `src/lib/spaces/key.test.ts` rather than a sentence anywhere, so
+it cannot rot.
+
+**What closes it is `RESERVED_TOP_LEVEL_SEGMENTS`, and the argument is against Phase 5's objection
+rather than around it.** The objection was that such a list grows with every route. Three answers,
+and only the first is the measurement above:
+
+1. **The list does not grow with every route; it grows with every top-level *segment*.** A space
+   key is exactly one segment, so `/admin/spaces` and `/systems/[key]` cannot shadow one at all.
+   Seven segments in six phases, and each was already a decision somebody wrote a docstring
+   about — this file's `href.ts` holds three of them. About one per phase, not one per route.
+2. **A growing list is only a cost when it is maintained by attention**, and this project stopped
+   maintaining rules that way six widenings ago. `src/lib/spaces/key.test.ts` derives the segments
+   from the `src/app` directory — descending into route groups, skipping dynamic segments — and
+   fails when the constant disagrees. Adding a top-level route without deciding about the
+   collision is a **failing test**, which is the same discipline as `gate.test.ts`'s sweep for an
+   ungated admin module and `visible.test.ts`'s for an unregistered query. It carries the
+   non-vacuity companion those two needed, which this project has now written **seven** times.
+3. **The alternatives lose on their own terms.** *Moving the routes* under `-/` was already refused
+   for `/systems` on §11 grounds and cannot move `api`. *Accepting the collision* means a page that
+   exists in Postgres and in the git mirror answers 404, which Task 3 measured for a whole
+   depth-one level. *Nothing at all* is the six-of-seven measurement.
+
+Framework-owned names need no entry and are asserted not to have one: `_next`, `favicon.ico` and
+friends contain `_` or `.`, which the character class refuses long before the reserved check.
+
+**The list is deliberately not in the database, and the CHECK deliberately is.** `Space_key_shape`
+is `System_key_shape`'s regex character for character and constrains the column for *every* writer;
+the route list changes when a directory is added under `src/app` and would be, in SQL, the
+untestable half of a rule stated twice. That is `validateSystemKey`'s split against Task 1's CHECK,
+one rule further along.
+
+**Folded uniqueness came free, and a second index would have been the half-measure.** Task 1's
+insight holds: on a lowercase-only column `key = lower(key)` for every row, so the existing
+`Space_key_key` **is** a unique index on `lower(key)`. A `CREATE UNIQUE INDEX ON "Space"
+(lower(key))` would be a second statement of one guarantee with the removable copy untestable. The
+class being ASCII also closes the half `src/lib/git/paths.ts` refused to half-close: there is no
+NFC/NFD pair and no Turkish dotless `ı` inside `[a-z0-9-]`, so `Engineering`/`engineering` sharing
+one mirror directory on this machine's case-insensitive filesystem is now unrepresentable rather
+than merely discouraged. That module's two notes are annotated, and its `paths.test.ts` needed no
+change — it takes strings as **arguments**, which is the level it operates at.
+
+**The rows were verified before the ALTER was written, and the failure mode was reproduced rather
+than imagined.** In SQL against the development database:
+
+```
+     key     | len | passes_check | is_folded | is_ascii
+-------------+-----+--------------+-----------+----------
+ engineering |  11 | t            | t         | t
+ handbook    |   8 | t            | t         | t
+```
+
+with `select count(*) from "Space" where key !~ '…' or char_length(key) > 80` returning `0` and the
+folded-duplicate group-by returning nothing. Then, on a throwaway `badam_p7t6_probe` at
+`prisma migrate deploy`, the same three rows plus one keyed `eng ops`:
+
+```
+ERROR:  check constraint "Space_key_shape" of relation "Space" is violated by some row
+```
+
+Deleting that row and retrying: `ALTER TABLE`. And `prisma migrate diff` from the probe to the
+schema afterwards: `-- This is an empty migration.` — so Prisma's diff cannot see the CHECK on this
+table either, which is the property Task 1 measured for `System` and the reason a hand-written
+migration survives the next `migrate dev`.
+
+**What the seeded rows said nothing about, and this is the thing in the brief that turned out
+wrong.** The brief and the plan both frame Step 2's risk as *"two rows exist and both look legal,
+verify before writing the ALTER"*. Both rows are legal and the verification was worth doing — but
+the rows that actually violated the constraint were **not in any database the brief pointed at**.
+`tests/integration/review-route.test.ts` creates a space keyed `"eng ops"` and
+`tests/integration/restore-route.test.ts` updates one to it, and the same migration lands on
+`badam_p5_test`. A scan for every `key: "…"` literal in the repository found exactly those two
+(plus two `System` create *inputs*, which are refused in application code and never reach the
+column). Checking the populated table is the necessary step; checking the **fixtures** is the one
+that would have been skipped, and it is the one that would have turned a green suite red at the
+end of the task rather than at the start.
+
+Both fixtures now use `eng-ops`, and the coverage they exist for survives intact: their claim is
+that a route calls `pageHref` rather than concatenating, and **`Page.path` still has no CHECK** —
+those same tests write `architecture notes/mqtt-contracts` and `architecture/mqtt contracts`
+directly, so the assertion is still `/eng-ops/architecture%20notes/mqtt-contracts`, one segment
+encoded and the separators surviving. What is lost is only the *space-key* half of a hostile
+fixture, and it is lost because the database now makes it impossible, which is the point.
+
+**The window, stated in three parts.** Validation closes this going forward and retro-validates
+nothing — no migration rewrites a key, because a `Space.key` is in every URL of the space, is the
+mirror's directory name, and is in every link anyone has shared, so a repair pass would break all
+three silently. The CHECK is the one retroactive part, and only because it was verified to pass
+first. So:
+
+1. The two rows that exist are legal and neither is a reserved word; `key.test.ts` pins both so a
+   future seed cannot introduce a key the create form would refuse.
+2. **A key created before this task could shadow a route, and the cost differs per route** — Task 3
+   measured a space keyed `systems` losing its landing page *and every depth-one path*, each
+   **404ing rather than falling through** to a page Postgres and the git mirror both still hold;
+   Task 5 measured a space keyed `admin` losing one path per admin leaf and keeping its landing
+   page. Nothing in the product reports either.
+3. **A key created before this task could still be `Engineering` or `eng ops`.** Neither is
+   storable now, by any writer. There is no such row here; had there been one, the migration would
+   have failed loudly against it rather than quietly excusing it, and the probe shows exactly what
+   that looks like.
+
+**`/admin/spaces` widens the `admin` window by exactly one path, and that was checked against this
+build's manifest rather than assumed.** `^/admin/spaces(?:/)?$` is in `staticRoutes` and nothing
+was added to `dynamicRoutes` except its `/api/…` siblings, which live under `api`;
+`/systems/[key]` is still at `dynamicRoutes` index 17, ahead of `/[space]` at 18. Task 5's shape,
+confirmed rather than re-measured with a probe database — its measurement was of the route *class*
+(fully static, no `/admin` index) and this route is in the same class.
+
+**The membership surface's audit decisions, and the line moved one category from Task 1's.** Task 1
+drew it as *"showing the number needs no audit; showing the titles does"*. Here it is **the
+container versus what is inside it, and the people are inside it**: `listSpacesForAdmin` writes
+nothing — keys, names, visibilities and two integers, which a super admin needs to administer
+anything and already sees on every admin surface — while `listSpaceMembers` writes one
+`space.access` row, because *this named person belongs to this private space* is what a `MEMBERS`
+space keeps to itself. Its own endpoint behind its own control, `listBlockingPages`'s shape, so the
+count is free and the names cost. Asserted as a **discrimination**: one super admin, one request,
+the whole index plus an `ALL_STAFF` space plus a `MEMBERS` space, **one** row — `handbook`
+contributing none is `needsAccessAudit` being called rather than copied. Removing the call fails
+two tests.
+
+**Five new `AuditAction` values, and three of them are memberships because they are three
+questions.** `space.member.add`/`.role`/`.remove` rather than one action with a verb in `detail`:
+*who was granted access* is asked after a leak and *who lost it* after an offboarding, and
+collapsing them makes both a JSON predicate over an unindexed column. `.role` earns its place
+separately because a `VIEWER` promoted to `ADMIN` gains `MANAGE_SPACE` with no row created and none
+deleted — add-and-remove alone would show a membership that never changed. Every one records the
+subject by **`userId` and never by email**, which is `accessDetail`'s rule applied to the subject:
+`User` rows are never deleted so the id stays resolvable, and an email is the mutable half. On
+`space.member.remove` that row is the only surviving record the membership ever existed, the same
+standing `system.delete` has.
+
+**The widening no membership action would see, and it also switches off the trail.** A
+`MEMBERS` → `ALL_STAFF` flip grants read to every signed-in person without touching a
+`SpaceMembership` row, *and* ends this space's `space.access` trail, because `needsAccessAudit`
+fires for `MEMBERS` spaces alone. So `space.update` carries `previousVisibility` — null and not
+absent, the `previousKey` distinction — and it is the only durable record of the moment. That
+consequence is asserted rather than described: one member listing before the flip writes a row, the
+identical listing after it writes none, and the `space.update` row saying `previousVisibility:
+"MEMBERS"` is what remains.
+
+**A `Space.key` is editable only while the space is empty, which is a deliberate divergence from
+Task 5's rename.** Task 5 allowed a `System.key` rename outright because refusing would make a key
+permanent with no escape hatch, while the breakage is *loud, bounded and already has a message* —
+`resolveSystems` refuses the next republish and names the fix. Both halves invert here. A space
+rename breaks every URL anybody has shared (this product writes no space-level `Redirect`;
+`Redirect` is per-space and per-path) and strands `content/<old-key>/` in the mirror
+(`GitJobKind.MOVE` is per page, and nothing moves a directory) — **and nothing reports either**. The
+escape hatch is the empty space, which is the typo case and is Task 1's `Restrict` argument in the
+same shape: *deletion is the verb for a row created in error, and a row created in error has no
+pages naming it*.
+
+**There is a pre-check, which Task 5 argued against, and the divergence has a reason.**
+`deleteSystem` has none because the foreign key is the authority and a pre-check would be
+undeletable-by-test. **Nothing in this schema expresses "a space with pages keeps its key"**, so
+this check *is* the rule and its only statement — deleting it fails a test. The count it reads is
+every `Page` row, **soft-deleted included**, because a soft delete does not un-share a URL and
+`restorePage` brings the mirror file back; filtering it to live pages fails the same test on the
+number in the sentence. The window it cannot close is stated at the line: the count is read inside
+the transaction, a page committed concurrently is not prevented under READ COMMITTED, and losing
+that race costs one page mirrored under the old key — which is what Task 7's reconciliation pass is
+the operator surface for. Locking `Space` on every publish to buy exactness is a hot-path cost for
+a race between two administrators.
+
+**`refuseNonAdmin` reused, and mutation-verified in both directions.** Seven entry points, each
+opening with the same two lines; `src/lib/admin/gate.test.ts`'s sweep sees the new module without
+being told about it. With `if (viewer.isSuperAdmin) return null;` deleted, **15 of 19** tests in
+`tests/integration/spaces-admin.test.ts` fail, including the super admin's own calls — e.g.
+`"admin" was accepted` and `refused: {"ok":false,"reason":"not-found"}`. With the body replaced by
+`return null`, **2** fail the other way:
+`expected { ok: true, …(1) } to deeply equal { ok: false, reason: 'not-found' }`. The
+discriminating viewer is an **ADMIN of a real space**, not a stranger. `can(v, space,
+"MANAGE_SPACE")` was the temptation Task 5 predicted, and beyond being the wrong scope it is
+**circular here**: the membership rows this surface writes are what `can()` reads, so a space with
+no `ADMIN` — which `createSpace` produces every time — would be one nobody could ever staff.
+
+**A new space has no members, and that is left true.** The creating super admin is not inserted as
+an `ADMIN`: `can()` already says yes to them so the row would grant nothing, and it would put a
+non-member in the list this surface exists to keep accurate. The consequence — a `MEMBERS` space
+with zero members is readable by super admins alone — is on the row rather than in a message that
+scrolls away. Removing the last `ADMIN` is likewise reported and not refused, `admins` being read
+after the write inside the same transaction: refusing would make the last admin of a space
+unoffboardable, and a super admin can still manage it.
+
+**`validateUrlSegment` was extracted rather than duplicated, and that touched a closed task's
+module.** `Space_key_shape` is `System_key_shape` character for character, so `validateSpaceKey`
+needed Task 5's exact decision and a different set of sentences. The two available shapes were a
+space key asking a *system*-key function for a decision with nothing to do with systems, or the
+rule written out twice; the third is what this project did to `stripControl` when
+`src/lib/bugs/schema.ts` acquired a second caller. `validateSystemKey` is now its old body with the
+decision moved out, and `src/lib/systems/key.test.ts` — which re-types the migration's regex on
+purpose and runs both over one corpus — passes unchanged, which is the evidence the move changed no
+behaviour.
+
+**What the e2e suite found that no module test could, and it is Task 5's finding arriving again.**
+`showMembers` was written with `clears = true`. Widening a space says what it just did, with the
+page count; **pressing "Members" to see who that affected deleted the sentence at the moment the
+admin acted on it** — the identical defect Task 5 found on "Which pages?", on a surface written
+after reading its note. It was caught by walking the loop in the order an admin walks it, and by a
+test that exists only because Task 5 wrote that note down. Task 5's second lesson needed no
+rediscovery: the refusal assertion is over rendered text and against the stronger claim (identical
+to a URL nobody built a route for), never over `page.content()`.
+
+**The overflow probe: 0px at 1280, 860 and 380**, with the non-vacuity half first — a 300-character
+name and description on the row, the member list open with an email in it, and the edit form
+rendering the same strings again in inputs. The page reuses `.sys-row`, `.sys-head`, `.sys-meta`,
+`.sys-key`, `.adm-page-title` and the rest rather than growing parallel rules, so it inherits
+Task 3's ninth shape by construction; the three new selectors that could have repeated it —
+`.adm-email`, `.adm-note`, `.adm-member` — all shrink, and `flex: none` is reserved for
+`.sys-kind` (a `SpaceVisibility`), `.adm-refs` (two integers) and `.adm-role` (a three-value
+`select`).
+
+**The affordance ships with the thing**, and it cost no route: the `/admin/*` cross-links are in
+`src/app/(reader)/admin/layout.tsx`, because **a layout without a page creates no route** — so
+`/admin` still resolves to `[space]` and the index page that would have taken a space's landing
+page still does not exist. `e2e/admin-spaces.spec.ts` walks both links and asserts `/admin` is
+still a 404.
+
+**Three things worth flagging beyond the fixture finding.**
+
+- **There is no space `DELETE`, deliberately.** A `Space` cascades to `SpaceMembership` but its
+  `Page` rows are the documents, this product has no hard delete for a page, and `content/<key>/`
+  is a mirror directory nothing here could remove — so a space delete would be the largest
+  destructive act in the product arriving with none of the machinery the smallest one has. The
+  honest gap is that a space that should stop being used has no state for it; `System.isActive` is
+  the shape a later phase should copy. Said at the route rather than left as an omission.
+- **`Space.initials` is required and rendered nowhere.** `getReadableSpaceByKey` selects it and no
+  component reads it. This surface asks for it rather than deriving it from `name`, because a
+  derived value is one the admin never typed — but the column is a chip with no chip.
+- **`prisma migrate status` was clean before and after**, and the migration was generated by hand
+  and applied with `prisma migrate deploy` to both databases. `migrate dev` was never run, which is
+  what PROGRESS says to do here.
+
+**Numbers:** **1512 vitest over 102 files** (was 1456/99 — +56 tests, +3 files:
+`src/lib/spaces/key.test.ts`, `tests/integration/spaces-admin.test.ts`,
+`tests/integration/spaces-admin-route.test.ts`), **97 Playwright** (was 90, +7), typecheck 0, build
+0, `plan:check` **0 drifted** with every bucket unchanged (70 in sync · 13 fragment · 30 superseded
+· 19 unmatched · 66 not code), **119-check smoke passing** and unextended — Task 9 owns the two new
+tables it does not have, and this task added none. Dev baseline unchanged at 2 spaces / 7 pages /
+7 systems / 0 page systems, and every seeded `reviewedAt` still `2026-08-18`.
 
 ---
 
