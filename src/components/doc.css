@@ -1871,3 +1871,39 @@ a.sys-repo:hover { text-decoration: underline; }
   font-size: 13.5px;
   color: var(--ink);
 }
+
+/*
+ * Where the unmirrored pages are, by space. A key and a count per row.
+ *
+ * `.git-space-key` is `flex: 1 1 0; min-width: 0` and **not** `flex: none`, which is the rule
+ * Task 3's ninth overflow shape earned: a `Space.key` is admin-typed, and although
+ * `Space_key_shape` now bounds its character class it bounds no length — an 80-character key is
+ * storable and a 300-character one predates Task 6. The count beside it is `.adm-refs`, which is
+ * `flex: none` because it is an integer this application counted.
+ */
+.git-spaces {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  max-width: 66ch;
+}
+
+.git-spaces > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.git-space-key {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}

@@ -172,11 +172,30 @@ test("the gap section is rendered even when there is nothing wrong", () => {
   expect(html).toContain("What this list does not cover");
 });
 
-test("it says versions from before the mirror existed are not failures", () => {
+/**
+ * **The sentence Phase 7 Task 7 had to correct, pinned in its corrected form.**
+ *
+ * Phase 5 wrote *"this is the mirror's queue, not a reconciliation"* and this test asserted the
+ * phrase. Task 7 built the reconcile pass, which made the sentence false — and a page that told a
+ * reader the gap could not be closed, two sections below a button that closes it, would be exactly
+ * the "surface that lies about its own coverage" this whole section exists to prevent.
+ *
+ * So the assertion moved with the wording, and it asserts **both halves**: what changed (they can
+ * be reconciled, by a person, deliberately) and what did not (nothing compares the repository
+ * against the database, so an empty failures list is still not "every page is mirrored"). Dropping
+ * the second half would leave a page claiming more coverage than it has, which is the same defect
+ * pointing the other way.
+ */
+test("it says versions from before the mirror existed are reconcilable, not failures", () => {
   const html = render(report());
   expect(html).toContain("Pages published before the mirror existed");
-  // The claim that matters: this is a queue, not a reconciliation.
-  expect(html).toContain("not a reconciliation");
+  expect(html).toContain("nothing queued them");
+  expect(html).toContain("reconcilable");
+  // Still true, and the half that must survive the correction: this list compares nothing.
+  expect(html).toContain("compares nothing against the repository");
+  expect(html).toContain("is not \u201Cevery page is mirrored\u201D");
+  // And the claim that is now false is gone rather than merely joined by a truer one.
+  expect(html).not.toContain("not a reconciliation");
 });
 
 test("it says a change that will be retried is not here, and counts them", () => {

@@ -709,6 +709,35 @@ const MODULES: Record<string, Registration> = {
     // anything.
     exempt: ["workerConfigFromEnv", "backoffMs"],
   },
+  "src/lib/git/reconcile.ts": {
+    load: () => import("@/lib/git/reconcile"),
+    // Soft-delete tests: tests/integration/git-reconcile.test.ts. Phase 7 Task 7's repair pass, and
+    // it is registered as `covered` because it is the rare module in this area that reads `Page`
+    // rows **with** a soft-delete filter — the opposite call from `src/lib/git/failures.ts` and
+    // `src/lib/git/worker.ts`, which are both deliberately blind, and the reason for the difference
+    // is worth the line: those two are about jobs the product already created, while this one
+    // creates them. A soft-deleted page's mirror file is *supposed* to be absent (its DELETE job
+    // removed it, or it never had one), so reconciling it would write a file for a page the product
+    // has taken down, and `restorePage` is the legitimate way one comes back.
+    //
+    //   `unmirroredWhere` is the one predicate, stated once and used by the count, the per-space
+    //   breakdown and the pass — so a mutation removing `deletedAt: null` changes what is counted
+    //   AND what is queued, and "a soft-deleted page is never counted and never reconciled" fails
+    //   on both halves with a live page in the same assertion as the non-vacuity companion.
+    //
+    //   `readableSpace` is absent and would be inert AND wrong, the pair `src/lib/spaces/admin.ts`
+    //   states: inert because `readableSpaceWhere` answers `{}` for the only viewer that gets past
+    //   `refuseNonAdmin`, and wrong because an installation's mirror does not stop at the spaces the
+    //   administrator belongs to — a repair pass with that blind spot would leave exactly the closed
+    //   spaces unmirrored for ever. `visiblePage()` would bundle a permission predicate that is
+    //   inert here with a soft-delete predicate this module states for its own reason.
+    //
+    //   The enqueue itself is `src/lib/git/enqueue.ts`'s, registered above as `reachesPage: false`:
+    //   every column of every job written here is a value this module read in the same transaction,
+    //   which is Phase 5's capture rule and not a second query.
+    covered: ["unmirroredReport", "reconcileUnmirrored"],
+    exempt: [],
+  },
   "src/lib/git/retention.ts": {
     reachesPage: false,
     why:

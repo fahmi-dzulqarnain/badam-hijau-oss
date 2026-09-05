@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { dateTimeFormat } from "@/lib/format";
+import type { ReconcileReport } from "@/lib/git/reconcile";
 import type { RetentionReport } from "@/lib/git/retention";
 
 /**
@@ -40,8 +41,15 @@ type Feedback = { message: string } | null;
 
 /** Ids for the per-section pending and feedback state. Two sections, two constants, no strings. */
 const SWEEP = "sweep";
+const RECONCILE = "reconcile";
 
-export function AdminGit({ retention }: { retention: RetentionReport }) {
+export function AdminGit({
+  retention,
+  reconcile,
+}: {
+  retention: RetentionReport;
+  reconcile: ReconcileReport;
+}) {
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, Feedback>>({});
@@ -105,7 +113,27 @@ export function AdminGit({ retention }: { retention: RetentionReport }) {
     router.refresh();
   };
 
-  return (
+  const runReconcile = async () => {
+    const result = await send(RECONCILE, "/api/admin/git/reconcile");
+    if (result === null) return;
+    const queued = Number(result.queued ?? 0);
+    const remaining = Number(result.remaining ?? 0);
+    setFeedback((all) => ({
+      ...all,
+      [RECONCILE]: {
+        message:
+          `${count(queued, "page", "pages")} queued for the mirror. ` +
+          (remaining === 0
+            ? "Nothing published is unmirrored and unqueued any more."
+            : `${count(remaining, "page is", "pages are")} still unmirrored with nothing queued — ` +
+              "run this again to take the next batch.") +
+          " Run the worker to commit and push them.",
+      },
+    }));
+    router.refresh();
+  };
+
+  const retentionSection = (
     <section className="git-ops">
       <h2>Finished jobs</h2>
 
@@ -154,6 +182,79 @@ export function AdminGit({ retention }: { retention: RetentionReport }) {
 
       <Message feedback={feedback[SWEEP]} />
     </section>
+  );
+
+  const reconcileSection = (
+    <section className="git-ops">
+      <h2>Versions the mirror never heard about</h2>
+
+      <p className="git-lead">
+        The queue is not a reconciliation: a job exists because a publish, a move, a delete or a
+        restore put it there. So a page published before this site mirrored to git carries no
+        commit and never will, because nothing is looking for it. This is where somebody decides
+        to look.
+      </p>
+
+      <p className="git-counts">
+        <span className="git-figure">{reconcile.unmirrored}</span> published{" "}
+        {reconcile.unmirrored === 1 ? "page carries" : "pages carry"} no commit and{" "}
+        {reconcile.unmirrored === 1 ? "has" : "have"} nothing queued.
+        {reconcile.awaitingQueue > 0
+          ? ` A further ${count(reconcile.awaitingQueue, "page is", "pages are")} unmirrored with a` +
+            " job already queued, retrying or failed — those are the queue's, not this pass's."
+          : ""}
+      </p>
+
+      {reconcile.spaces.length > 0 ? (
+        <ul className="git-spaces">
+          {reconcile.spaces.map((space) => (
+            <li key={space.key}>
+              <span className="git-space-key">{space.key}</span>
+              <span className="adm-refs">
+                {count(space.unmirrored, "page", "pages")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <p className="adm-note">
+        {/*
+          The bound, said before the button rather than discovered by pressing it. A reconcile
+          creates work — one commit and one push each, drained serially — which is why it is capped
+          where the sweep beside it is not.
+        */}
+        Each of these queues one commit and one push, so a pass queues at most{" "}
+        {count(reconcile.cap, "page", "pages")} and can be run again.{" "}
+        {reconcile.truncated
+          ? "This one will not close the gap on its own."
+          : "One pass covers everything listed here."}{" "}
+        Nothing is queued for a page that has been deleted: its file is meant to be absent, and
+        restoring the page is what puts it back.
+      </p>
+
+      <p className="adm-actions">
+        <button
+          className="adm-btn adm-primary"
+          type="button"
+          onClick={runReconcile}
+          disabled={pending !== null || reconcile.unmirrored === 0}
+        >
+          {reconcile.unmirrored === 0
+            ? "Nothing to reconcile"
+            : `Queue ${count(Math.min(reconcile.unmirrored, reconcile.cap), "page", "pages")}`}
+        </button>
+      </p>
+
+      <Message feedback={feedback[RECONCILE]} />
+    </section>
+  );
+
+  return (
+    <>
+      {reconcileSection}
+      {retentionSection}
+    </>
   );
 }
 

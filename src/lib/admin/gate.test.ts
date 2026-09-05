@@ -93,6 +93,7 @@ function adminModules(dir: string, found: string[] = []): string[] {
 const ALSO_GATED: readonly string[] = [
   "src/lib/git/failures.ts",
   "src/lib/git/retention.ts",
+  "src/lib/git/reconcile.ts",
 ];
 
 /**

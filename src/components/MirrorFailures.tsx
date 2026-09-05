@@ -35,6 +35,16 @@ import type { MirrorFailure, MirrorReport } from "@/lib/git/failures";
  * later — a JSON endpoint, a CLI, an export — cannot get the raw column by not knowing about this
  * component. A component that redacted would be a sanitiser one call site deep.
  *
+ * ## The first "does not cover" item was corrected when reconciliation arrived
+ *
+ * Phase 5 wrote *"they were never queued — this is a queue, not a reconciliation"*, which was true
+ * of the whole product then. Phase 7 Task 7 built the reconcile pass, and a page that told a reader
+ * a gap could not be closed while a button two sections above it closed exactly that gap would be
+ * worse than one that states the gap: **a surface that lies about its own coverage is the failure
+ * this section exists to prevent, arriving from the inside.** So the item now says what is still
+ * true (nothing queued them; nothing compares the repository against the database) and what has
+ * changed (they can be queued, deliberately, by a person).
+ *
  * ## Why the "does not cover" section is always rendered
  *
  * Every other explanatory note in this codebase is conditional — `VersionHistory` renders its
@@ -97,9 +107,12 @@ export function MirrorFailures({ report }: { report: MirrorReport }) {
         <ul>
           <li>
             <strong>Pages published before the mirror existed.</strong> They carry no commit and
-            were never queued, so they are not failures and cannot appear here. This is the
-            mirror&rsquo;s queue, not a reconciliation — nothing compares the repository against
-            the database, so &ldquo;no failures&rdquo; is not &ldquo;every page is mirrored&rdquo;.
+            nothing queued them, so they are not failures and cannot appear here. They are{" "}
+            <em>reconcilable</em>: the section above counts them, and an operator queues them
+            deliberately, because a gap that repaired itself quietly would stop being a gap anybody
+            noticed. Until somebody does, they are unmirrored — and this list still compares
+            nothing against the repository, so &ldquo;no failures&rdquo; is not &ldquo;every page is
+            mirrored&rdquo;.
           </li>
           <li>
             <strong>Changes that will be tried again.</strong> A change the repository refuses

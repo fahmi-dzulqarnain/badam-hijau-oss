@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireViewer } from "@/lib/auth/viewer";
 import { listMirrorFailures } from "@/lib/git/failures";
+import { unmirroredReport } from "@/lib/git/reconcile";
 import { finishedJobsReport } from "@/lib/git/retention";
 import { ADMIN_GIT_PATH } from "@/lib/pages/href";
 import { AdminGit } from "@/components/AdminGit";
@@ -54,17 +55,18 @@ export default async function AdminGitPage() {
   const viewer = await requireViewer(ADMIN_GIT_PATH);
 
   /*
-   * Two reads, one refusal each, awaited together because they are independent queries on one
+   * Three reads, one refusal each, awaited together because they are independent queries on one
    * connection pool rather than a sequence. Each states the permission for itself
    * through `refuseNonAdmin` — a page that checked once and then called two unguarded modules
    * would be the "guarded by call ordering" shape this project's rule names, and the two modules
    * are reachable from their own endpoints anyway.
    */
-  const [failures, retention] = await Promise.all([
+  const [failures, retention, reconcile] = await Promise.all([
     listMirrorFailures(viewer),
     finishedJobsReport(viewer),
+    unmirroredReport(viewer),
   ]);
-  if (!failures.ok || !retention.ok) notFound();
+  if (!failures.ok || !retention.ok || !reconcile.ok) notFound();
 
   return (
     <main className="doc">
@@ -76,7 +78,7 @@ export default async function AdminGitPage() {
         is about the <em>copy</em>.
       </p>
 
-      <AdminGit retention={retention.report} />
+      <AdminGit retention={retention.report} reconcile={reconcile.report} />
 
       <MirrorFailures report={failures.report} />
     </main>
