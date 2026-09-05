@@ -334,24 +334,152 @@ says the same thing, and that comment is where a reader meets this decision firs
 
 ---
 
-## Task 3: `/systems` and `/systems/[key]`
+## Task 3: `/systems` and `/systems/[key]` ✅
 
-**Files:** `src/lib/systems/read.ts`, routes + tests.
+**Files:** `src/lib/systems/read.ts`, `src/lib/systems/groups.ts`,
+`src/lib/systems/repo-url.ts`, routes + tests. The two extra modules are the pure halves — which
+groups exist and what "open" means, and whether a stored `repoUrl` may be linked — following
+`src/lib/lifecycle/indexes.ts`'s split from `index-read.ts`, so both are unit-testable without a
+database and Task 5 can reuse the second without importing a module that queries.
 
-- [ ] **Step 1: The catalogue index**
+- [x] **Step 1: The catalogue index**
 
 Metadata per §7: kind, owning team, repo, active or sunsetting.
 
-- [ ] **Step 2: The per-system page, filtered by readable space in SQL**
+- [x] **Step 2: The per-system page, filtered by readable space in SQL**
 
 Grouped by doc type — ADRs affecting it, its runbooks, open RFCs. The readable set is derived from
 `readableSpace`, exactly as `src/lib/search/query.ts` does it, because `readableSpace` returns a
 Prisma `where` and does not compose into raw SQL.
 
-- [ ] **Step 3: Two viewers, one URL, different lists**
+> **Superseded by the task.** The derivation is not copied, and the plan's "exactly as
+> `src/lib/search/query.ts` does it" is the half of that sentence that does not transfer — see
+> the first closing note below.
+
+- [x] **Step 3: Two viewers, one URL, different lists**
 
 A discrimination test: a member of one space and a member of the other must both see *something*
 and not the same thing. An empty list for one of them proves nothing.
+
+**The plan said to derive the readable set, and this task nested the predicate instead.** The
+instruction was to copy `src/lib/search/query.ts`, and reading *why* that module derives is what
+decided against it: its own docstring gives the cause — *"`readableSpace` returns a Prisma `where`
+and does not compose into raw SQL"* — and search is raw SQL only because `tsvector`, `ts_rank` and
+`ts_headline` have no Prisma expression. These two queries are Prisma, so the predicate composes
+directly, nested as the `space` relation filter in the shape `where.ts` sanctions. Copying the
+derivation would have added a round trip, an intermediate id list and a `spaceId: { in: [...] }`
+clause one step further from the definition, to avoid a composition problem this module does not
+have. Derivation exists to keep the predicate stated **once**; nesting states it once too. The
+plan's *rule* — filter in the query, never after fetching — is what carried over, and it is the
+one Phase 4 Task 3 measured leaving 24 tests green over a deleted SQL clause.
+
+**One `pageScope()` for both page queries, which is a deliberate divergence from
+`index-read.ts`.** That module gives its list and its aggregate a `visiblePage(...)` each, and its
+registration in `visible.test.ts` has to say both halves are asserted separately because "with the
+filter dropped from the aggregate alone, the list is right and the `ACCEPTED 3` chip beside it
+counts a page nobody can open". A shared builder makes that divergence unrepresentable: the two
+`where`s differ only in the group filter passed as an extra condition, and there is exactly one
+place either predicate can be deleted from. Deleting `{ space: readableSpace(viewer) }` fails
+`two viewers, one URL, two different lists` with
+`expected [ 'Bunkering runbook (alpha)', …(1) ] to deeply equal [ 'Bunkering runbook (alpha)' ]`,
+the extra element being the other space's title.
+
+**"Open RFCs" is `IN_REVIEW` and `ACCEPTED`, derived from `isRetired` and not from
+`terminalStatuses`** — and swapping the two is an **equivalent mutant**, 22 of 22 green, reported
+rather than pinned by a manufactured test. They return the same three names for `RFC` today. The
+argument for `isRetired` is that "open" asks §6.4's question — is this document in force *now* —
+while `terminalStatuses` asks whether it can ever be in force again, and the two come apart on
+`ARCHIVED`: retired but not terminal, because a `DOC` publishes `ARCHIVED → CURRENT`. `ARCHIVED`
+is not in the RFC vocabulary, so they agree by accident, and `groups.test.ts` asserts the accident
+rather than the coincidence.
+
+The heading is **"Open RFCs"**, its blurb is assembled from the two derived lists so it names
+`WITHDRAWN, REJECTED and CLOSED` as what it leaves out, and the group carries an `excluded`
+**count** from the aggregate. "Some may be hidden" is not a checkable claim where a number is, and
+a group labelled "RFCs" that silently hid the closed ones would be the same lie Task 1 refused
+from the cascade side and Task 2 from the authoring side.
+
+**`DOC` gets a fourth group, and §7's list of three is why that needs saying.** `resolveSystems`
+gates on no doc type, so a `DOC` can declare a system today and the row lands in `PageSystem`. A
+page rendering only §7's three groups would drop it silently — Phase 3's "empty facet" failure
+arriving by a third route — and the alternative, refusing `systems:` on a `DOC`, would be a new
+authoring rule invented on a read surface. `SYSTEM_GROUPS` is `Record<DocType, …>`, so a fifth doc
+type cannot be added without a decision here.
+
+**Three exclusions, each mutation-verified, and the third one is not reachable from the product.**
+Dropping `visiblePage()` kills only the soft-delete test; dropping the systems join filter kills
+only "a page that names one system is not on another system's page"; dropping
+`publishedVersionId: { not: null }` kills only "a page whose published version has gone is not
+listed". That last state exists because `Page_publishedVersionId_fkey` is `ON DELETE SET NULL` —
+deleting a `PageVersion` nulls the column while the facet rows survive — so the test constructs
+the row shape with a direct write and says so, rather than pretending it is a user journey.
+`index-read.ts` makes the opposite choice for unpublished pages (inert text, not hidden) and the
+difference is the space boundary: that list is inside a space the viewer already reads.
+
+**The audit call pattern: `auditSpaceAccess(viewer, space)` at the default `"request"` scope, once
+per space that produced a listed row.** No rule is re-decided here — `needsAccessAudit` and the
+dedupe stay in `log.ts` — and the `"subresource"` window is wrong for a render, whose fan-out
+belongs to a person navigating. Only spaces that produced a row, as `search` decided it; the
+bounded gap is that under truncation a space can contribute to a *count* without contributing a
+row, which discloses one integer with no page identity in it — the same thing Task 1 already said
+needs no audit. Removing the loop kills three tests. `listSystems` audits nothing and reads no
+space.
+
+**The route collision, measured the way Phase 5 Task 8 measured `/-/mirror`, and it is wider.** A
+throwaway `badam_p7_probe` database, `prisma migrate deploy`, a space genuinely keyed `systems`
+holding published pages at `store-ios`, `ordinary`, `deep` and `deep/page`, a real `next build` and
+`next start`, signed in through `test-login`:
+
+| URL | Answer | What served it |
+|---|---|---|
+| `/systems` | 200 | the catalogue — the space's landing page is gone |
+| `/systems/store-ios` | 200 | the system page, over the space's page at `store-ios` |
+| `/systems/ordinary` | **404** | a published page at depth one, unreachable |
+| `/systems/deep` | **404** | likewise, and it has children |
+| `/systems/no-such-system` | 404 | |
+| `/systems/deep/page` | 200 | the **space's** own page, at depth two |
+
+`routes-manifest.json` puts `^/systems(?:/)?$` in `staticRoutes` (matched ahead of every dynamic
+route) and `/systems/[key]` at index 11 of `dynamicRoutes`, before `/[space]` at 12 and
+`/[space]/[...path]` at 17. **So the window is not "one path deep" as it was for `/-/mirror`:**
+the shadowing segment is `[key]`, which matches any single segment, so such a space loses its
+landing page and **every** depth-one path, while depth two and below is untouched — and a shadowed
+path **404s rather than falling through**, so those pages are gone and not merely outranked. No
+space is keyed `systems` today; Task 6 closes the window going forward without retro-validating.
+
+**A credentialed `repoUrl` is withheld, not redacted, and the guard is a scheme allowlist as
+well.** `repoLinkOf` returns `{ kind: "withheld", reason }` and nothing of the URL — not the host,
+not a starred form — because a redaction is a transformation of a secret and this surface has no
+reason to hold one. `username` **or** `password` withholds, because `https://<token>@host` is the
+common single-component form and a password-only rule would pass it straight through. The
+protocol is checked first and against an allowlist, because the column is unvalidated until Task 5
+and `javascript:` in an `href` is script execution rather than a broken link; that ordering also
+keeps `ssh://git@host` reported as a scheme problem instead of a false credential alarm. Both
+mutations die: `if (url.password !== "")` alone fails the username test, and deleting the scheme
+check fails the `javascript:`/`data:`/`ssh:` one.
+
+**The overflow probe found a real defect, and it is the class's ninth shape.** Injected `HOSTILE`
+into a system's `name`, `ownerTeam` and `description`, a 300-character `System.key` (legal: Task 1
+constrained the character class and **deferred the length cap to Task 5**), a 200-character path
+and a 300-character `repoUrl`: **515px of overflow on a 1280px viewport**, from `.sys-team`
+declared `flex: none`. `overflow-wrap: anywhere` cannot break a token inside a box that is not
+allowed to shrink — `flex: none` is `0 0 auto`, so the basis is the content width. Fixed as a
+class in `doc.css`: `flex: none` is now reserved for the values the *database* bounds
+(`SystemKind`, `DocStatus`, a formatted date), and everything a person typed shrinks. 0px at 1280,
+860 and 380 after; reverting the one rule reproduces `Received: 515`.
+
+**The affordance ships with the thing.** `/systems` is linked from the top bar beside `/search`,
+because two features in this project have shipped with nothing linking to them and both were found
+late by asking "can a person get to this?" rather than by a test. `e2e/systems.spec.ts` asks it.
+
+**The discrimination is deliberately not in the e2e suite.** It needs two spaces with disjoint
+memberships; the dev corpus has one `MEMBERS` space and one `ALL_STAFF` one, so an e2e version
+would be near-vacuous or need a third space — which would disturb the `2 spaces / 7 pages`
+baseline `scripts/smoke.sh` and four other specs assert. It lives in
+`tests/integration/systems-read.test.ts` against real SQL, where it can have two. What the e2e
+spec owns instead is what vitest cannot show: the **seeded** corpus rendering `kiosk-bridge`
+as sunsetting and `backend` with no repository (Task 1 asked for the corpus and not a fixture),
+the overflow measurement, the credential in real HTML, and the affordance.
 
 ---
 
