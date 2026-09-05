@@ -74,6 +74,10 @@ export const getPublishedPage = cache(
         docType: true,
         publishedAt: true,
         reviewedAt: true,
+        // The id as well as the name, because spec §12's review confirmation is the owner's to
+        // make and the reader route decides whether to offer the control. `mayConfirmReview` is
+        // the one place that comparison is written; this is only the column it needs.
+        ownerId: true,
         owner: { select: { name: true } },
         publishedVersion: { select: { id: true, markdown: true, gitSha: true } },
         _count: { select: { versions: true } },

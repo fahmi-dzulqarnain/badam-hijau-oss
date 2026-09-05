@@ -5,11 +5,13 @@ import { requireViewer } from "@/lib/auth/viewer";
 import { can } from "@/lib/authz/can";
 import { getPublishedPage, listSpacePages, resolveRedirect } from "@/lib/pages/repo";
 import { pageHistoryHref, pageHref } from "@/lib/pages/href";
+import { mayConfirmReview } from "@/lib/pages/review";
 import { renderMarkdown } from "@/lib/markdown/render";
 import { dateFormat } from "@/lib/format";
 import { getPageRelations } from "@/lib/lifecycle/read";
 import { retirementNotice } from "@/lib/lifecycle/retired";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { ConfirmReviewButton } from "@/components/ConfirmReviewButton";
 import { DocBody } from "@/components/DocBody";
 import { PageInfoCard } from "@/components/PageInfoCard";
 import { ContentCommit } from "@/components/Provenance";
@@ -168,6 +170,26 @@ export default async function DocPage({
             <Link className="doc-edit" href={`/edit/${page.id}` as Route}>
               Edit this page
             </Link>
+          ) : null}
+          {/*
+            Spec §12's review confirmation, in `.meta` for exactly the reason the Edit link above
+            is — see `ConfirmReviewButton`'s docstring, which owns the argument, and note that the
+            "Last reviewed" date stays in `PageInfoCard`. A date is a fact and belongs in the
+            rail; an action does not.
+
+            **This says nothing about whether the page is due**, deliberately. The due rule is a
+            SQL `where` in `src/lib/pages/review.ts` and a second copy of it here — to decide
+            whether to shout — would be the shape Phase 4 Task 3 measured, where a TypeScript
+            filter beside the SQL one left the SQL clause deletable with 24 tests green. An owner
+            may confirm whenever they have read the page; the interval decides what the landing
+            *lists*, not what the owner is permitted to say.
+
+            `mayConfirmReview` is pure and costs no query: `page.ownerId` came back with the page
+            read this route had to make anyway, and `can()` reads the viewer's in-memory
+            memberships — the same constraint Task 14b put on `mayEdit`.
+          */}
+          {mayConfirmReview(viewer, space, page) !== null ? (
+            <ConfirmReviewButton pageId={page.id} title={page.title} />
           ) : null}
         </div>
 

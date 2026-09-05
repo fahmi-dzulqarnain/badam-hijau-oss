@@ -32,6 +32,20 @@ export type AuditAction =
    * summary, so the join reads in both directions.
    */
   | "page.cascade"
+  /**
+   * Spec §12's review confirmation — a page's owner (or a space admin) said the document is
+   * still correct. Phase 7 Task 4.
+   *
+   * The action in this union with the strongest claim to being here, because it is the only
+   * mutation in the product that leaves **no other trace**: it writes no `PageVersion`, enqueues
+   * no `GitJob`, and leaves `Page.searchVector` byte-identical, all three deliberately. And
+   * `Page.reviewedAt` is a single mutable column, so the next confirm overwrites the record of
+   * this one — without a row here, "who said this was still correct, and when" is answerable
+   * only for the most recent claim, on a list that exists to hold somebody to it. Contrast
+   * `src/lib/git/enqueue.ts`, which writes no audit row precisely because the mutation that
+   * caused it is already audited in the same transaction.
+   */
+  | "page.review"
   /** The Phase 1 debt: a super admin read a `MEMBERS` space they do not belong to (spec §8). */
   | "space.access";
 

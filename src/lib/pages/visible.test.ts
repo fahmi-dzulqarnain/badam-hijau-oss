@@ -298,6 +298,52 @@ const MODULES: Record<string, Registration> = {
     covered: ["deletePage", "restorePage", "listDeletedPages"],
     exempt: [],
   },
+  "src/lib/pages/review.ts": {
+    load: () => import("@/lib/pages/review"),
+    // Soft-delete tests: tests/integration/review.test.ts. Phase 7 Task 4's due-for-review list
+    // and spec §12's confirmation. THREE page queries, and they do not all carry the same things
+    // — which is why they are listed rather than the module:
+    //   `listDueForReview`'s `findMany` and its `count` share ONE `dueScope()` call, which owns
+    //   `visiblePage()`, `readableSpace` as the `space` relation filter, the published-page bound
+    //   and §12's staleness `OR`. One builder, deliberately, and it is the divergence
+    //   `src/lib/systems/read.ts` argued for against `index-read.ts`: with the filter dropped
+    //   from the aggregate alone, the list is right and the "N pages are due" line beside it
+    //   counts pages nobody can open. Covered by "a soft-deleted page is not due for review,
+    //   having been", which fails in both directions because its first half is the non-vacuity
+    //   companion, and by "two viewers, two spaces, two different due lists" for the permission
+    //   predicate — a discrimination and not an absence, because a viewer with no readable space
+    //   gets an empty list from an unfiltered query too;
+    //   `confirmReview` makes a read and a WRITE, and both carry `visiblePage()`. That is two
+    //   statements of one filter, which is the `resolveRedirect` shape — so both were mutated,
+    //   and the finding is recorded here because the obvious test does not separate them:
+    //     the write's is covered by "a soft delete landing mid-confirm writes nothing and reads
+    //     as not-found", staged with a held row lock, because a predicate on an `updateMany` is
+    //     invisible to any test that cannot change the row underneath it;
+    //     the read's is NOT covered by "a soft-deleted page cannot be confirmed, and reads as
+    //     not-found" — measured, that test stays green with the read's filter deleted, because
+    //     the write's predicate then produces the identical answer. What separates them is §8:
+    //     without the filter the deleted row is read, `mayConfirmReview` runs against it, and a
+    //     non-owner is told **forbidden** — a soft-deleted page answering a question about
+    //     itself. "a soft-deleted page reads as not-found even for a viewer who could not confirm
+    //     it" is the test that kills it, and it is the only one that does.
+    //
+    //   `readableSpace` is restated on the write as well, and that one **is** an equivalent
+    //   mutant: deleting it leaves the whole file green, because the read already refused every
+    //   viewer it would refuse. Reported in the module rather than pinned by a manufactured test,
+    //   per this project's rule, and kept for consistency with `publish.ts`, `move.ts` and
+    //   `delete.ts`, which all restate both predicates on their writes.
+    //
+    //   No query here filters on `ownerId`, and that absence is deliberate: ownership is a
+    //   permission question answered in memory by `mayConfirmReview`, on a row the queries above
+    //   have already bounded. A `where` clause on `ownerId` would make the refusal untestable by
+    //   turning it into a not-found.
+    covered: ["listDueForReview", "confirmReview"],
+    // Pure. `reviewIntervalMonths` reads a literal environment, `reviewCutoff` is date
+    // arithmetic, and `mayConfirmReview` compares an owner id and calls `can()` — none of them
+    // touches the database, and all three are exported because they are asserted directly in
+    // src/lib/pages/review.test.ts.
+    exempt: ["reviewIntervalMonths", "reviewCutoff", "mayConfirmReview"],
+  },
   "src/lib/pages/history.ts": {
     load: () => import("@/lib/pages/history"),
     // Soft-delete tests: tests/integration/page-history.test.ts. Phase 5 Task 7's version

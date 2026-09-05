@@ -934,6 +934,59 @@
 .doc-history:hover { text-decoration: underline; }
 
 /*
+ * The review confirmation (Phase 7 Task 4, spec §12), in `.meta` for the reason `.doc-edit` and
+ * `.doc-history` above both state: `.rail-r` is `display: none` below 1180px, so `PageInfoCard`
+ * is where a control silently ceases to exist on a narrower window — Phase 1's bug dialog inside
+ * `.rail-l` is the same bug. `.meta` is hidden at no width.
+ *
+ * No `margin-left: auto`: `.doc-edit` owns the far end of the row and two elements claiming it
+ * would leave this one wherever the flex algorithm put it, which differs between a viewer and an
+ * editor. Rendered after `.doc-edit`, so where both exist the two actions sit together at the end
+ * of a wide row and wrap together on a narrow one — `.meta` is already `flex-wrap: wrap`.
+ *
+ * `flex: none` is deliberately ABSENT, and Task 3 is why: it is `0 0 auto`, so the flex basis is
+ * the content width and `overflow-wrap` cannot break a token inside a box that is not allowed to
+ * shrink — 515px of overflow on `.sys-team`, the ninth shape of that class. The rule Task 3
+ * established is that `flex: none` is reserved for values the *database* bounds, and this button's
+ * label is fixed text. The `aria-label` carries the page title and never renders.
+ */
+.doc-review {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+}
+.doc-review:hover {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+.doc-review[disabled] { cursor: not-allowed; opacity: 0.55; }
+
+/*
+ * The refusal, on its own line. `flex-basis: 100%` inside `.meta`'s wrapping flex row, exactly as
+ * `.del-error` does inside `.del-row` — a permission sentence squeezed between the status and the
+ * published date is a sentence nobody reads. `overflow-wrap: anywhere` because a future refusal
+ * could name a page title, and this is outside `.body`.
+ */
+.doc-review-error {
+  flex-basis: 100%;
+  margin: 6px 0 0;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+/*
  * The version history (Task 7), on `/{space}/-/history/{path}`.
  *
  * Here rather than in a stylesheet of its own for the reason `.del-*` and `.rel-*` both state:
