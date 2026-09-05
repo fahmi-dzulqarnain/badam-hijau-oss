@@ -348,9 +348,59 @@ Metadata per §7: kind, owning team, repo, active or sunsetting.
 
 - [x] **Step 2: The per-system page, filtered by readable space in SQL**
 
-Grouped by doc type — ADRs affecting it, its runbooks, open RFCs. The readable set is derived from
-`readableSpace`, exactly as `src/lib/search/query.ts` does it, because `readableSpace` returns a
-Prisma `where` and does not compose into raw SQL.
+Grouped by doc type — ADRs affecting it, its runbooks, open RFCs.
+
+**~~The readable set is derived from `readableSpace`, exactly as `src/lib/search/query.ts` does
+it.~~ Superseded: that is the wrong precedent, and reading *why* search derives is what says so.**
+Search derives because `tsvector`/`ts_rank`/`ts_headline` have no Prisma expression, so its query
+is raw SQL and a Prisma `where` cannot compose into it. These queries are Prisma, so the predicate
+composes directly — and `src/lib/authz/where.ts:26` sanctions exactly that shape: *"Correct:
+`where: readableSpace(v, { key })` and `where: { spaceId, space: readableSpace(v) }`"*. Copying the
+derivation would have added a round trip, an intermediate id list, and a `spaceId: { in: [...] }`
+clause one step further from the definition, to dodge a composition problem this module does not
+have.
+
+Both queries share **one** `pageScope()` builder rather than restating the predicate — a deliberate
+divergence from `index-read.ts`, whose registration has to say both halves are asserted separately
+because "with the filter dropped from the aggregate alone, the list is right and the chip beside it
+counts a page nobody can open". A shared builder makes that unrepresentable.
+
+**§7's three groups are not enough, and the gap is Phase 3's failure arriving by a third route.**
+`resolveSystems` gates on no doc type, so a `DOC` can declare a system and land a `PageSystem` row.
+Rendering only ADR/RUNBOOK/RFC would drop it silently; refusing `systems:` on a `DOC` would be a new
+authoring rule invented on a read surface. `SYSTEM_GROUPS` is a `Record<DocType, …>`, so a fifth
+doc type cannot be added without a decision.
+
+**"Open RFCs" is `IN_REVIEW` and `ACCEPTED`**, and the heading names what it excludes —
+`WITHDRAWN, REJECTED and CLOSED` — with an `excluded` **count** from the aggregate, so it says
+"3 more are not listed here" rather than leaving a reader to wonder. Swapping `isRetired` for
+`terminalStatuses("RFC")` is an **equivalent mutant**, reported rather than pinned by a
+manufactured test: the two ask different questions and come apart only on `ARCHIVED`, which the RFC
+vocabulary does not contain, so they agree by accident.
+
+**The route collision is wider than `/-/mirror`'s, measured the same way.** Phase 5 found `/-/mirror`
+shadowed exactly one URL because `/-/welcome` still worked. Here the shadowing segment is `[key]`,
+which matches *any* single segment, so a space keyed `systems` loses its landing page **and every
+depth-one path** — and a shadowed path **404s rather than falling through**, while depth two and
+below are untouched. Measured on a real `next build` and `next start` against a space genuinely
+keyed `systems`: `/systems/ordinary` 404, `/systems/deep/page` 200. No such space exists today;
+Task 6 closes it going forward.
+
+**A credentialed `repoUrl` is withheld, not redacted** — nothing of the URL leaves
+`src/lib/systems/repo-url.ts`, not even the host. It withholds on `username` **or** `password`,
+because `https://<token>@host` is the common single-component form that a password-only rule passes
+straight through, and the protocol allowlist is checked **first**, because the column is
+unvalidated until Task 5 and `javascript:` in an `href` is script execution.
+
+**The overflow probe found a real defect, the ninth shape.** `.sys-team { flex: none }` — and
+`overflow-wrap: anywhere` cannot break a token inside a box that is not allowed to shrink, because
+`flex: none` is `0 0 auto` so the basis is the content width. 515px of overflow at 1280. Fixed as a
+class rather than a case: `flex: none` is now reserved for values the **database** bounds — a
+`SystemKind`, a `DocStatus`, a formatted date — while everything a person typed may shrink.
+
+**Task 1's deferred `SLUG_MAX_LENGTH` on `System.key` has a rendering consequence today**: a
+300-character lowercase key is legal under the CHECK and reaches this route. Handled in CSS here,
+but Task 5 should know the cap is doing more than tidiness.
 
 > **Superseded by the task.** The derivation is not copied, and the plan's "exactly as
 > `src/lib/search/query.ts` does it" is the half of that sentence that does not transfer — see

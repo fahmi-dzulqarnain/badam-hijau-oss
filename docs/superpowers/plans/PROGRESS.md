@@ -5,7 +5,7 @@
 planned** — the roadmap's sixth and last phase.
 
 Branch: `phase-7-systems-admin-review` (cut from `main` at `e9377ed`; this phase lands through a
-PR) · **1333 vitest + 67 Playwright tests passing**, 119-check cold-start smoke · 7 systems seeded · typecheck,
+PR) · **1364 vitest + 76 Playwright tests passing**, 119-check cold-start smoke · 7 systems seeded · typecheck,
 build and `plan:check` clean
 
 **Why the last phase is numbered 7.** Attachments were planned as Phase 4, became 5, and landed as
@@ -53,8 +53,8 @@ ships with an empty facet."* This is the phase where that becomes reachable.
 |---|---|
 | 1. The catalogue | ✅ |
 | 2. Resolving what authors already wrote | ✅ |
-| **3. `/systems` and `/systems/[key]`** | **next** |
-| 4. Due for review | — |
+| 3. `/systems` and `/systems/[key]` | ✅ |
+| **4. Due for review** | **next** |
 | 5. `/admin/systems` | — |
 | 6. `/admin/spaces`, and the key that was never validated | — |
 | 7. `/admin/git`, and two more debts | — |
