@@ -1494,6 +1494,47 @@ place to look is whatever guard derives itself from the filesystem.
 their value is highest when the referenced page is gone. So this surface must render a dangling id
 without throwing, and `routePath` is the durable breadcrumb. A test with a deleted page.
 
+**`visiblePage` is absent here, and it is the strongest such absence in the phase**: it would not
+hide a row, it would **change what a shown row means**. A soft-deleted page and an absent one are
+different facts — one is recoverable, the other is not — so the surface says which, and the mutant
+that adds `deletedAt: null` fails with `expected 'absent' to be 'found'`. The absent case is a
+**fixture, not a journey**, said at the line: nothing in this product hard-deletes a page, and Task
+6 declined a space delete outright.
+
+**`in` against a Prisma enum reaches `Object.prototype`, and that is a real bug caught before it
+shipped.** The generated enum is an ordinary object literal, so `"toString" in BugStatus` is
+**`true`** — measured — and `?status=toString` would have reached Prisma as
+`where: { status: "toString" }`. The parser is a membership test over `Object.values`, which is the
+question actually being asked.
+
+**A link is built from the resolved page and never from `routePath`.** That column is the one
+client-supplied field on the row, bounded only by a length, so an `href` from it would be script
+execution in an **admin's** browser — `repoField`'s shape arriving on a column nobody had looked at
+since Phase 1.
+
+**No transition graph, and the reopen test is a sequence.** A one-way `NEW → TRIAGED → CLOSED`
+would make a mis-clicked `CLOSED` permanent on a table with no repair surface; the test walks
+`NEW → CLOSED → TRIAGED → NEW` in order, because three independent calls from `NEW` would not
+notice a state machine.
+
+**`BugStatus` was not widened, and the deciding sentence is in the spec rather than the schema** —
+§18.2: *"This is a signal channel, not a support system: no threading, no replies, no
+notifications in alpha."* The fourth value anyone reaches for splits `CLOSED` into
+fixed/won't-fix/duplicate, which is a resolution taxonomy — and it would not answer the question it
+appears to, since *why* a report was closed is prose.
+
+**Three Phase 1 gaps recorded rather than fixed**, all outside this phase's plan: `routePath`,
+`appVersion` and `userAgent` do **not** go through `stripControl` while `summary`, `expected` and
+`consoleError` do — verified — so a NUL in any of the three makes `POST /api/bugs` answer 500;
+`consoleError` is **never sent by the product's own dialog**, so every non-null value today arrives
+from a direct API call; and `BUG_WEBHOOK_URL` forwarding was never built.
+
+**One assumption this task made from my measured facts was itself wrong, and it checked before
+writing it down**: `AuditLog.spaceId` has **no** foreign key — it is a bare `String?` — so copying a
+dangling `BugReport.spaceId` into it would have been accepted silently rather than throwing. The
+decision to leave it null is carried by what the column *means* to an auditor, and the docstring
+says that rather than asserting a constraint that does not exist.
+
 **`BugStatus` is not widened, and the argument that decided it is in the spec rather than in the
 schema.** §18.2 says, two paragraphs above the enum, *"This is a signal channel, not a support
 system: no threading, no replies, no notifications in alpha."* The fourth value anybody would
