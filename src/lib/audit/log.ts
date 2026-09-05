@@ -75,7 +75,54 @@ export type AuditAction =
    */
   | "system.create"
   | "system.update"
-  | "system.delete";
+  | "system.delete"
+  /**
+   * The space and membership mutations on `/admin/spaces` — spec §11's `/admin/*`, Phase 7 Task 6.
+   *
+   * **`spaceId` is populated on all five**, which is the other direction of the widening Task 5
+   * needed: a system is global and names no space, and every one of these *is* an event about one.
+   * That is what makes `@@index([spaceId, createdAt])` answer the question this surface exists to
+   * make answerable — "everything that has ever been done to this space" — in one query.
+   *
+   * ## Three membership actions rather than one with a verb in `detail`
+   *
+   * `page.cascade`'s reason, and it is sharper here than it was for systems: an auditor filtering
+   * this table is almost always asking one of two questions, and they are **different questions
+   * with different urgency**. *Who was granted access to this space, and when* is asked after a
+   * leak. *Who lost it* is asked after an offboarding, or after somebody complains they cannot get
+   * in. Collapsing them into `space.member` with `{ verb: "add" }` would make both queries a JSON
+   * predicate over a column that is not indexed for it.
+   *
+   * `space.member.role` is the third because it is neither: a `VIEWER` promoted to `ADMIN` gains
+   * `MANAGE_SPACE` without any row being created, so a reading of add-and-remove alone would show
+   * a membership that never changed. It carries `previousRole` — never absent — for the reason
+   * `previousKey` and `previousReviewedAt` are never absent: an omitted key and a null one mean
+   * different things to anyone querying the column.
+   *
+   * ## What a membership row records about its **subject**, and what it does not
+   *
+   * `userId`, and deliberately **not the email or the name**. That is `accessDetail`'s rule
+   * applied to the subject rather than the actor — *"a copy in a JSON blob outlives an offboarding
+   * and cannot be corrected"* — and it is safe here for the reason it is safe there: `User` rows
+   * are never deleted by this product, so the id stays resolvable long after the
+   * `SpaceMembership` row it describes has been deleted, which for `space.member.remove` is the
+   * only row that survives at all. An email is the mutable half (Entra can change it) and is the
+   * copy that would rot.
+   *
+   * ## `space.update` is where the widening this surface can do gets recorded
+   *
+   * A `MEMBERS` → `ALL_STAFF` flip grants read to every signed-in person **without touching one
+   * membership row**, so none of the three actions above would see it. It also *narrows this very
+   * table*: `needsAccessAudit` fires only for a `MEMBERS` space, so from that moment a super
+   * admin's reads of the space stop producing `space.access` rows. `previousVisibility` on this
+   * action is therefore the only durable record of when the trail was turned off, and it is null
+   * and not absent when the flip was not part of the request.
+   */
+  | "space.create"
+  | "space.update"
+  | "space.member.add"
+  | "space.member.role"
+  | "space.member.remove";
 
 /**
  * Whatever can write the row. Structural on purpose, so the same helper serves the five

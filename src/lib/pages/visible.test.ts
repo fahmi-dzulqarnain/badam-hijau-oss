@@ -537,6 +537,57 @@ const MODULES: Record<string, Registration> = {
       "`visibility` (spec §7: systems carry no permissions of their own), so there is no " +
       "permission predicate to state either.",
   },
+  "src/lib/spaces/admin.ts": {
+    load: () => import("@/lib/spaces/admin"),
+    // Soft-delete tests: tests/integration/spaces-admin.test.ts. Phase 7 Task 6's `/admin/spaces`,
+    // and the registration is `src/lib/systems/admin.ts`'s shape — **this module reads `Page` rows
+    // with NO soft-delete filter, deliberately**, so what is registered is the *absence*.
+    //
+    //   `listSpacesForAdmin` and `updateSpace` both reach `Page` through a `_count` on the
+    //   relation. No `page` delegate token appears anywhere in the module, which is the shape
+    //   widening #4 was written for — and a `_count` is easy to read past, because it looks like a
+    //   number rather than like a query.
+    //
+    //   `visiblePage()` on that count would be WRONG, not merely redundant, and the two exports
+    //   need it wrong for the same reason. The count is what refuses a key rename, and the rule it
+    //   enforces is "this space has published URLs and mirror files under this key". A soft delete
+    //   undoes neither: the URL was shared, the file was written, and `restorePage` brings both
+    //   back. Filtering would let a space whose every page had been deleted be renamed, stranding
+    //   `content/<old-key>/` the moment one of them was restored. Covered by "a soft-deleted page
+    //   still counts, and still refuses a rename", which asserts the refusal AND that the count in
+    //   the sentence equals the row's, with a live page in the same assertion as the non-vacuity
+    //   companion.
+    //
+    //   `readableSpace` is absent from the whole module and would be inert AND wrong — the
+    //   `resolveRedirect` shape (`readableSpaceWhere` answers `{}` for the only viewer that gets
+    //   past the gate), and wrong because an installation's administration that cannot see a
+    //   `MEMBERS` space nobody added the admin to is a surface with a blind spot over a space
+    //   nobody could then administer. `can(viewer, space, "MANAGE_SPACE")` is not the alternative
+    //   either, and here it is *circular*: the membership rows this module writes are what `can()`
+    //   reads, so a space with no ADMIN — which `createSpace` produces every time — would be one
+    //   nobody could ever add a member to.
+    //
+    //   The permission predicate for the whole module is `refuseNonAdmin` in
+    //   `src/lib/admin/gate.ts`, swept for in `src/lib/admin/gate.test.ts` and mutation-verified in
+    //   both directions by "a space ADMIN is refused by every entry point, and the super admin is
+    //   not" — the discriminating viewer is an ADMIN of a real space, not a stranger.
+    //
+    //   The audit line is the container versus what is inside it: the space list writes nothing,
+    //   and naming the people in a private space writes `space.access`. Covered by "listing the
+    //   members audits a MEMBERS space and not an ALL_STAFF one", a discrimination between two
+    //   spaces read by one viewer rather than an absence.
+    covered: ["listSpacesForAdmin", "updateSpace"],
+    // `Space`, `SpaceMembership` and `User` only. None has a `deletedAt`; membership IS the
+    // permission predicate rather than something filtered by one, and `listSpaceMembers` states
+    // its own audit rather than its own filter.
+    exempt: [
+      "createSpace",
+      "listSpaceMembers",
+      "addSpaceMember",
+      "setSpaceMemberRole",
+      "removeSpaceMember",
+    ],
+  },
   "src/lib/systems/admin.ts": {
     load: () => import("@/lib/systems/admin"),
     // Soft-delete tests: tests/integration/systems-admin.test.ts. Phase 7 Task 5's `/admin/systems`,
