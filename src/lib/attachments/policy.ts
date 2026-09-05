@@ -7,6 +7,13 @@
  * could be inspected. What makes that acceptable is entirely here: a `Content-Type` drawn from
  * this allowlist, `X-Content-Type-Options: nosniff` at the route, and an inline set that
  * excludes every format a browser will execute.
+ *
+ * **The serving rules govern one of two readers, which is why the allowlist carries the weight
+ * for executable formats.** The bytes live in a SharePoint document library, and SharePoint's
+ * own web UI serves them to anyone with access to the site — with none of this module's
+ * headers, no permission predicate of ours, and at a URL we cannot add a header to. Any format
+ * a browser will execute therefore has to be refused at the point that governs both readers:
+ * whether it may be stored at all. See `image/svg+xml` and `text/html` below.
  */
 
 /** Extension per allowed type. Membership in this map IS the allowlist. */
@@ -16,13 +23,11 @@ const MIME_EXTENSIONS: Record<string, string> = {
   "image/gif": ".gif",
   "image/webp": ".webp",
   "image/avif": ".avif",
-  "image/svg+xml": ".svg",
   "video/mp4": ".mp4",
   "video/webm": ".webm",
   "application/pdf": ".pdf",
   "text/plain": ".txt",
   "text/csv": ".csv",
-  "text/html": ".html",
   "application/zip": ".zip",
   "application/msword": ".doc",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -35,10 +40,16 @@ const MIME_EXTENSIONS: Record<string, string> = {
 /**
  * Served with `Content-Disposition: inline`. Everything else downloads.
  *
- * `image/svg+xml` and `text/html` are deliberately ABSENT while remaining uploadable. An
- * inline SVG is script execution against our own origin — worse than the same file hosted
- * anywhere else, because it inherits the session. Video is present because a browser will not
- * execute an mp4, and `<video>` needs the bytes inline to play them.
+ * **`image/svg+xml` and `text/html` are absent here AND absent from the allowlist above, and
+ * both absences are load-bearing.** They were uploadable-but-never-inline first, on the
+ * reasoning that an inline SVG is script execution against our own origin while a downloaded
+ * one is inert. That reasoning was right about this route and incomplete about the system: the
+ * library is also readable through SharePoint's own UI, which applies none of these rules. The
+ * upload refusal is what closes that; this set staying narrow is what keeps a row written
+ * before the refusal from being served inline now.
+ *
+ * Video is present because a browser will not execute an mp4, and `<video>` needs the bytes
+ * inline to play them.
  */
 const INLINE_MIMES = new Set([
   "image/png",

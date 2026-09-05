@@ -562,6 +562,13 @@ git commit -m "Add editableSpace, with the super-admin short-circuit can() makes
 
 Create `src/lib/attachments/policy.test.ts`:
 
+> **Superseded after the phase merged.** `image/svg+xml` and `text/html` were dropped from
+> the upload allowlist at the user's decision: the library is also readable through
+> SharePoint's own UI, which applies none of this phase's serving rules, so an executable
+> format had to be refused at the one point that governs both readers. The serving rules
+> below are unchanged and still apply to rows written before that. Read the file for the
+> truth; do not apply this fence.
+
 ```ts
 import { expect, test } from "vitest";
 import {
@@ -674,6 +681,13 @@ Expected: FAIL — cannot resolve `./policy`.
 - [ ] **Step 3: Implement it**
 
 Create `src/lib/attachments/policy.ts`:
+
+> **Superseded after the phase merged.** `image/svg+xml` and `text/html` were dropped from
+> the upload allowlist at the user's decision: the library is also readable through
+> SharePoint's own UI, which applies none of this phase's serving rules, so an executable
+> format had to be refused at the one point that governs both readers. The serving rules
+> below are unchanged and still apply to rows written before that. Read the file for the
+> truth; do not apply this fence.
 
 ```ts
 /**
@@ -2967,6 +2981,12 @@ git commit -m "Add the attachment repository and its permission predicates"
 
 Create `tests/integration/attachment-begin-route.test.ts`:
 
+> **Superseded after the phase merged.** The file has gained a 415 case for `image/svg+xml`
+> and `text/html`, which were dropped from the upload allowlist at the user's decision —
+> SharePoint's own UI serves the library with none of this phase's headers, so an executable
+> format has to be refused at the one gate that governs both readers. Read the file for the
+> truth; do not apply this fence.
+
 ```ts
 import { expect, test, vi } from "vitest";
 import type { Viewer } from "@/lib/authz/types";
@@ -3418,6 +3438,13 @@ git commit -m "Add the commit route, which verifies rather than believes"
 
 Create `tests/integration/attachment-read-route.test.ts`:
 
+> **Superseded after the phase merged.** `image/svg+xml` and `text/html` were dropped from
+> the upload allowlist at the user's decision: the library is also readable through
+> SharePoint's own UI, which applies none of this phase's serving rules, so an executable
+> format had to be refused at the one point that governs both readers. The serving rules
+> below are unchanged and still apply to rows written before that. Read the file for the
+> truth; do not apply this fence.
+
 ```ts
 import { expect, test, vi } from "vitest";
 
@@ -3677,6 +3704,13 @@ Expected: FAIL — cannot resolve the route module.
 - [ ] **Step 3: Implement the proxy**
 
 Create `src/app/api/attachments/[id]/route.ts`:
+
+> **Superseded after the phase merged.** `image/svg+xml` and `text/html` were dropped from
+> the upload allowlist at the user's decision: the library is also readable through
+> SharePoint's own UI, which applies none of this phase's serving rules, so an executable
+> format had to be refused at the one point that governs both readers. The serving rules
+> below are unchanged and still apply to rows written before that. Read the file for the
+> truth; do not apply this fence.
 
 ```ts
 import { NextResponse } from "next/server";

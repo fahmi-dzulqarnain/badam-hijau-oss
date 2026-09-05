@@ -91,12 +91,15 @@ function commonHeaders(attachment: ReadableAttachment, eTag: string | null): Hea
   // From Postgres, never from the store. The mime was validated once against the allowlist at
   // upload; letting the store decide would let a file's own metadata pick its interpretation.
   //
-  // And only for a type meant to render. `text/html` and `image/svg+xml` are uploadable but
-  // never inline, and for those `nosniff` is no help at all — it stops a browser GUESSING a
-  // different type, and here the type is genuinely executable. That left
-  // `Content-Disposition: attachment` as the single thing between an editor-uploaded file and
-  // same-origin script execution. Serving every non-inline type as an opaque stream removes
-  // the dependency on one header being honoured; the disposition still names the file.
+  // And only for a type meant to render. `text/html` and `image/svg+xml` are no longer
+  // uploadable — the library is also readable through SharePoint's own UI, which applies none
+  // of these headers, so an executable format had to be refused at the point that governs both
+  // readers rather than served carefully by this one. This branch is still what protects a row
+  // written before that refusal, and the reasoning it was built on stands: for a genuinely
+  // executable type `nosniff` is no help at all, since it stops a browser GUESSING a different
+  // type rather than declining the declared one. Serving every non-inline type as an opaque
+  // stream removes the dependency on `Content-Disposition: attachment` being the single thing
+  // honoured; the disposition still names the file.
   headers.set(
     "content-type",
     isInlineMime(attachment.mimeType) ? attachment.mimeType : "application/octet-stream",

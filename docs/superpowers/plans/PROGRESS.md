@@ -2,12 +2,12 @@
 
 **Phases 1 through 6 are complete.**
 
-Phases 1–5 are in `main` — Phase 5, the git mirror, merged as `0e947bc`. Phase 6 —
-attachments and the Entra ID cutover — is on `claude/onedrive-microsoft-sso-7ac97b`
-with an open PR.
+**All six are in `main`** — Phase 5, the git mirror, merged as `0e947bc`; Phase 6, attachments
+and the Entra ID cutover, merged as `e9377ed`. **Phase 7, systems and admin, is the only phase
+left** and has no plan document yet.
 
-Branch: `claude/onedrive-microsoft-sso-7ac97b` · **1321 vitest + 67 Playwright tests passing**, 119-check cold-start
-smoke green · typecheck, build and `plan:check` clean · working tree clean
+`main` · **1323 vitest + 67 Playwright tests passing**, 119-check cold-start smoke green ·
+typecheck, build and `plan:check` clean
 
 **Attachments have now been renumbered twice, and the second time is the interesting one.**
 This phase was planned and built as **Phase 4**, cut from `main` at `2706769` in parallel with
@@ -530,7 +530,7 @@ All 15 tasks approved and every exit criterion verified.
 
 ## Test suite
 
-**1321 vitest tests over 88 files**, plus **67 Playwright specs** in `e2e/` and a **119-check
+**1323 vitest tests over 88 files**, plus **67 Playwright specs** in `e2e/` and a **119-check
 cold-start smoke script**. The per-file table that used to sit here described Phase 1's 128 tests
 over 18 files and had been wrong for two phases — a table that has to be edited by hand on every
 task is a table that ends up lying, so the counts live in one place now and
@@ -582,6 +582,26 @@ so a fresh database is reproducible. Page **titles** are still not updated on re
 ## Decisions that should not be relitigated
 
 ### Phase 6 — attachments and the Entra cutover
+
+- **`image/svg+xml` and `text/html` are refused as UPLOADS, and the reason is that this
+  application is not the only thing that serves the library.** They were uploadable-but-never-
+  inline at first, on the reasoning that safety comes from how a file is *served*: forced
+  `application/octet-stream`, `nosniff`, `Content-Disposition: attachment`. That reasoning is
+  correct about the read proxy and incomplete about the system — the bytes live in a SharePoint
+  document library whose **own web UI serves them too**, to anyone with access to the site, with
+  none of those headers and at a URL this application cannot add one to. So the refusal moved to
+  the only gate that governs both readers: whether the file may be stored at all.
+
+  Two independent gates now, and the second is not redundant: `isAllowedMime` refuses the
+  upload, and `isInlineMime` still refuses to serve either type inline, which is what covers a
+  row written before the allowlist narrowed. Both are pinned, and the route-level 415 test uses
+  an SVG rather than only the original `.exe` because an SVG is the refusal a person will
+  actually meet. Its stub resolves a plausible result so that putting either type back fails
+  with `expected 201 to be 415` rather than a crash — the same lesson as the git worker's claim
+  mutant.
+
+  The cost was accepted, not argued away: an SVG diagram is a legitimate attachment. ```mermaid```
+  fences cover the case that motivated allowing it.
 
 - **`editableSpace` must short-circuit on `isSuperAdmin`, exactly as `can()` does.** The naïve
   composition `readableSpace(v, { memberships: { some: … } })` returns `{ AND: [{}, …] }` for a
