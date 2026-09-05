@@ -23,9 +23,14 @@ async function fixture() {
   });
   const dara = await db.user.create({ data: { email: "dara@example.com", name: "Dara M." } });
   const space = await db.space.create({
-    // A key that needs encoding, so a route that concatenated instead of calling `pageHref`
-    // returns a broken href.
-    data: { key: "eng ops", name: "Engineering", initials: "EN", visibility: "MEMBERS" },
+    /*
+     * A legal key since Phase 7 Task 6: `Space_key_shape` refuses a space, so `"eng ops"` — what
+     * this fixture used to write — can no longer be stored by anything. The encoding claim this
+     * test makes now rests entirely on the page's own path below, which is the half that is still
+     * reachable: `Page.path` has no CHECK, and a direct write is how a segment with a space gets
+     * into it.
+     */
+    data: { key: "eng-ops", name: "Engineering", initials: "EN", visibility: "MEMBERS" },
   });
   await db.spaceMembership.create({
     data: { spaceId: space.id, userId: aisyah.id, role: "EDITOR" },
@@ -102,7 +107,7 @@ test("the owner confirms and gets the new timestamp and the reader URL", async (
 
   const body = await response.json();
   expect(body.pageId).toBe(f.page.id);
-  expect(body.href).toBe("/eng%20ops/architecture/mqtt%20contracts");
+  expect(body.href).toBe("/eng-ops/architecture/mqtt%20contracts");
   // The stored value and the reported one are the same instant, and it is a real "now" rather
   // than a value echoed back from the request — compared against the clock, not against itself.
   const stored = await reviewedAtOf(f.page.id);

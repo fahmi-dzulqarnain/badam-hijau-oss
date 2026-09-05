@@ -48,18 +48,28 @@ const RESERVED = "-";
  * under a space's heading. That leaves a top-level route, and a top-level static segment sits at
  * the same depth as `[space]`, so it **shadows** any space whose key it matches.
  *
- * Nothing prevents that today for any word: `Space.key` is a bare `String @unique` with no
- * validation anywhere (`src/lib/git/paths.ts` measured this — the seed and the fixtures are the
- * only writers, one of which uses `"eng ops"`), and `/search` already shadows a space keyed
- * `search`. Task 7 called that existing debt and declined to extend it, which is right.
+ * Nothing prevented that for any word: `Space.key` was a bare `String @unique` with no validation
+ * anywhere (`src/lib/git/paths.ts` measured this — the seed and the fixtures were the only
+ * writers, one of which used `"eng ops"`), and `/search` already shadows a space keyed `search`.
+ * Task 7 called that existing debt and declined to extend it, which is right.
  *
  * So `-` is chosen over `admin` or `mirror`, and the honest claim is narrow: **it does not remove
- * the collision, it makes the fix a rule the product already states.** `validateSlug` refuses any
- * slug beginning with `-`, with `reserved-prefix` as its own error code and its own test, and it
- * is the function a Phase 7 space-key validator would reuse — so reserving one character at the
+ * the collision, it makes the fix a rule the product already states.** ~~`validateSlug` refuses
+ * any slug beginning with `-`, with `reserved-prefix` as its own error code and its own test, and
+ * it is the function a Phase 7 space-key validator would reuse — so reserving one character at the
  * top level costs that phase one rule, where reserving `admin`, `mirror`, `search` and whatever
- * comes next costs it a list that grows with every route. `-` is also not a word anybody would
- * name a space, which is not an argument but is worth a line.
+ * comes next costs it a list that grows with every route.~~ **Superseded by Phase 7 Task 6, and
+ * the measurement is what supersedes it:** run over the seven top-level segments this application
+ * actually has, `validateSlug` accepts six — `admin`, `api`, `search`, `systems`, `edit` and
+ * `new` are all legal slugs — so the rule the product already states closes one collision in
+ * seven, and the "one rule" this sentence promised the next phase was never available. The
+ * argument that replaces it, including why a growing list is affordable when a sweep maintains it,
+ * is on {@link RESERVED_TOP_LEVEL_SEGMENTS} below; the six-of-seven count is asserted in
+ * `src/lib/spaces/key.test.ts` rather than restated here.
+ *
+ * The *choice* of `-` is untouched by that: it is still the address a non-space-scoped surface
+ * should take, and it is still the one segment a page slug could never shadow from below. `-` is
+ * also not a word anybody would name a space, which is not an argument but is worth a line.
  *
  * Phase 7 owns `/admin` and folds this in. Taking `/admin` now would squat on that namespace with
  * a single list and reserve an English word for it, which is the debt above, twice.
@@ -78,9 +88,11 @@ export const MIRROR_FAILURES_PATH = `/${RESERVED}/mirror` as Route;
  *
  * ## It is a top-level static segment, and it therefore shadows a space keyed `systems`
  *
- * The same debt `/search` already carries and `/-/mirror` measured: `Space.key` is a bare
- * `String @unique` with no validation until Task 6, so nothing stops a space being created with
- * this key, and Next resolves a static segment ahead of a dynamic one.
+ * The same debt `/search` already carries and `/-/mirror` measured: `Space.key` was a bare
+ * `String @unique` with no validation until Task 6, so nothing stopped a space being created with
+ * this key, and Next resolves a static segment ahead of a dynamic one. Task 6 has since made
+ * `systems` a refusal with a sentence — see {@link RESERVED_TOP_LEVEL_SEGMENTS} — for keys typed
+ * after it, and for no others.
  *
  * **Measured, not reasoned about** — see `src/app/(reader)/systems/page.tsx` for the
  * `routes-manifest.json` ordering and the `next start` probe against a space actually keyed
@@ -107,8 +119,9 @@ export const SYSTEMS_PATH = "/systems" as Route;
  * ## `/admin` is taken here, and the collision is narrower than `/systems`'s — measured
  *
  * `/-/mirror` deliberately did **not** squat on `/admin` ("Phase 7 owns `/admin` and folds this
- * in"), and this is that phase. `Space.key` is still a bare `String @unique` until Task 6, so a
- * space keyed `admin` collides with this route — but the shape is not `/systems`'s.
+ * in"), and this is that phase. `Space.key` was still a bare `String @unique` when this route
+ * shipped, so a space keyed `admin` collides with it — but the shape is not `/systems`'s. Task 6
+ * closed the window for keys typed after it; see {@link RESERVED_TOP_LEVEL_SEGMENTS}.
  *
  * **This route is fully static: two literal segments and no dynamic one.** `/systems/[key]` cost a
  * space keyed `systems` its landing page *and every path at depth one*, because `[key]` matches

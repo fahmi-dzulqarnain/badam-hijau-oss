@@ -89,9 +89,20 @@ function post(pageId: string) {
 
 test("a restored subtree comes back with the reader URL, encoded per segment", async () => {
   const f = await fixture();
-  // A space key and a parent segment that both need encoding, so a route that concatenated
-  // instead of calling `pageHref` returns a broken href.
-  await db.space.update({ where: { id: f.space.id }, data: { key: "eng ops" } });
+  /*
+   * A parent segment that needs encoding, so a route that concatenated instead of calling
+   * `pageHref` returns a broken href.
+   *
+   * **This used to set the space key to `"eng ops"` as well, and Phase 7 Task 6 took that half
+   * away** — `Space_key_shape` refuses a space, so the row can no longer be written at all, by
+   * this fixture or by anything else. What is left is the half that is still reachable and is the
+   * one that mattered: `Page.path` has **no** CHECK, `createPage` and `movePage` are the only
+   * writers that call `validateSlug`, and a direct write like the three below is exactly how a
+   * path with a space gets into the column. So the encoding claim is unchanged in substance — one
+   * segment encoded, the `/` separators surviving — and the space key is now a legal key instead
+   * of a hostile one.
+   */
+  await db.space.update({ where: { id: f.space.id }, data: { key: "eng-ops" } });
   await db.page.update({
     where: { id: f.architecture.id },
     data: { slug: "architecture notes", path: "architecture notes" },
@@ -115,7 +126,7 @@ test("a restored subtree comes back with the reader URL, encoded per segment", a
 
   const body = await response.json();
   expect(body.path).toBe("architecture notes/mqtt-contracts");
-  expect(body.href).toBe("/eng%20ops/architecture%20notes/mqtt-contracts");
+  expect(body.href).toBe("/eng-ops/architecture%20notes/mqtt-contracts");
   // The page and the descendant the same delete took, all or nothing.
   expect(body.restored).toBe(2);
   // The two redirects the delete wrote stood at paths that hold live pages again.

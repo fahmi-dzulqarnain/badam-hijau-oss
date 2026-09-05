@@ -32,16 +32,26 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
  *   the only writers in the product, and both call it.
  * - **`validatePath`, despite the name, checks only byte length** (`MAX_PATH_BYTES`), not shape.
  *   It is not a second opinion about the characters.
- * - **`Space.key` has no validation anywhere.** It is a bare `String @unique` in
- *   `prisma/schema.prisma`; today the only writers are `prisma/seed.ts`'s two `space.upsert`
- *   calls and the integration fixtures — one of which sets a key of `"eng ops"`, a space
- *   character and all. Phase 7 owns space administration, which is when a human can type one.
+ * - **`Space.key` had no validation anywhere, and now has two — neither of them here.**
+ *   ~~It is a bare `String @unique` in `prisma/schema.prisma`; today the only writers are
+ *   `prisma/seed.ts`'s two `space.upsert` calls and the integration fixtures — one of which sets a
+ *   key of `"eng ops"`, a space character and all.~~ **Superseded by Phase 7 Task 6**, which is
+ *   the phase that let a human type one: `Space_key_shape` constrains the column to
+ *   `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` for every writer, and `validateSpaceKey` adds the route list
+ *   and the length cap for the one surface a person types into. The `"eng ops"` fixture is gone;
+ *   the database refuses it.
  *
- * So the traversal this refuses cannot arrive through the half of the path everyone assumes, and
- * can arrive through the half nobody validates. That inversion is the argument for the guard: its
- * value is precisely that it does **not** depend on a guarantee made three modules away for an
- * unrelated reason — the same argument `document.ts` makes for nesting the author's frontmatter
- * under `declared` rather than trusting a key allowlist.
+ * So the traversal this refuses **could** once arrive through the half nobody validated, and today
+ * cannot arrive through either half. That does not retire the guard, and the reason is the one
+ * this module has always given rather than a reluctance to delete code: its value is precisely
+ * that it does **not** depend on a guarantee made three modules away for an unrelated reason — the
+ * same argument `document.ts` makes for nesting the author's frontmatter under `declared` rather
+ * than trusting a key allowlist. A CHECK constraint is a stronger promise than `validateSlug` was,
+ * and it is still a promise this function cannot see: it is dropped by one `ALTER TABLE`, it says
+ * nothing about a row written before it, and `mirrorPathOf` is handed strings by a job row rather
+ * than by the column. The test corpus in `paths.test.ts` therefore keeps `"eng ops"` and the
+ * traversal shapes as **arguments**, which is the level this function operates at — that file
+ * needed no change for Task 6, and the fact that it did not is the point.
  *
  * ## The `.md` suffix is appended *after* resolution, and the order is load-bearing
  *
@@ -99,6 +109,13 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
  * `Space.key` where both keys are visible, at the point space keys are created — Phase 7. So this
  * module is byte-faithful, a test pins that it does not fold, and the hazard is stated here
  * rather than half-addressed.
+ *
+ * **Task 6 closed it, and by the narrower of the two mechanisms this note anticipated.** Not a
+ * second unique index on `lower(key)`: `Space_key_shape` admits only `[a-z0-9-]`, so `Engineering`
+ * cannot be stored at all and the existing `Space_key_key` *is* the folded constraint. That also
+ * closes the NFC/NFD and dotless-`ı` half outright rather than by folding, the class being ASCII —
+ * which is why constraining the character class was the right shape of answer and a `lower()`
+ * index would have been the half-measure this paragraph warned about.
  *
  * A related one that needs no action: a NUL cannot reach a filename through this, because
  * Postgres rejects NUL in `text` and so `Space.key` cannot hold one. Other control characters

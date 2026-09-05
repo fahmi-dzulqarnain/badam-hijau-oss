@@ -124,12 +124,51 @@ model User {
 }
 
 model Space {
-  id          String            @id @default(cuid())
-  key         String            @unique
+  id String @id @default(cuid())
+
+  // The first segment of every URL in the space, and the directory name the git mirror writes
+  // under (`content/<key>/…`, spec §10). Constrained since Phase 7 Task 6 by `Space_key_shape` in
+  // `prisma/migrations/20260905150800_space_key_shape` — one lowercase URL segment with both ends
+  // alphanumeric, `System_key_shape`'s pattern character for character. Three things follow, and
+  // only the first is visible from this line:
+  //
+  //  - **`@unique` below is folded uniqueness.** No row can hold an uppercase character, so
+  //    `key = lower(key)` everywhere and this index is an index on `lower(key)`. There is
+  //    deliberately no second unique index on the folded value; the migration argues it, and
+  //    `src/lib/git/paths.ts` is where the collision it closes was measured — on a case-insensitive
+  //    filesystem `Engineering` and `engineering` were two rows sharing one mirror directory.
+  //  - **`mirrorPathOf`'s containment guard is no longer standing on an unvalidated column.** That
+  //    module's docstring still argues the guard is worth keeping and the argument still holds:
+  //    its value was never that the key was dangerous, but that it must not depend on a promise
+  //    made three modules away.
+  //  - **The route list is NOT here.** `/admin`, `/systems`, `/search`, `/api`, `/new`, `/edit` and
+  //    `/-` are refused by `validateSpaceKey` in `src/lib/spaces/key.ts`, not by the database: that
+  //    list changes when a directory is added under `src/app`, and a copy of it in SQL would be the
+  //    untestable half of a rule stated twice. So the CHECK is what every writer obeys and the
+  //    validator is what the one surface a person types into obeys — the same split
+  //    `validateSystemKey` makes against `System_key_shape`.
+  //
+  // The length cap is the validator's too (`SPACE_KEY_MAX_LENGTH = SLUG_MAX_LENGTH`), and for
+  // Task 1's reason: a number in SQL that nothing ties back to `src/lib/pages/slug.ts` is a
+  // predicate stated twice. A 300-character lowercase key therefore passes the CHECK.
+  key String @unique
+
   name        String
   description String?
-  initials    String
-  visibility  SpaceVisibility   @default(MEMBERS)
+
+  // Required, and read by `getReadableSpaceByKey` — a two-or-so character chip. `/admin/spaces`
+  // asks for it rather than deriving it from `name`: a derived value is one the admin never typed,
+  // which is the rule `validateSlug` states for trimming and the same reason applies.
+  initials String
+
+  // **The single field on this model that can widen access to everything in the space at once.**
+  // Flipping `MEMBERS` → `ALL_STAFF` grants read to every signed-in person without touching one
+  // `SpaceMembership` row, and it also silences the §8 trail: `needsAccessAudit` fires only for a
+  // `MEMBERS` space, so a super admin's reads of this space stop being recorded from that moment.
+  // `updateSpace` therefore records `previousVisibility` on its audit row — null and not absent —
+  // and the surface states the consequence with the page count beside it.
+  visibility SpaceVisibility @default(MEMBERS)
+
   createdAt   DateTime          @default(now())
   memberships SpaceMembership[]
   pages       Page[]
