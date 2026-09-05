@@ -1,6 +1,8 @@
+import Link from "next/link";
 import "@/components/shell.css";
 import "@/components/doc.css";
 import { buildInfo } from "@/lib/version/build";
+import { ADMIN_SPACES_PATH, ADMIN_SYSTEMS_PATH } from "@/lib/pages/href";
 import { TopBar } from "@/components/TopBar";
 
 /**
@@ -26,11 +28,32 @@ import { TopBar } from "@/components/TopBar";
  * `/systems`: the refusal that matters on an admin route is `notFound()` for a signed-in
  * non-admin, and that answer comes from the module's own result. A redirect fired from this layout
  * would pre-empt the read that has to distinguish the two.
+ *
+ * ## The cross-links are here, and they are the affordance an `/admin` index would otherwise be
+ *
+ * Task 6 added the second leaf, and two surfaces with nothing linking between them is how the
+ * second one gets found by nobody — this project has shipped a feature with no way to reach it
+ * twice (`movePage`, `/search`), and Task 3 added `/systems` to the top bar in the task that built
+ * it rather than discovering the gap a third time. An `/admin` index page would be the obvious
+ * home for these links and is deliberately still not built: **a layout without a page creates no
+ * route**, so `/admin` continues to resolve to `[space]` and a space keyed `admin` keeps its
+ * landing page. Putting the nav in the layout buys the affordance at a cost of zero paths.
+ *
+ * It renders on the 200 only. A `notFound()` from one of these pages resolves to the root
+ * `src/app/not-found.tsx`, which this layout does not wrap — which is what makes
+ * `e2e/admin-systems.spec.ts`'s "the refusal is byte-identical to a URL nobody built a route for"
+ * assertion hold, and is worth knowing before adding anything else here.
  */
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <TopBar build={buildInfo()} />
+      {/* No heading: `e2e/admin-systems.spec.ts` asserts on the page's own single `h1`, and a
+          layout that grew one would be answering for the page below it. */}
+      <nav className="adm-nav" aria-label="Administration">
+        <Link href={ADMIN_SPACES_PATH}>Spaces</Link>
+        <Link href={ADMIN_SYSTEMS_PATH}>Systems</Link>
+      </nav>
       {children}
     </>
   );
