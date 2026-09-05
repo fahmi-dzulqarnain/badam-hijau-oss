@@ -47,7 +47,35 @@ export type AuditAction =
    */
   | "page.review"
   /** The Phase 1 debt: a super admin read a `MEMBERS` space they do not belong to (spec §8). */
-  | "space.access";
+  | "space.access"
+  /**
+   * The catalogue mutations on `/admin/systems` — spec §7's *"admins manage the list"*, Phase 7
+   * Task 5. **The first three actions in this union that name no space**, which is why
+   * `AuditEntry.spaceId` had to be widened deliberately; the argument is on that type.
+   *
+   * Three actions rather than one with a verb in `detail`, for `page.cascade`'s reason: an
+   * auditor filters on `action`, and "who deleted a system" is a different question from "who
+   * renamed one". They earn their place separately:
+   *
+   * - `system.create` and `system.update` are ordinary mutations, but `System` has **no
+   *   `createdAt`** — Task 1 removed it on the explicit grounds that *"when was this system
+   *   added, and by whom is a question `AuditLog` already answers for Task 5's mutations"*. This
+   *   is that answer, and without it the claim in the schema is false.
+   * - `system.update` is also where a **rename** is recorded, which Task 2 asked for by name: a
+   *   `System.key` change strands the old key text inside every published version's stored
+   *   frontmatter, so the row carries `previousKey` and the number of pages affected. That row is
+   *   the only durable record that the two spellings were once one system.
+   * - `system.delete` is the strongest case of the three. `Restrict` means a deletable system has
+   *   no pages naming it, so the row leaves **no other trace at all** — no facet rows, no version
+   *   history, and the `System` row itself is gone. Same standing as `page.review`, arriving from
+   *   the other direction.
+   *
+   * What these rows deliberately do **not** carry is `repoUrl`. See `systemAuditDetail` in
+   * `src/lib/systems/admin.ts`: a repo URL is a credential channel, and an audit row is a column.
+   */
+  | "system.create"
+  | "system.update"
+  | "system.delete";
 
 /**
  * Whatever can write the row. Structural on purpose, so the same helper serves the five
@@ -58,15 +86,34 @@ export type AuditAction =
 export type AuditClient = Pick<Prisma.TransactionClient, "auditLog">;
 
 /**
- * `spaceId` is required even though the column is nullable: every event in the product so
- * far is an event *about a space*, and the space is the only column with an index that an
- * auditor can query by. A future spaceless event should widen this deliberately rather than
- * discover that `undefined` was allowed all along.
+ * `spaceId` is **`string | null` and not optional**, and that widening is the deliberate one this
+ * type asked for.
+ *
+ * It used to read `spaceId: string`, with the reason written here: *"every event in the product
+ * so far is an event about a space… A future spaceless event should widen this deliberately
+ * rather than discover that `undefined` was allowed all along."* Phase 7 Task 5 is that event.
+ * §7 says systems *"are global, not owned by a space, and carry no permissions of their own"*, and
+ * `System` has no `spaceId` column — so a `system.create` row has no space to name, and inventing
+ * one (the space the admin last looked at, say) would put a false answer in the column an auditor
+ * filters by.
+ *
+ * The widening is to `string | null` rather than to `spaceId?: string` on purpose, and the
+ * difference is the whole point of the original note: an **optional** key is one a caller can
+ * forget, and a forgotten space on a page mutation is indistinguishable at the type level from a
+ * genuinely spaceless one. Required-and-nullable makes every call site state which it is, so the
+ * five page actions still cannot omit it by accident. That is the same distinction
+ * `page.review`'s `previousReviewedAt` draws for a different reason — an omitted key and a null
+ * one mean different things to anyone querying the column.
+ *
+ * The cost, stated rather than left to be found: `@@index([spaceId, createdAt])` does index NULLs
+ * in Postgres, so the spaceless rows are still reachable by that index, but a query shaped
+ * `where spaceId = $1` will never return them. An auditor looking for catalogue mutations filters
+ * on `action`, which is what `AuditAction`'s three new values are for.
  */
 export type AuditEntry = {
   actorId: string;
   action: AuditAction;
-  spaceId: string;
+  spaceId: string | null;
   pageId?: string | null;
   detail: Prisma.InputJsonObject;
 };

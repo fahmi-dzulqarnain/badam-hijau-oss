@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireViewer } from "@/lib/auth/viewer";
-import { SYSTEMS_PATH, systemHref } from "@/lib/pages/href";
+import { ADMIN_SYSTEMS_PATH, SYSTEMS_PATH, systemHref } from "@/lib/pages/href";
 import { listSystems } from "@/lib/systems/read";
 import { SystemRepo } from "@/components/SystemRepo";
 
@@ -44,7 +44,7 @@ import { SystemRepo } from "@/components/SystemRepo";
  * empty in practice and closes for good three tasks from now.
  */
 export default async function SystemsCataloguePage() {
-  await requireViewer(SYSTEMS_PATH);
+  const viewer = await requireViewer(SYSTEMS_PATH);
 
   const systems = await listSystems();
 
@@ -58,6 +58,26 @@ export default async function SystemsCataloguePage() {
         Systems are global: this list is the same for everyone, and naming one grants no access to
         anything.
       </p>
+
+      {/*
+        The affordance for Task 5's `/admin/systems`, added in the task that builds it. Two
+        features in this project have shipped with nothing linking to them — Phase 2's `movePage`
+        and Phase 4's `/search` — and both were found late by asking "can a person get to this?"
+        rather than by a test.
+
+        It is here rather than in `TopBar` because the bar is rendered by four layouts and takes no
+        viewer, and an admin link on every page for everyone would be a 404 for almost everyone.
+        This is a **visibility** decision and not a permission one: `/admin/systems` refuses on its
+        own, through `refuseNonAdmin`, and re-decides this whether or not the link was rendered —
+        the same split `ConfirmReviewButton` states ("the endpoint re-decides it anyway"). The
+        predicate here is `isSuperAdmin` on the in-memory viewer, which is `can()`'s source and not
+        a second copy of the gate.
+      */}
+      {viewer.isSuperAdmin ? (
+        <p className="sys-back">
+          <Link href={ADMIN_SYSTEMS_PATH}>Manage systems</Link>
+        </p>
+      ) : null}
 
       {systems.length === 0 ? (
         <p className="sys-empty">

@@ -1563,3 +1563,185 @@ a.sys-repo:hover { text-decoration: underline; }
   color: var(--ink-3);
   overflow-wrap: anywhere;
 }
+
+/*
+ * The systems administration surface (Phase 7 Task 5), on `/admin/systems`.
+ *
+ * In `doc.css` for the reason `.del-*`, `.rel-*`, `.q-*`, `.ver-*`, `.mir-*` and `.sys-*` all
+ * state: Phase 1 measured that a route importing its own stylesheet makes `.doc` compute
+ * `max-width: none` on a hard load and `820px` on a soft navigation to the same route, so the
+ * sheet is imported by a layout and every selector for a surface inside `.doc` lives here. Every
+ * selector is prefixed `adm-` and defined in exactly one place.
+ *
+ * The page reuses `.sys-row`, `.sys-head`, `.sys-meta`, `.sys-key`, `.sys-team` and `.sys-repo`
+ * rather than growing parallel rules, which is deliberate: those carry the overflow guards Task 3
+ * earned the hard way, including the ninth shape of the class — `flex: none` on `.sys-team`,
+ * 515px on a 1280px viewport, because `overflow-wrap: anywhere` cannot break a token inside a box
+ * that is not allowed to shrink. A second set of rules for the same values would be a second
+ * chance to forget that.
+ *
+ * So the rule Task 3 set holds here too: **`flex: none` is reserved for values the database
+ * bounds.** On this page that is `.sys-kind` (a `SystemKind`) and `.adm-refs` (an integer). Every
+ * input, every message and every listed page title may shrink, and carries `overflow-wrap:
+ * anywhere` — a field error quotes the offending character and a blocking page's title comes from
+ * an author in a space this admin may never have opened.
+ */
+.adm-new { margin: 0 0 18px; }
+
+.adm-new-toggle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.adm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  margin: 10px 0 0;
+  padding: 12px 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.adm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.adm-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.adm-input {
+  min-width: 0;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+}
+.adm-area { resize: vertical; }
+
+/* A field's own sentence, under the input it is about. `overflow-wrap: anywhere` because the
+   character-class message quotes the offending character and the too-long one quotes a number,
+   and both sit in a narrow column. */
+.adm-error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.adm-check {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.adm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+  margin: 8px 0 0;
+}
+
+.adm-btn {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+}
+.adm-btn:hover {
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+.adm-btn[disabled] { cursor: not-allowed; opacity: 0.55; }
+.adm-primary { font-weight: 500; }
+
+/*
+ * The whole-form sentence: a refused delete, a rename's consequence, an unreachable server.
+ *
+ * Amber and not red, matching `.retired`, `.del-error`, `.ver-stuck` and `.mir-kind`: a refused
+ * delete is the database working, and a rename that stranded a key is a fact to act on rather
+ * than a failure. `overflow-wrap: anywhere` because every one of those sentences quotes a
+ * `System.key`, which is admin-typed.
+ */
+.adm-message {
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--amber-wash);
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+
+/* The reference count. `flex: none` is correct here and on nothing else in the row: it is an
+   integer from a `_count`, which the database bounds — Task 3's rule, applied rather than
+   repeated. */
+.adm-refs {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+/* The pages blocking a delete — titles and paths from every space, which is why fetching them
+   writes an audit row. */
+.adm-pages {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.adm-page {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
+  min-width: 0;
+  padding: 7px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.adm-page-title {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.adm-deleted {
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--ink-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+
+.adm-more { font-style: italic; color: var(--ink-3); }

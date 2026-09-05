@@ -99,6 +99,34 @@ export const MIRROR_FAILURES_PATH = `/${RESERVED}/mirror` as Route;
 export const SYSTEMS_PATH = "/systems" as Route;
 
 /**
+ * The systems administration surface — `/admin/systems`, Phase 7 Task 5, spec §7 and §11.
+ *
+ * A constant for `MIRROR_FAILURES_PATH`'s reason: the route's own `requireViewer` return path, the
+ * affordance on `/systems`, and the three endpoints under it all name this address.
+ *
+ * ## `/admin` is taken here, and the collision is narrower than `/systems`'s — measured
+ *
+ * `/-/mirror` deliberately did **not** squat on `/admin` ("Phase 7 owns `/admin` and folds this
+ * in"), and this is that phase. `Space.key` is still a bare `String @unique` until Task 6, so a
+ * space keyed `admin` collides with this route — but the shape is not `/systems`'s.
+ *
+ * **This route is fully static: two literal segments and no dynamic one.** `/systems/[key]` cost a
+ * space keyed `systems` its landing page *and every path at depth one*, because `[key]` matches
+ * any single segment. Here there is nothing dynamic to match with, so the shadow is exactly the
+ * one path `systems` inside a space keyed `admin`, and that space keeps its landing page and every
+ * other page it has — the `/-/mirror` shape, not the `/systems/[key]` one.
+ *
+ * `/admin` itself has **no page**, deliberately: a layout without a page creates no route, so
+ * `/admin` still resolves to `[space]`. Tasks 6, 7 and 8 add three more leaves under it, each
+ * costing that hypothetical space one more path; an `/admin` index page, if one is ever wanted,
+ * would be the thing that takes its landing page too. Measured against a real `next build` and
+ * `next start` — see the route's own docstring for the `routes-manifest.json` ordering.
+ *
+ * No space is keyed `admin` today. Task 6 closes the window going forward.
+ */
+export const ADMIN_SYSTEMS_PATH = "/admin/systems" as Route;
+
+/**
  * One system's generated page — `/systems/{key}`.
  *
  * `System.key` is lowercase, digits and hyphens by CHECK constraint (Task 1), so

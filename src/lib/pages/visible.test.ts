@@ -537,6 +537,49 @@ const MODULES: Record<string, Registration> = {
       "`visibility` (spec §7: systems carry no permissions of their own), so there is no " +
       "permission predicate to state either.",
   },
+  "src/lib/systems/admin.ts": {
+    load: () => import("@/lib/systems/admin"),
+    // Soft-delete tests: tests/integration/systems-admin.test.ts. Phase 7 Task 5's `/admin/systems`,
+    // and the entry here is a different shape from every other one in this file: **this module
+    // reads `Page` rows with NO soft-delete filter, deliberately**, so what is registered is the
+    // *absence* — the same standing as `src/lib/git/worker.ts` above.
+    //
+    //   `listBlockingPages` reaches `Page` through a `page:` relation filter on `PageSystem` — no
+    //   `page` delegate token appears anywhere in the module, which is the shape widening #4 was
+    //   written for. It carries neither `visiblePage()` nor `readableSpace`, and both absences
+    //   change what it returns rather than being conveniences:
+    //     `visiblePage()` would be WRONG here. `PageSystem.pageId` cascades from `Page` and this
+    //     product has no hard delete, so a soft-deleted page keeps its facet row and keeps
+    //     blocking `PageSystem.systemId`'s `Restrict`. Hiding it would make this list name fewer
+    //     pages than the refusal counts — an admin hunting a blocker that had been filtered out of
+    //     their view. Covered by "a soft-deleted page still blocks, is listed, and is flagged",
+    //     which asserts the flag AND that the list's length equals the refusal's count, with a
+    //     live page in the same assertion as the non-vacuity companion.
+    //     `readableSpace` would be inert AND wrong: inert because `readableSpaceWhere` answers
+    //     `{}` for a super admin, which is the only viewer that reaches the query (the
+    //     `resolveRedirect` shape — a filter no test can be written against), and wrong because a
+    //     page in a space this admin is not a member of blocks the delete exactly as hard as one
+    //     they can read.
+    //
+    //   The permission predicate for the whole module is `refuseNonAdmin` in
+    //   `src/lib/admin/gate.ts`, stated once for every `/admin` surface there will be and swept
+    //   for in `src/lib/admin/gate.test.ts`. It is mutation-verified in both directions by "a
+    //   space ADMIN is refused by every entry point, and the super admin is not" — the
+    //   discriminating viewer is an ADMIN of a real space, not a stranger, because a member of
+    //   nothing is refused by any predicate at all.
+    //
+    //   The cross-boundary read is audited and the count is not, which is Task 1's line:
+    //   "showing the number needs no audit; showing the titles does". Covered by "listing the
+    //   blocking pages audits the spaces it read; the count alone audits nothing" — a
+    //   discrimination between two calls by one viewer, not an absence.
+    covered: ["listBlockingPages"],
+    // `System` alone. That table has no `deletedAt`, no `spaceId` and no `visibility` — §7 makes
+    // a system global and permissionless — so there is neither a soft-delete filter nor a space
+    // predicate to state, which is the same claim `src/lib/systems/resolve.ts` is registered on.
+    // `deleteSystem` reads `PageSystem` for a count on its refusal path and touches no `Page`
+    // column; the rows it counts are the ones the foreign key already refused over.
+    exempt: ["listSystemsForAdmin", "createSystem", "updateSystem", "deleteSystem"],
+  },
   "src/lib/systems/read.ts": {
     load: () => import("@/lib/systems/read"),
     // Soft-delete tests: tests/integration/systems-read.test.ts. Phase 7 Task 3's two reads, and
