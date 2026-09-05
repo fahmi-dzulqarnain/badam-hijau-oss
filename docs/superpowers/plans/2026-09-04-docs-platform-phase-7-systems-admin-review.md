@@ -1204,27 +1204,245 @@ tables it does not have, and this task added none. Dev baseline unchanged at 2 s
 
 ---
 
-## Task 7: `/admin/git`, and two more debts
+## Task 7: `/admin/git`, and two more debts ✅
 
-**Files:** routes, `src/lib/git/retention.ts`, `src/lib/git/reconcile.ts` + tests.
+**Files:** routes, `src/lib/git/retention.ts`, `src/lib/git/reconcile.ts` + tests. Plus five the
+plan did not name: `src/app/api/admin/git/retention/route.ts` and `.../reconcile/route.ts`,
+`src/components/AdminGit.tsx`, two `AuditAction` values, and `GIT_JOB_RETENTION_DAYS` in
+`.env.example` (and in this checkout's untracked `.env.test`).
 
-- [ ] **Step 1: Absorb `/-/mirror`**
+- [x] **Step 1: Absorb `/-/mirror`**
 
 Move it, do not duplicate it. Keep its credential redaction — Phase 5 Task 8 found the certain
 leak is the **argv** this application builds, not git's stderr, and that removing redaction from
 either end alone still leaks.
 
-- [ ] **Step 2: Retention for finished jobs**
+- [x] **Step 2: Retention for finished jobs**
 
 Phase 5 Task 3 kept `DONE` rows deliberately — deleting them makes success unobservable and every
 drain assertion vacuous — and deferred the sweep here, because "a sweep with no operator surface
 is a cron job nobody knows about". Now there is a surface.
 
-- [ ] **Step 3: Reconcile the versions that predate the mirror**
+- [x] **Step 3: Reconcile the versions that predate the mirror**
 
 Phase 5 said the queue is not a reconciliation and that pre-mirror versions stay `gitSha = null`.
 This is where a repair pass can exist — and it must be an operator action with a count, not a
 silent backfill, because the mirror's whole value is that a gap is *noticed*.
+
+**The old URL is a 404, and a redirect lost on three counts.** `src/app/(reader)/-/mirror` is gone,
+directory and all, so `/-/mirror` falls through to `[space]/[...path]` with `space = "-"`, finds no
+such space and answers not-found — asserted over real HTTP beside the new address's 200, in one
+test, so it is a discrimination rather than two absences. Against a redirect: **(1)** a redirect is
+a route that answers *every* visitor, and a `308` to `/admin/git` from a URL that is otherwise a
+404 tells an ordinary member that a git administration surface exists — which is precisely what
+this surface's not-found refusal withholds; gating the redirect would be a second statement of the
+admin predicate for an obsolete address. **(2)** Nothing external holds the old URL: Phase 5 Task 8
+measured that the page had exactly **one** affordance, the version-history stuck notice shown only
+to a super admin, and it is generated from the constant, so it moved in the same commit. **(3)**
+Keeping it alive keeps the collision — and giving the segment back is what makes the move cost zero
+paths.
+
+**Which is how the `-` row left `RESERVED_TOP_LEVEL_SEGMENTS`, and moved Task 6's measurement under
+it.** `-` was a top-level segment only because `/-/mirror` was a route; with the directory deleted,
+`src/lib/spaces/key.test.ts`'s sweep of `src/app` no longer finds it, and the constant had to drop
+it or fail. Task 6 measured that `validateSlug` accepted **six of seven** segments and put the
+number in an assertion *"so it cannot rot"*. It did not rot — it **moved**, and the assertion is
+what said so: `-` was the one segment that rule refused, so over the six that remain
+`validateSlug` closes **none**. Phase 5's "reserving `-` costs the next phase one rule" is now off
+by all of them rather than by six. Nothing is lost, and that is asserted rather than assumed: `-`
+is still refused as a space key by *shape* (`hyphen-edge`), outside the loop that no longer reaches
+it, because a rule whose only coverage was a list it has been removed from is a rule with no
+coverage.
+
+**Both redaction ends survived the move and each still fails alone.** The move touched the route
+and not the query, and the two ends were mutation-verified independently afterwards:
+
+- redaction removed from `failedRun` (all three `message:` sites in `repo.ts`) → **1 failed**,
+  `a failed push does not store the remote's credentials`:
+  `expected 'Pushing to the content remote: git ex…' not to contain 'ghp_16C7e42F292c6912E7710c838347Ae178…'`
+  — and `tests/integration/git-failures.test.ts` stayed green.
+- redaction removed from `listMirrorFailures` → **1 failed**, `a credential stored in lastError does
+  not come back out of the query`, the same message — and `src/lib/git/repo.test.ts` stayed green.
+
+Neither end covers the other, which is the property Phase 5 argued for and the reason they were not
+consolidated. `e2e/admin-git.spec.ts` still drives a hand-written credentialed row over HTTP with
+the non-vacuity half beside it (the host, the reason and `[redacted]@github.example` are all still
+on the screen).
+
+**The gate exemption is gone, and it inverted rather than being deleted.** `src/lib/git/failures.ts`
+now opens with `refuseNonAdmin`, and `gate.test.ts`'s `NOT_YET_GATED` — *a claim that one file is
+not checked* — became `ALSO_GATED`, a list of modules the `admin.ts` pattern cannot see and that
+are swept anyway. There is no exemption list left to grow. Three entries, none renamed to
+`admin.ts`: the first is Phase 5's file under Phase 5's name, the others are the two names this
+plan gives the operator actions, and renaming a module to satisfy a test's pattern is writing the
+code to fit its guard. The companion is new and needed: `ungatedExports` throws on a missing path,
+so a typo in the list would make the sweep pass by reading nothing.
+
+Mutation-verified in both directions on the moved surface. With
+`if (viewer.isSuperAdmin) return null;` deleted, **2 of 15** in `git-failures.test.ts` fail —
+`a member of a space is refused, and reads not-found` and `a member's own space's failure is
+refused too`, both
+`expected { ok: true, report: { …(3) } } to deeply equal { ok: false, reason: 'not-found' }`. With
+the body replaced by the refusal, **13 of 15** fail the other way
+(`listMirrorFailures refused: not-found`). Two rather than fifteen is the honest number and it is
+the right one: those two tests are the only ones about the guard, and there is no second guard that
+could produce their answer — the same fixture is read successfully by the super admin in the
+assertion above each. Separately, dropping the *call* is caught by the sweep:
+`open the function with … expected [ Array(1) ] to deeply equal []` plus
+`src/lib/git/failures.ts states no refusal: expected 0 to be greater than or equal to 1`.
+
+**Retention: the count, the window, and the three things that keep Phase 5's argument true.** The
+operator surface is `/admin/git`'s *Finished jobs* section: **N finished jobs in the queue, M of
+them finished more than 90 days ago**, the oldest one's timestamp, and a button labelled
+`Sweep M finished jobs` (disabled, reading `Nothing to sweep`, when M is 0). What comes back is
+what the sweep *did* — `1 finished job deleted … 0 finished jobs remain, all inside the window.
+Failures and queued changes were not touched.` — read after the delete inside the same transaction,
+not the number that was predicted.
+
+What keeps *"deleting them makes success unobservable"* true is three mechanisms rather than a
+comment:
+
+1. **A window with a floor.** `GIT_JOB_RETENTION_DAYS`, default **90**, and `0`, a negative or
+   garbage **falls back** rather than meaning "delete everything" — `repo.ts`'s rule for its
+   timeout ceiling, applied to the other end of the same argument. Every drain assertion in the
+   suite and in `scripts/smoke.sh` is about a job that finished seconds ago, so no window the
+   deployment can be in reaches one.
+2. **`DONE` only.** Deleting a `FAILED` row does not tidy anything, it **unblocks the page**: Task
+   6's barrier is `state <> 'DONE'`, so the row refusing to let later changes apply is exactly the
+   row a broader predicate removes, and the changes behind it then apply over a change that never
+   happened. Mutated to the spelling somebody reaches for, `state: { not: "PENDING" }`, the test
+   fails with `expected 3 to be 1`.
+3. **The durable evidence is on another table.** A swept `PUBLISH` leaves `PageVersion.gitSha`,
+   which is what the reader paints; that has its own test.
+
+**And what retention is *not* for is said on the surface, not only in the module.** Task 3 measured
+60,000 finished rows costing the claim query **4 buffers** to seek past, because `state` leads the
+index — so the page says *"This is about size, not speed: the worker's queue query steps past
+finished rows on an index and does not slow down as they accumulate."* Left in the module alone,
+that measurement is exactly the kind of reasoning `MAX_RELATION_TARGETS` had go stale in a docstring
+while the plan was corrected twice.
+
+The window has a **default** where `ATTACHMENT_RETENTION_DAYS` refuses to run without one, and the
+divergence has a reason at the line: that script *deletes on being run*, so an assumed window there
+is an assumed deletion, while nothing here deletes until an operator has been shown the count — and
+`.env.test` is untracked and per-checkout, so a variable with no default breaks other checkouts
+silently, which is how merging Phase 6 produced 27 phantom failures here. `REVIEW_INTERVAL_MONTHS`
+took the same decision in Task 4.
+
+**Reconcile: bounded at 500, counted per space, and it queues nothing by reading.** The surface's
+*Versions the mirror never heard about* section shows **N published pages carry no commit and have
+nothing queued**, a per-space breakdown, and — separately — **a further K unmirrored with a job
+already queued, retrying or failed**, which are the queue's and not this pass's. The button reads
+`Queue N pages` and the note says a pass takes at most 500 and can be run again. The answer is
+`N pages queued for the mirror. Nothing published is unmirrored and unqueued any more. Run the
+worker to commit and push them.`
+
+The bound is 500 **because a reconcile creates work** where the sweep beside it removes it: every
+row is a commit and a push, drained serially under one working-tree lock, so an uncapped press is
+an act whose end the operator cannot see. `remaining` is reported so repeating is obviously the
+answer, and pressing again is safe by construction — every page the pass queued now has an
+unfinished job and is no longer a candidate, which is asserted rather than argued.
+
+**A gap is three states and only one of them is this pass's**, which is the part that was easy to
+get subtly wrong: a live page whose published version has no sha **and** which has no job that is
+not `DONE`. `PENDING`/`RUNNING` would sit behind the existing job under Task 6's barrier and could
+not arrive sooner; `FAILED` would join a queue that is not moving and grow the failures page's
+*blocked* count. All three are counted apart rather than dropped, because "nothing to reconcile"
+and "everything unmirrored is already queued" are different states and one number cannot tell them
+apart. `state <> 'DONE'` is deliberately the barrier's own definition of unfinished — the question
+is the same one. Narrowed to `PENDING`, the test fails with `expected 2 to be +0`.
+
+**Phase 5's two enqueue constraints are honoured at their one statement rather than restated.**
+`enqueueMirrorJobs` is reused, so *a page that was never published enqueues nothing* stays the
+callee's rule (this module's `where` cannot even express the case: `publishedVersion: { gitSha:
+null }` is a to-one relation filter and implies the relation exists), and *every job captures its
+address* comes for free — which for a repair is not merely compatible but **required**: the file
+belongs at the page's address **now**, not the one it was published at, and a page published in
+2025 and moved twice since has exactly one correct mirror path.
+
+`deletedAt: null` is the one load-bearing filter in the module and is the **opposite** call from
+`failures.ts` and `worker.ts`, which are deliberately soft-delete-blind. The difference is stated
+at the line: those two are about jobs the product already created, this one creates them, and a
+soft-deleted page's file is *supposed* to be absent — `restorePage` is what brings it back.
+Mutated away, `a soft-deleted page is never counted and never reconciled` fails with
+`expected 2 to be 1`, on both halves of one assertion.
+
+**The coverage note Phase 5 left behind was false the moment this shipped, and is fixed.** The
+failures page said *"they were never queued — this is a queue, not a reconciliation"* two sections
+below a button that now closes exactly that gap. It now says what is still true (nothing queued
+them; this list still compares nothing against the repository, so "no failures" is not "every page
+is mirrored") and what changed (they are *reconcilable*, deliberately, by a person). The test moved
+with the wording and asserts **both halves plus the absence of the old claim** — a correction that
+only added the new sentence would leave the page claiming more coverage than it has.
+
+**The audit decision: two actions, and they fail `page.review`'s test in opposite directions.**
+`mirror.sweep` **destroys** the trace — the rows it deletes are the only record those drains
+happened — so the row carries the window, the cutoff and the count, because "37 rows were deleted"
+is unreadable a year later without the rule that chose them (`system.delete`'s standing).
+`mirror.reconcile` **creates** work that is afterwards indistinguishable from work the product
+queued itself: a reconciled job is byte-identical to a publish's, and once it drains it is a
+`gitSha` like any other — so without the row nothing says a person decided to mirror versions that
+predate the mirror. Both are **spaceless**, `system.*`'s standing sharpened: each is one act over
+rows in every space at once, and `GitJob.spaceKey` is a captured string with no `Space.id` behind
+it. Both are written in the same transaction as the change; both are written even when the count is
+zero, because *"was this ever run?"* is the question they answer.
+
+**No `space.access` row from either, and that is Task 6's line rather than Task 1's.** What these
+two show is containers and integers — a space key and a count — which is what `listSpacesForAdmin`
+already shows every super admin. The discrimination is asserted against `listMirrorFailures` on the
+same page: the reconcile report over a `MEMBERS` space the admin does not belong to writes **0**
+rows, and the failures list over the same space in the same test writes **1**. And the reconcile
+pass deliberately reaches that space — `readableSpace` is absent because it would be inert *and*
+wrong, a repair pass with that blind spot leaving exactly the closed spaces unmirrored for ever.
+
+**The route collision, from this build's own manifest.** `^/admin/git(?:/)?$` is in `staticRoutes`,
+nothing was added to `dynamicRoutes` but the two `/api/…` siblings, and `/systems/[key]` is still at
+`dynamicRoutes` index 17 ahead of `/[space]` at 18 — Task 5's class, confirmed rather than
+re-measured with a probe database. There is **no `/-` route of any kind left in the manifest**, so
+the leaf's one path is paid for by the one the move gave back. There is still no `/admin/page.tsx`;
+the fourth cross-link lives in the layout, which creates no route.
+
+**Two things the e2e run was needed for.** Both operator actions are walked count → press → count
+rather than asserted step by step, which is Tasks 5 and 6's lesson applied *before* it bit a third
+time — there is no listing control on this surface, so the defect they found could not arrive in
+its own shape, and the walk is what proves the count on the button, the endpoint behind it and the
+page the operator is left on all agree. And the two `POST` endpoints are refused for a signed-in
+member over real HTTP with the assertion on the **JSON body**, never on rendered text: Task 5
+measured that `not.toContain("forbidden")` fails on every page in this product, Next 16 shipping
+`forbidden()` in the client bundle.
+
+The reconcile spec is also the first e2e test in this project that writes rows for **seeded** pages
+— `sweep()` deletes `e2e-` pages and this run's audit rows, and a `GitJob` on a seeded page is
+neither — so it deletes every job above the id it took before pressing. The suite's closing count
+equality is what would otherwise have reported it, and did not have to.
+
+**The overflow probe: 0px at 1280, 1024, 800 and 375**, with `.git-space-key` added to the
+per-element injection list and **counter-checked rather than trusted**: `flex: none` on it
+reproduces **924px at 1280px**, Task 3's ninth shape arriving on this surface. Nothing else in the
+two new sections paints stored text — every value is an integer this application counted or a date
+it formatted — which is why `.git-figure` is the only thing that could have tempted a `flex: none`
+and does not need one.
+
+**Numbers:** **1546 vitest over 104 files** (was 1512/102 — +34 tests, +2 files:
+`tests/integration/git-retention.test.ts`, `tests/integration/git-reconcile.test.ts`, plus the two
+new assertions in `gate.test.ts` and `href.test.ts` and the two `visible.test.ts` registration cases
+that `test.each` twice), **100 Playwright** (was 97, +3 net: three new tests, and the reserved-
+segment collision test replaced by the old-URL 404), typecheck 0, build 0, `plan:check` **0
+drifted** with every bucket unchanged (70 in sync · 13 fragment · 30 superseded · 19 unmatched · 66
+not code), **119-check smoke passing** and unextended — Task 9 owns the two tables it does not have,
+and this task added none. Dev baseline unchanged at 2 spaces / 7 pages / 7 systems / 0 page systems
+/ 0 git jobs, and every seeded `reviewedAt` still `2026-08-18`.
+
+**What in the brief turned out wrong, and it is the `-` segment.** The brief said the three
+`/admin/*` docstrings citing `/-/mirror` as a measurement precedent *"stay true and should not be
+rewritten into nonsense"*, and that is right — they are annotated, not rewritten. What it did not
+predict is that deleting the route would **move a measurement in a fourth place**: `-` was a
+top-level route segment, so `RESERVED_TOP_LEVEL_SEGMENTS` had to lose it, and Task 6's carefully
+argued "six of seven" became "none of six". That is a *strengthening* of Task 6's argument arriving
+as a failing test in a file Task 7 had no reason to open, and the only reason it was not discovered
+later is that Task 6 put the number in an assertion instead of a sentence. The general form is
+worth keeping: **deleting a route can invalidate a measurement about the route table**, and the
+place to look is whatever guard derives itself from the filesystem.
 
 ---
 
