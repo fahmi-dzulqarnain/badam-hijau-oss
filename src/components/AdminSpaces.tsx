@@ -310,7 +310,12 @@ export function AdminSpaces({ spaces }: { spaces: AdminSpaceRow[] }) {
                 /* The one control on this page that reads across a space boundary, so it says so:
                    the count above needs no audit and this list writes one. */
                 title="Lists names and email addresses, and records that you did"
-                onClick={() => void showMembers(space, true)}
+                /* `showMembers` never clears — see `send`'s `clears`. This button was written
+                   with `true` first and `e2e/admin-spaces.spec.ts` failed on it: widening a space
+                   says what it just did, and pressing Members to see who that affected deleted
+                   the sentence. Task 5 found the identical defect on `/admin/systems` and its
+                   note is why the test existed to catch this one. */
+                onClick={() => void showMembers(space)}
               >
                 Members
               </button>
