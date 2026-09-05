@@ -5519,6 +5519,13 @@ Task 10 shipped a stub here so the shell was reachable. Overwrite it.
 importing it from a page route made `.doc` compute differently on a hard load than on a
 soft navigation to the same route. The layout already provides it.
 
+> **Superseded by Phase 7 Task 4.** This snapshot is Phase 1's two sections — the module grid
+> and "Recently published" — and both are still exactly as shown. What it no longer has is a
+> third: spec §11 asks this landing for "modules, recently published, and due for review", and
+> the due-for-review list plus its truncation line were added by
+> [phase 7](2026-09-04-docs-platform-phase-7-systems-admin-review.md) Task 4, along with the
+> `listDueForReview` import. Read the current file for that; nothing above it changed.
+
 ```tsx
 import Link from "next/link";
 import { notFound } from "next/navigation";
