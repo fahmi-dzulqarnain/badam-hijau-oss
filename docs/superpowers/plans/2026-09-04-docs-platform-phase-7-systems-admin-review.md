@@ -1229,6 +1229,40 @@ Phase 5 said the queue is not a reconciliation and that pre-mirror versions stay
 This is where a repair pass can exist — and it must be an operator action with a count, not a
 silent backfill, because the mirror's whole value is that a gap is *noticed*.
 
+**Deleting a route invalidated a measurement about the route table, in a file this task had no
+reason to open.** `-` was a top-level segment *only because `/-/mirror` existed*, so removing that
+route obliged `RESERVED_TOP_LEVEL_SEGMENTS` to drop it — and Task 6's carefully argued
+"`validateSlug` closes **one of seven**" became "**none of six**", a strengthening of its argument
+arriving as a **failing assertion**. It surfaced immediately only because Task 6 put the number in
+a test that derives the list from `src/app` rather than in a sentence. The general form worth
+carrying: when a route is deleted, the place to look is whatever guard derives itself from the
+filesystem. `-` is still refused as a space key by shape, now asserted outside the loop that no
+longer reaches it.
+
+**`/-/mirror` is a 404 rather than a redirect**, and the reason is the refusal's own logic: a
+redirect answers *every* visitor, so a 308 from a URL that is otherwise not-found tells an ordinary
+member that a git admin surface exists — precisely what the not-found refusal withholds — and
+gating the redirect would restate the admin predicate for an obsolete address. Nothing external
+holds the URL: Phase 5 measured the single affordance, and it is generated from a constant and
+moved in the same commit. Keeping it alive would also keep the collision; the manifest now shows
+**no `/-` route of any kind**, so the leaf is paid for by the segment given back.
+
+**Retention keeps Phase 5's observability argument by mechanism rather than by comment**: a window
+with a floor, **`DONE` only** — deleting a `FAILED` row would *unblock* its page, since Task 6's
+barrier is `state <> 'DONE'`, and the mutant that widens the sweep fails with `expected 3 to be 1`
+— and `PageVersion.gitSha` outliving the job, with its own test. The surface says what it is *not*
+for, in the product and not only in the module: *"This is about size, not speed: the worker's queue
+query steps past finished rows on an index and does not slow down as they accumulate"* — Phase 5's
+4-buffer measurement over 60,000 rows, so the reasoning cannot go stale the way
+`MAX_RELATION_TARGETS`'s did.
+
+**Reconcile is bounded at 500 because it creates work where the sweep removes it** — one commit and
+one push each, drained serially — and reports the remainder, so pressing again is safe by
+construction. The coverage note that would have become a lie is corrected and the test asserts
+**both** that the new sentences are present and that the old claim is gone: pre-mirror versions are
+now described as *reconcilable*, with the standing caveat that this list still compares nothing
+against the repository, so "no failures" is not "every page is mirrored".
+
 **The old URL is a 404, and a redirect lost on three counts.** `src/app/(reader)/-/mirror` is gone,
 directory and all, so `/-/mirror` falls through to `[space]/[...path]` with `space = "-"`, finds no
 such space and answers not-found — asserted over real HTTP beside the new address's 200, in one
