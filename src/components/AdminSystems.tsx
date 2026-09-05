@@ -87,9 +87,20 @@ export function AdminSystems({ systems }: { systems: AdminSystemRow[] }) {
     id: string,
     url: string,
     init: RequestInit,
+    /**
+     * Whether this request clears whatever the row is currently saying.
+     *
+     * `true` for the four mutations, because a stale field error beside an input the admin has
+     * since fixed is worse than none. **`false` for the blocking-pages listing**, and that is not
+     * a nicety: "Which pages?" is the button a refused delete invites an admin to press, so
+     * clearing the row would delete the refusal's sentence and the alternative it offered at the
+     * exact moment they acted on it. `e2e/admin-systems.spec.ts` caught that by walking the loop
+     * in the order an admin walks it.
+     */
+    clears = true,
   ): Promise<Record<string, unknown> | null> => {
     setPending(id);
-    setFor(id, {});
+    if (clears) setFor(id, {});
 
     let response: Response;
     try {
@@ -208,9 +219,12 @@ export function AdminSystems({ systems }: { systems: AdminSystemRow[] }) {
   };
 
   const showBlocking = async (system: AdminSystemRow) => {
-    const listed = await send(system.id, `/api/admin/systems/${system.id}/pages`, {
-      method: "GET",
-    });
+    const listed = await send(
+      system.id,
+      `/api/admin/systems/${system.id}/pages`,
+      { method: "GET" },
+      false,
+    );
     if (listed === null) return;
     setBlocking((all) => ({
       ...all,

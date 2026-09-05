@@ -87,9 +87,23 @@ test("a member gets not-found from /admin/systems and a super admin gets the pag
   await signIn(page, "aisyah@example.com");
   const refused = await page.goto("/admin/systems");
   expect(refused?.status()).toBe(404);
-  // Not "forbidden", anywhere: a 403-shaped page would tell her the route exists.
-  expect((await page.content()).toLowerCase()).not.toContain("forbidden");
   await expect(page.locator(".sys-list")).toHaveCount(0);
+
+  /*
+   * Not merely "a 404", but **the same 404 a route that does not exist gets**, word for word.
+   *
+   * The first version of this assertion searched the whole HTML for "forbidden" and failed —
+   * Next 16 ships `forbidden()` as an API and its name is in the framework's own client bundle,
+   * so the raw markup contains the word on every page in the product, 200s included. That is a
+   * useful reminder rather than an annoyance: an assertion over `page.content()` is an assertion
+   * about the framework as much as about this route. What a reader can actually see is the
+   * rendered text, and what makes it a refusal rather than an absence is that it is identical to
+   * a URL nobody ever built a route for.
+   */
+  const refusedText = await page.locator("body").innerText();
+  expect(refusedText.toLowerCase()).not.toContain("forbidden");
+  await page.goto("/no-such-space-anywhere");
+  expect(await page.locator("body").innerText()).toBe(refusedText);
 
   await signIn(page, "admin@example.com");
   const allowed = await page.goto("/admin/systems");
