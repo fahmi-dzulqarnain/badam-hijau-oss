@@ -709,6 +709,23 @@ const MODULES: Record<string, Registration> = {
     // anything.
     exempt: ["workerConfigFromEnv", "backoffMs"],
   },
+  "src/lib/git/retention.ts": {
+    reachesPage: false,
+    why:
+      "reads and deletes GitJob rows by `state` and `updatedAt`, and reaches no Page row — Phase " +
+      "7 Task 7's retention pass. Three counts, one `findFirst` for the oldest finished job's " +
+      "timestamp, and one `deleteMany`; every predicate is on `GitJob`'s own columns, and the " +
+      "only column selected anywhere is `updatedAt`. No `page:` relation filter, which is the " +
+      "shape this guard was widened for the fourth time, and no `_count` on a relation, which is " +
+      "the shape `src/lib/spaces/admin.ts` is registered for. `visiblePage()` would have nothing " +
+      "to filter AND would be wrong in principle: a `DELETE` job's page is soft-deleted by " +
+      "definition and its finished row is exactly as sweepable as any other, so a soft-delete " +
+      "predicate here would keep rows for ever on the one kind that guarantees one. " +
+      "`src/lib/attachments/sweep.ts` is registered on the same claim for the same reason — " +
+      "retention is not a permission question. The permission predicate for the module is " +
+      "`refuseNonAdmin`, swept for in `src/lib/admin/gate.test.ts`, which lists this file by hand " +
+      "because it is not called `admin.ts`.",
+  },
   "src/lib/git/failures.ts": {
     load: () => import("@/lib/git/failures"),
     // Soft-delete tests: tests/integration/git-failures.test.ts. Phase 5 Task 8's super-admin

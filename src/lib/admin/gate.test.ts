@@ -85,11 +85,15 @@ function adminModules(dir: string, found: string[] = []): string[] {
  * something, so the list a reader meets here is a list of *additional* coverage and there is no
  * exemption list left to grow.
  *
- * It is `/admin/git`'s, and it is not called `admin.ts` because it is Phase 5's file under Phase
- * 5's name — renaming a module to satisfy a test's pattern is writing the code to fit its guard.
- * Task 7's two operator actions join it here as they land.
+ * All of them are `/admin/git`'s, and none is called `admin.ts`: the first is Phase 5's file under
+ * Phase 5's name, and the others are the names Task 7's plan gives its two operator actions —
+ * one surface's worth of one subject each. Renaming a module, or collapsing three into a
+ * `src/lib/git/admin.ts`, to satisfy a test's pattern would be writing the code to fit its guard.
  */
-const ALSO_GATED: readonly string[] = ["src/lib/git/failures.ts"];
+const ALSO_GATED: readonly string[] = [
+  "src/lib/git/failures.ts",
+  "src/lib/git/retention.ts",
+];
 
 /**
  * One exported function per chunk, split on the `export` keyword at column zero.

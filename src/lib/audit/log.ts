@@ -122,7 +122,35 @@ export type AuditAction =
   | "space.update"
   | "space.member.add"
   | "space.member.role"
-  | "space.member.remove";
+  | "space.member.remove"
+  /**
+   * The two operator actions on `/admin/git` — spec §10, Phase 7 Task 7. **Spaceless, like the
+   * `system.*` three**, and for a sharper version of their reason: each is one act over rows
+   * belonging to every space at once, and naming one of them would put a false answer in the
+   * column an auditor filters by. `GitJob.spaceKey` is a captured string rather than a foreign
+   * key, so there is no `Space.id` to name even where a single space happens to be involved.
+   *
+   * Both earn their place on `page.review`'s test — *the mutation leaves no other trace* — and
+   * they fail it in opposite directions, which is why they are two actions and not one
+   * `mirror.maintenance` with a verb in `detail`:
+   *
+   * - `mirror.sweep` **destroys** the trace. The rows it deletes are the only record that those
+   *   drains happened, so this row is what remains: it carries the window, the cutoff and the
+   *   count, because "37 rows were deleted" is unreadable a year later without the rule that chose
+   *   them. Same standing as `system.delete`.
+   * - `mirror.reconcile` **creates** work that is indistinguishable, afterwards, from work the
+   *   product queued itself. A reconciled `PUBLISH` job is byte-identical to one a publish
+   *   enqueued, and once it drains it is a `gitSha` on a version like any other — so without this
+   *   row nothing anywhere says a human decided to mirror versions that predate the mirror.
+   *   Spec §10's value is that a gap is *noticed*; this is the record that somebody closed one.
+   *
+   * Neither carries a page id. A sweep names no page at all, and a reconcile names hundreds — a
+   * `pageId` populated with one of them would read as "this happened to that page", which is what
+   * `AuditLog.pageId` means everywhere else. The pages a reconcile queued are in `GitJob` rows
+   * with ids in the range this row records, which is the join that answers it honestly.
+   */
+  | "mirror.sweep"
+  | "mirror.reconcile";
 
 /**
  * Whatever can write the row. Structural on purpose, so the same helper serves the five

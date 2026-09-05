@@ -1829,3 +1829,45 @@ a.sys-repo:hover { text-decoration: underline; }
 }
 
 .adm-role[disabled] { cursor: not-allowed; opacity: 0.55; }
+
+/*
+ * `/admin/git`'s two operator actions (Phase 7 Task 7): the retention sweep and the reconcile
+ * pass. Every selector is prefixed `git-`; the buttons, notes and result sentences are `.adm-*`,
+ * reused rather than re-declared, because they are the same controls doing the same job on a
+ * sibling page and Task 3's ninth overflow shape was earned by exactly those rules.
+ *
+ * **Nothing here is `flex: none`, and nothing here paints stored text.** Every value on this
+ * surface is an integer this application counted or a date it formatted — no title, no path, no
+ * space key, no git stderr, all of which are the failures list's problem below and carry
+ * `overflow-wrap: anywhere` there. `.git-figure` is the one thing that could tempt a `flex: none`:
+ * it is a count, which the database bounds, and it is inline text in a paragraph rather than a
+ * flex child, so there is nothing to pin.
+ */
+.git-ops {
+  margin: 0 0 34px;
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.git-lead {
+  margin: 4px 0 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 66ch;
+}
+
+.git-counts {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  max-width: 66ch;
+}
+
+/* The number itself, so a count is readable at a glance in a sentence that explains it. */
+.git-figure {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--ink);
+}
