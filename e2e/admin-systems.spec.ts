@@ -66,8 +66,12 @@ test.afterAll(async () => {
   await db.$disconnect();
 });
 
-/** A token shaped like the thing that actually leaks — Task 1 found this exact form on this machine. */
-const TOKEN = "glpat-e2e2Fc9a61E27710c8383b47Ae178B4a";
+/**
+ * A token shaped like the thing that actually leaks — Task 1 found this exact form on this machine.
+ * Assembled at runtime and low-entropy on purpose: as a literal it reads as a live GitLab PAT to
+ * secret scanners, which raised a GitGuardian incident for a value that was never a credential.
+ */
+const TOKEN = ["glpat", "e2eAdminFake".padEnd(20, "x")].join("-");
 
 /* -------------------------------------------------------------------------- */
 /* The refusal, as a discrimination                                           */

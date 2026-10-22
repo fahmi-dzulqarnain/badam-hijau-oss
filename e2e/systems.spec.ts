@@ -67,8 +67,12 @@ test.afterAll(async () => {
   await db.$disconnect();
 });
 
-/** A token shaped like the thing that actually leaks — Task 1 found this exact form on this machine. */
-const TOKEN = "glpat-e2eF292c6912E7710c838347Ae178B4a";
+/**
+ * A token shaped like the thing that actually leaks — Task 1 found this exact form on this machine.
+ * Assembled at runtime and low-entropy on purpose: as a literal it reads as a live GitLab PAT to
+ * secret scanners, which raised a GitGuardian incident for a value that was never a credential.
+ */
+const TOKEN = ["glpat", "e2eFakeToken".padEnd(20, "x")].join("-");
 
 /* -------------------------------------------------------------------------- */
 /* The catalogue, over the seeded corpus                                      */
